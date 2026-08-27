@@ -326,9 +326,9 @@ async def on_startup(ctx: Dict[str, Any]):
         from core.llm.router.router import LLMRouter
 
         ctx["llm_router"] = LLMRouter()
-        logger.info(
-            "LLM router initialized (Bifrost URL=%s)", ctx["llm_router"].bifrost_url
-        )
+        # No endpoint to log: AI Gateway routes by URL path, so the endpoint is
+        # resolved per provider at dispatch time rather than fixed at startup.
+        logger.info("LLM router initialized (egress: Cloudflare AI Gateway)")
     except Exception as _router_err:
         ctx["llm_router"] = None
         logger.warning("LLM router init skipped (non-fatal): %s", _router_err)
