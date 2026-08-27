@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.llm.bifrost.admin import sync_after_ollama_start  # noqa: E402
+from core.llm.providers.catalog_sync import sync_after_ollama_start  # noqa: E402
 from core.platform import ollama_supervisor  # noqa: E402
 from core.platform.service_manager import SERVICES  # noqa: E402
 

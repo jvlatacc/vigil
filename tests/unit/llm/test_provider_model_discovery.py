@@ -340,13 +340,13 @@ def test_fetch_provider_models_lazy_sync_on_miss(monkeypatch):
         call_count["n"] += 1
         # Simulate the sync populating the cache.
         model_registry._MODEL_LIST_CACHE["p1"] = ["from-sync-a", "from-sync-b"]
-        return {"bifrost": {}, "models_by_provider": {}}
+        return {"models_by_provider": {}}
 
     # The lazy-sync import is inside the function, so patch the attribute
     # where the caller looks it up.
-    import core.llm.bifrost.admin as bifrost_admin
+    from core.llm.providers import catalog_sync
 
-    monkeypatch.setattr(bifrost_admin, "sync_all_provider_models", fake_sync)
+    monkeypatch.setattr(catalog_sync, "sync_all_provider_models", fake_sync)
 
     result = asyncio.run(model_registry.fetch_provider_models(_FakeRow("anthropic")))
     assert result == ["from-sync-a", "from-sync-b"]
@@ -363,9 +363,9 @@ def test_fetch_provider_models_hard_fallback_when_sync_fails(monkeypatch):
     async def fake_sync_fails():
         raise RuntimeError("no db")
 
-    import core.llm.bifrost.admin as bifrost_admin
+    from core.llm.providers import catalog_sync
 
-    monkeypatch.setattr(bifrost_admin, "sync_all_provider_models", fake_sync_fails)
+    monkeypatch.setattr(catalog_sync, "sync_all_provider_models", fake_sync_fails)
     monkeypatch.setenv("ANTHROPIC_EXTRA_MODELS", "legacy-only-1")
 
     result = asyncio.run(model_registry.fetch_provider_models(_FakeRow("anthropic")))

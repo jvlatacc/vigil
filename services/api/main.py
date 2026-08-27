@@ -205,15 +205,10 @@ async def _connect_external_services(mcp_client, registry):
     """Connect external startup integrations (skipped under TESTING)."""
     import asyncio
 
+    # Provider credentials need no startup push: the encrypted store is the
+    # only copy, and the router resolves each row's ref per dispatch.
     try:
-        from core.llm.bifrost.admin import sync_all_provider_keys
-
-        sync_all_provider_keys()
-    except Exception as e:
-        logger.warning(f"Bifrost provider sync skipped: {e}")
-
-    try:
-        from core.llm.bifrost.admin import sync_all_provider_models
+        from core.llm.providers.catalog_sync import sync_all_provider_models
 
         refresh_interval_s = get_settings().model_catalog_refresh_interval_s
 

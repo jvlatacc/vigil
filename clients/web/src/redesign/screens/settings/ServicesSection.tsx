@@ -63,9 +63,9 @@ export default function ServicesSection({ notify }: SectionProps) {
     try {
       const { data } = await localServicesApi[action](name)
       notify(data.already_running ? 'info' : 'ok', data.message || `${name} ${action}ed`)
-      // Ollama only becomes usable once Bifrost knows about it.
-      if (data.bifrost_synced === false && data.bifrost_sync_error) {
-        notify('info', `${name} is up, but the model catalog didn't sync: ${data.bifrost_sync_error}`)
+      // Ollama only becomes selectable once its model catalog is re-discovered.
+      if (data.catalog_synced === false && data.catalog_sync_error) {
+        notify('info', `${name} is up, but the model catalog didn't sync: ${data.catalog_sync_error}`)
       }
       await load()
     } catch (e) {

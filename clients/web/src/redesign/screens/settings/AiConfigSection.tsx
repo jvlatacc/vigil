@@ -144,7 +144,7 @@ function ProvidersPanel({ notify }: SectionProps) {
     <SettingsCard
       wide
       title="LLM Providers"
-      desc="Configure additional Anthropic, OpenAI, or Ollama providers. Traffic routes through the Bifrost gateway — Anthropic calls use the /anthropic passthrough so extended thinking and prompt caching round-trip unchanged."
+      desc="Configure additional Anthropic, OpenAI, or Ollama providers. Traffic routes through Cloudflare AI Gateway, which forwards the key saved here upstream — a rotation takes effect on the next call, with no restart."
       actions={
         <button className="btn primary" onClick={() => { setEditing(null); setDialogOpen(true) }}>
           <Icon name="plus" /> Add Provider
