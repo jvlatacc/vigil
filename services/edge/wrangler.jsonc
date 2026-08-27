@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "vigil-edge",
+  "compatibility_date": "2026-06-01",
+  // Flue's runtime uses Node.js APIs, and this service reads its bearer token
+  // and bridge URL off process.env -- which nodejs_compat is what populates.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Append-only, and never reordered or rewritten: Cloudflare replays this list
+  // to decide what a deploy does to storage, so an edited tag is a lost ledger.
+  // One tag per agent introduced; the class name is derived from the agent's
+  // durable identity ("chat" -> FlueChatAgent) and is asserted by
+  // tests/unit/_ratchets/test_run_kinds_agree.py.
+  "migrations": [
+    {
+      "tag": "flue-chat",
+      "new_sqlite_classes": ["FlueChatAgent"]
+    }
+  ],
+  // The model is dispatched through the Workers AI binding, which is also the
+  // AI Gateway seam workstream A owns. No API key reaches this Worker.
+  "ai": { "binding": "AI" },
+  "vars": {
+    // Where the Python tool bridge listens. The token is a secret and is set
+    // with `wrangler secret put AGENT_INTERNAL_TOKEN`, never here.
+    "INTERNAL_TOOLS_URL": "http://localhost:8000/internal/tools/invoke"
+  }
+}
