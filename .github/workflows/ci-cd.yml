@@ -4,7 +4,11 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
+    # The filter is on the *base* branch, so a PR into a long-lived integration
+    # branch matched nothing here and reported zero checks -- which reads as
+    # green on the PR page and is not. feat/cloudflare-native carries the
+    # Cloudflare migration's child PRs, so it has to be listed to get any signal.
+    branches: [ main, develop, feat/cloudflare-native ]
   workflow_dispatch:  # Allows manual triggering from GitHub UI
 
 env:
