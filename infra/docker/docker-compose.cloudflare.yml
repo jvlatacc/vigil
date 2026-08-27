@@ -1,0 +1,126 @@
+# Cloudflare topology, run locally.
+#
+# This is the default path: the three Python processes that become Cloudflare
+# Containers (see infra/cloudflare/containers/python-tier.json), talking to
+# managed Postgres, Redis and Kafka the same way they will in production. No
+# datastore is started here -- that is the point. If you want a self-contained
+# stack with in-compose Postgres and Redis, use docker-compose.yml, which stays
+# as the legacy in-cluster-shaped path until cutover.
+#
+#   docker compose -f docker-compose.cloudflare.yml config     # render
+#   docker compose -f docker-compose.cloudflare.yml up -d      # run
+#
+# Every connection variable is required rather than defaulted. A default here
+# would silently point a developer at a database that does not exist, and the
+# first symptom would be a failed migration against nothing.
+
+x-python-tier-env: &python-tier-env
+  # Managed Postgres (pgvector-capable: findings.embedding is vector(768)).
+  # The app assembles and URL-encodes the DSN from these parts itself.
+  POSTGRES_HOST: ${POSTGRES_HOST:?set POSTGRES_HOST to the managed Postgres endpoint}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_DB: ${POSTGRES_DB:-deeptempo_soc}
+  POSTGRES_USER: ${POSTGRES_USER:-deeptempo}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD for the managed Postgres user}
+  # Managed Redis (ARQ queue + session store).
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL to the managed Redis endpoint}
+  # Traces leave the tier: there is no collector alongside these containers.
+  VIGIL_OTEL_ENABLED: ${VIGIL_OTEL_ENABLED:-false}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+  OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+  PYTHONUNBUFFERED: "1"
+
+services:
+  # FastAPI API — Container class vigil-api. Stateless, scales with requests.
+  backend:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.backend
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: vigil-cf-backend
+    environment:
+      <<: *python-tier-env
+      # Read at import time whenever DEV_MODE is false, which it is here.
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY}
+      AGENT_URL: ${AGENT_URL:?set AGENT_URL to the edge agent surface}
+      AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+    ports:
+      - "${BACKEND_PORT:-6987}:6987"
+    restart: unless-stopped
+    networks:
+      - vigil-cf
+
+  # SOC daemon — Container class vigil-daemon, and deliberately one replica.
+  # Three unbounded loops, the Splunk/CrowdStrike pollers, the sandbox
+  # submit/poll cycle and the Kafka consumer-group member share this process.
+  # Scaling it out double-polls every source and takes a second seat in the
+  # consumer group.
+  soc-daemon:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.daemon
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: vigil-cf-daemon
+    # One replica, always. Mirrors max_instances: 1 in the Containers manifest.
+    deploy:
+      replicas: 1
+    environment:
+      <<: *python-tier-env
+      DAEMON_WEBHOOK_PORT: ${DAEMON_WEBHOOK_PORT:-8081}
+      DAEMON_HEALTH_PORT: ${DAEMON_HEALTH_PORT:-9091}
+      DAEMON_LOG_LEVEL: ${DAEMON_LOG_LEVEL:-INFO}
+      # Investigation artifacts. On Containers this path lives on the instance
+      # disk (ephemeral) or an R2 FUSE mount; here it is a named volume so a
+      # restart behaves like the durable option rather than the lossy one.
+      ORCHESTRATOR_WORKDIR: ${ORCHESTRATOR_WORKDIR:-/app/data/investigations}
+      # Kafka is normally the customer's broker. The daemon only needs outbound
+      # reachability; nothing dials in.
+      KAFKA_ENABLED: ${KAFKA_ENABLED:-false}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+      KAFKA_CONSUMER_GROUP: ${KAFKA_CONSUMER_GROUP:-vigil-soc}
+      KAFKA_TOPICS: ${KAFKA_TOPICS:-}
+      KAFKA_SECURITY_PROTOCOL: ${KAFKA_SECURITY_PROTOCOL:-PLAINTEXT}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-}
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
+    ports:
+      - "${DAEMON_WEBHOOK_PORT:-8081}:8081"
+      - "${DAEMON_HEALTH_PORT:-9091}:9091"
+    volumes:
+      - daemon_workdir:/app/data/investigations
+    restart: unless-stopped
+    networks:
+      - vigil-cf
+
+  # ARQ worker — Container class vigil-llm-worker. Same image as the API, a
+  # different command. Present because the API enqueues every LLM request onto
+  # Redis: without this, the API accepts work nothing finishes.
+  llm-worker:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.backend
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: vigil-cf-llm-worker
+    command: ["python", "-m", "services.worker"]
+    environment:
+      <<: *python-tier-env
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY}
+    # Shares the backend image, whose HEALTHCHECK curls :6987. A queue worker
+    # serves no HTTP, so inheriting it would report unhealthy forever.
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - vigil-cf
+
+volumes:
+  daemon_workdir:
+    driver: local
+
+networks:
+  vigil-cf:
+    driver: bridge

@@ -130,6 +130,16 @@ jobs:
         with:
           dockerfile: infra/docker/Dockerfile.agent
 
+      # Blocking, unlike the backend step above: the daemon image is the
+      # Cloudflare Containers workload carrying the pollers and the Kafka
+      # consumer seat, and it is clean under the same two waivers the backend
+      # takes (apt pinning), so advisory mode would only let it rot.
+      - name: Run hadolint (daemon)
+        uses: hadolint/hadolint-action@v3.4.0
+        with:
+          dockerfile: infra/docker/Dockerfile.daemon
+          ignore: DL3008,DL3009
+
   # ============================================================================
   # Agent Image — build, scan, smoke test
   # ============================================================================
@@ -191,6 +201,113 @@ jobs:
               console.log('agent ok');
             "
 
+  # ============================================================================
+  # Python Tier Images — build, scan, smoke test (Cloudflare Containers)
+  # ============================================================================
+  # The same three questions the agent job asks, asked of the two images that
+  # become Cloudflare Container workloads (see
+  # infra/cloudflare/containers/python-tier.json): does it build, is it clean,
+  # do its entry points load. Builds locally and throws the images away, so it
+  # can run on every PR.
+  build-python-tier-images:
+    name: Python Tier Images
+    if: github.repository == 'Vigil-SOC/vigil'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Context is the repo root for both images: the Dockerfiles COPY core/,
+      # services/ and mempalace/, which a Dockerfile-directory context cannot
+      # satisfy. Same reason wrangler gets a pushed image reference rather than
+      # a Dockerfile path.
+      - name: Build backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/docker/Dockerfile.backend
+          push: false
+          load: true
+          tags: vigil-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build daemon image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/docker/Dockerfile.daemon
+          push: false
+          load: true
+          tags: vigil-daemon:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — report HIGH and CRITICAL (backend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: vigil-backend:ci
+          format: table
+          severity: HIGH,CRITICAL
+
+      - name: Trivy — report HIGH and CRITICAL (daemon)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: vigil-daemon:ci
+          format: table
+          severity: HIGH,CRITICAL
+
+      # Narrower gate than the report, for the same reason as the agent image:
+      # an unfixed base-image CVE is not something this repo can act on, a
+      # fixable CRITICAL is.
+      - name: Trivy — fail on fixable CRITICAL (backend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: vigil-backend:ci
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy — fail on fixable CRITICAL (daemon)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: vigil-daemon:ci
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      # Each entry point is loaded without being run. Importing
+      # services.api.main builds the FastAPI app; exec'ing
+      # services/daemon/main.py resolves every daemon import (pollers, Kafka
+      # ingestor, orchestrator, sandbox submit/poll) while its __main__ guard
+      # keeps the loops from starting. No Postgres or Redis required — this
+      # proves imports resolve inside the image, not that anything connects.
+      # JWT_SECRET_KEY is read at import time whenever DEV_MODE is false.
+      - name: Smoke test — API entry point loads
+        run: |
+          docker run --rm \
+            -e JWT_SECRET_KEY=smoke-test-only \
+            -e VIGIL_OTEL_ENABLED=false \
+            vigil-backend:ci \
+            python -c 'import services.api.main as m; assert m.app is not None; print("api ok")'
+
+      - name: Smoke test — LLM worker entry point loads
+        run: |
+          docker run --rm \
+            -e VIGIL_OTEL_ENABLED=false \
+            vigil-backend:ci \
+            python -c 'import importlib; importlib.import_module("services.worker"); print("llm worker ok")'
+
+      - name: Smoke test — daemon entry point loads
+        run: |
+          docker run --rm \
+            -e VIGIL_OTEL_ENABLED=false \
+            vigil-daemon:ci \
+            python -c 'import importlib.util as u; s = u.spec_from_file_location("daemon_main", "services/daemon/main.py"); m = u.module_from_spec(s); s.loader.exec_module(m); print("daemon ok")'
   # ============================================================================
   # Unit Tests
   # ============================================================================

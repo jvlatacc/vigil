@@ -190,6 +190,13 @@ class Settings(BaseSettings):
     vigil_otel_record_llm_content: bool = False
     vigil_otel_record_ioc_values: bool = False
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    # "grpc" (4317) or "http/protobuf" (4318). Managed OTLP endpoints and
+    # Cloudflare Container egress generally want the HTTP one.
+    otel_exporter_otlp_protocol: str = "grpc"
+    # None = derive from the endpoint scheme (https:// -> TLS). Set explicitly
+    # only to force plaintext to an in-cluster collector reached over https, or
+    # TLS to an endpoint whose scheme is omitted.
+    otel_exporter_otlp_insecure: Optional[bool] = None
 
     # Daemon
     daemon_log_level: str = "INFO"
