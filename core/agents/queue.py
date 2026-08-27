@@ -8,10 +8,12 @@ import logging
 import uuid
 from weakref import WeakKeyDictionary
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, NamedTuple, Optional, Sequence
+from urllib.parse import quote
 
 from bullmq import Queue
 
+from core.agents.internal_token import bearer_header
 from core.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,9 @@ JOB_SCHEMA_VERSION = 1
 
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 
-RUN_KINDS = ("hunt", "investigate", "compose", "chat")
+# What the backend may enqueue. Chat is absent deliberately: a conversation is a
+# Durable Object at the edge, so its turns are dispatched over HTTP, not queued.
+RUN_KINDS = ("hunt", "investigate", "compose")
 
 # BullMQ defaults to one attempt, so a job that throws is permanently failed and
 # nothing rescues it: the watchdog sweeps lapsed lease rows, and a job that died on
@@ -137,3 +141,88 @@ def _default_job_id(job: Dict[str, Any]) -> str:
 
 def new_run_id() -> str:
     return str(uuid.uuid4())
+
+
+# A turn is admitted, not awaited: the edge answers 202 the moment the delivery is
+# durable, and the answer itself is read from the stream named in the receipt.
+CHAT_DISPATCH_TIMEOUT_S = 10.0
+
+
+class ChatDispatchError(RuntimeError):
+    pass
+
+
+class ChatDispatch(NamedTuple):
+    submission_id: str
+    stream_url: str
+    # Where the reader resumes. Opaque: it is passed back verbatim, never parsed.
+    offset: Optional[str]
+
+
+# The identity a conversation is created with, resolved here because this is the
+# side that authenticated the human and knows what their scope allows.
+def chat_identity(
+    user_id: str,
+    model: str,
+    scopes: Sequence[str],
+    tenant_id: Optional[str] = None,
+    system_prompt: str = "",
+    tools: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    return {
+        "userId": user_id,
+        "scopes": list(scopes),
+        "tenantId": tenant_id,
+        "model": model,
+        "systemPrompt": system_prompt,
+        # The arch document's declaration shape, renamed to the edge's field. Both
+        # carry the same JSON Schema, so nothing is reshaped on the way through.
+        "tools": [
+            {
+                "name": tool["id"],
+                "description": tool["description"],
+                "parameters": tool.get("parameters") or {"type": "object"},
+            }
+            for tool in (tools or ())
+        ],
+    }
+
+
+# Identity travels with the delivery rather than on the request, because the agent
+# reading it may run days later, on a machine this call never touched.
+async def dispatch_chat_turn(
+    conversation_id: str,
+    text: str,
+    identity: Dict[str, Any],
+) -> ChatDispatch:
+    import httpx
+
+    url = (
+        f"{get_settings().edge_url.rstrip('/')}/chat/{quote(conversation_id, safe='')}"
+    )
+    body: Dict[str, Any] = {"message": text, "initialData": identity}
+    try:
+        async with httpx.AsyncClient(timeout=CHAT_DISPATCH_TIMEOUT_S) as client:
+            response = await client.post(url, json=body, headers=bearer_header())
+    except httpx.HTTPError as exc:
+        raise ChatDispatchError(f"the edge did not answer: {exc}") from exc
+
+    # Anything but 202 means the turn was never admitted. Reporting it as dispatched
+    # would leave the console reading a stream that will never carry an answer.
+    if response.status_code != 202:
+        detail = response.text[:200]
+        raise ChatDispatchError(
+            f"the edge refused the turn ({response.status_code}): {detail}"
+        )
+
+    receipt = response.json()
+    stream_url = receipt.get("streamUrl")
+    if not stream_url:
+        raise ChatDispatchError("the edge admitted the turn but named no stream")
+
+    logger.info("dispatched chat turn for conversation %s", conversation_id)
+    return ChatDispatch(
+        submission_id=str(receipt.get("submissionId") or ""),
+        stream_url=str(stream_url),
+        offset=receipt.get("offset"),
+    )

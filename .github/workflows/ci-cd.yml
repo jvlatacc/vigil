@@ -4,7 +4,11 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
+    # The filter is on the *base* branch, so a PR into a long-lived integration
+    # branch matched nothing here and reported zero checks -- which reads as
+    # green on the PR page and is not. feat/cloudflare-native carries the
+    # Cloudflare migration's child PRs, so it has to be listed to get any signal.
+    branches: [ main, develop, feat/cloudflare-native ]
   workflow_dispatch:  # Allows manual triggering from GitHub UI
 
 env:
@@ -524,6 +528,52 @@ jobs:
       - name: Run unit tests
         working-directory: services/agent
         run: npm test
+
+  # The edge tier is a third Node package. No database services: a Worker reaches
+  # Postgres through the container tier, never directly. Node 22 rather than 20
+  # because Flue's local runtime opens DO SQLite through node:sqlite, which Node
+  # 20 does not ship -- the round-trip test fails to load without it.
+  #
+  # Deliberately unguarded by the repository check the jobs above carry: this one
+  # needs no secrets and no services, so a fork gets the same signal on the tier
+  # it is most likely to be changing.
+  test-edge-tier:
+    name: Unit Tests - Edge Tier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: services/edge/package-lock.json
+
+      - name: Install dependencies
+        working-directory: services/edge
+        run: npm ci
+
+      # The parity test imports the agent layer's own emitter rather than a copy,
+      # so that package has to be installed for the edge tier to typecheck.
+      - name: Install agent-layer dependencies
+        working-directory: services/agent
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: services/edge
+        run: npm run typecheck
+
+      - name: Run unit tests
+        working-directory: services/edge
+        run: npm test
+
+      # Built and dry-run together: a Worker that compiles but cannot be uploaded
+      # -- an unbound namespace, a migration that renames a live class -- fails
+      # here rather than at deploy time.
+      - name: Build and check the deploy
+        working-directory: services/edge
+        run: npm run deploy:check
 
   # ============================================================================
   # Integration Tests

@@ -19,10 +19,19 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PYTHON = REPO_ROOT / "core" / "agents" / "queue.py"
 TYPESCRIPT = REPO_ROOT / "services" / "agent" / "contracts" / "events.ts"
 REGISTRY = REPO_ROOT / "services" / "agent" / "arch" / "registry.ts"
+EDGE_AGENT = REPO_ROOT / "services" / "edge" / "src" / "agents" / "chat.ts"
+EDGE_WRANGLER = REPO_ROOT / "services" / "edge" / "wrangler.jsonc"
 
 # The conformance workflow. It proves the harness boundary holds without a real
 # domain, so it is deliberately not something the backend can enqueue.
-BACKEND_EXCLUDES = frozenset({"tally"})
+CONFORMANCE_ONLY = frozenset({"tally"})
+
+# Chat left the queue. A conversation is a Durable Object at the edge, so a turn
+# is dispatched to it over HTTP and answered with 202 and a stream to read --
+# which means the backend has no chat job to enqueue and must not grow one.
+HTTP_DISPATCHED = frozenset({"chat"})
+
+BACKEND_EXCLUDES = CONFORMANCE_ONLY | HTTP_DISPATCHED
 
 pytestmark = pytest.mark.unit
 
@@ -73,6 +82,34 @@ def test_every_kind_resolves_to_an_arch():
     assert (
         not orphans
     ), "these run kinds are accepted but resolve to no arch:\n  " + "\n  ".join(orphans)
+
+
+def edge_agent_name() -> str:
+    match = re.search(r'Chat\.agentName\s*=\s*"([^"]+)"', EDGE_AGENT.read_text())
+    assert match, f"Chat.agentName not found in {EDGE_AGENT}"
+    return match.group(1)
+
+
+def test_the_edge_chat_agent_answers_to_the_chat_run_kind():
+    # The name is the conversation's storage key and the Durable Object's class,
+    # so a rename is a data migration rather than a refactor.
+    assert edge_agent_name() in typescript_kinds()
+    assert edge_agent_name() in HTTP_DISPATCHED
+
+
+def test_the_chat_agent_keeps_its_first_migration_tag():
+    # Migrations are append-only: the tag that created the class stays the first
+    # entry forever, because rewriting it orphans every conversation already stored.
+    body = EDGE_WRANGLER.read_text()
+    tags = re.findall(r'"tag"\s*:\s*"([^"]+)"', body)
+    assert tags, f"no migration tags in {EDGE_WRANGLER}"
+    assert tags[0] == "flue-chat", (
+        "the first migration tag must stay flue-chat; append a new tag instead:\n  "
+        + tags[0]
+    )
+    classes = re.search(r'"new_sqlite_classes"\s*:\s*\[([^\]]*)\]', body)
+    assert classes, "the first migration must create the chat class as SQLite-backed"
+    assert re.findall(r'"([^"]+)"', classes.group(1)), "new_sqlite_classes is empty"
 
 
 def test_the_exclusion_list_stays_honest():
