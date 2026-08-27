@@ -100,6 +100,16 @@ def test_a_provider_with_no_gateway_route_uses_its_own_row_url(monkeypatch):
     )
 
 
+def test_unconfigured_gateway_never_falls_back_to_a_provider_host(monkeypatch):
+    # The row for a hosted provider carries the provider's own API host. Falling
+    # back to it would turn a missing account id into silent direct egress —
+    # billed direct, uncached, unlogged — which is precisely what the
+    # one-egress ratchet claims cannot happen.
+    _unconfigure_gateway(monkeypatch)
+    with pytest.raises(AIGatewayNotConfigured):
+        ai_gateway.openai_shape_base_url("openai", "https://api.openai.com/v1")
+
+
 def test_gateway_route_beats_a_row_url_for_a_hosted_provider(monkeypatch):
     # One egress: an OpenAI row carrying api.openai.com must not win over the
     # gateway, or caching/limits/analytics silently stop applying.

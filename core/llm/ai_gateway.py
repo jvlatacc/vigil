@@ -113,17 +113,30 @@ def openai_shape_base_url(provider_type: str, row_base_url: Optional[str]) -> st
     local Ollama) falls back to the endpoint stored on its own row. The OpenAI
     SDK appends ``/chat/completions``, and every OpenAI-compatible local server
     serves that under ``/v1``, so the suffix is added when it is missing.
+
+    The row is *only* consulted for a provider AI Gateway has no route for.
+    Letting a gateway-routed provider fall back to its row would turn a missing
+    AI_GATEWAY_ACCOUNT_ID into silent direct egress to ``api.openai.com`` — the
+    exact failure the one-egress ratchet exists to prevent — so that case
+    raises instead.
     """
     resolved = _override(provider_type) or _composed(provider_type)
     if resolved:
         return resolved
+
+    if provider_slug(provider_type):
+        raise AIGatewayNotConfigured(
+            f"Provider {provider_type!r} routes through AI Gateway, which is not "
+            "configured: set AI_GATEWAY_ACCOUNT_ID and AI_GATEWAY_ID, or the "
+            "per-provider AI_GATEWAY_*_BASE_URL override. Refusing to dispatch "
+            "direct to the provider."
+        )
 
     row = (row_base_url or "").strip().rstrip("/")
     if row:
         return row if row.endswith("/v1") else f"{row}/v1"
 
     raise AIGatewayNotConfigured(
-        f"No endpoint for provider {provider_type!r}: set AI_GATEWAY_ACCOUNT_ID "
-        "and AI_GATEWAY_ID, the per-provider AI_GATEWAY_*_BASE_URL override, or "
-        "a base_url on the provider row."
+        f"No endpoint for provider {provider_type!r}: it has no AI Gateway route "
+        "and no base_url on its provider row."
     )

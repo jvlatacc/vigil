@@ -8,12 +8,13 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from core.config import get_settings
 from core.secrets import get_secret
 
+from core.llm.ai_gateway import openai_shape_base_url
 from core.llm.router.format import anthropic_messages_to_openai, anthropic_tools_to_openai
 from core.llm.security import PromptInjectionBlocked, scan_for_injection, wrap_tool_result
 
 logger = logging.getLogger(__name__)
 
-DispatchPath = Literal["bifrost"]
+DispatchPath = Literal["ai_gateway"]
 
 
 # Kept as the name the dispatch paths call. The policy is shared with the agent
@@ -41,8 +42,27 @@ class ProviderSpec:
     config: Dict[str, Any]
 
 
-def _bifrost_url() -> str:
-    return get_settings().bifrost_url.rstrip("/")
+def _provider_api_key(provider: ProviderSpec) -> str:
+    """The credential AI Gateway forwards upstream for *provider*.
+
+    Bifrost held provider keys in its own config, so dispatch sent a
+    placeholder. AI Gateway holds none: it forwards the caller's
+    ``Authorization`` header to the provider, so the key stored against the
+    provider row (written by the Settings UI into the encrypted store) has to
+    travel on the request. Keyless upstreams — a local Ollama — keep a
+    placeholder, because the OpenAI SDK refuses to build without one.
+    """
+    if provider.api_key_ref:
+        key = get_secret(provider.api_key_ref)
+        if key:
+            return key
+        logger.warning(
+            "provider %s references secret %s, which resolved empty; dispatching "
+            "without a provider credential",
+            provider.provider_id,
+            provider.api_key_ref,
+        )
+    return "unused"
 
 
 def _block_on_injection() -> bool:
@@ -145,21 +165,36 @@ def _scan_messages_for_injection(messages: List[Dict[str, Any]]) -> List[str]:
     return patterns
 
 
-def _bifrost_headers(interaction_id: Optional[str] = None) -> Dict[str, str]:
-    """Log-correlation and budget-VK headers every Bifrost call carries."""
-    headers: Dict[str, str] = {}
+def _gateway_headers(interaction_id: Optional[str] = None) -> Dict[str, str]:
+    """Correlation metadata every AI Gateway call carries.
+
+    Bifrost read two bespoke headers: ``x-bf-lh-*`` became log metadata and
+    ``x-bf-vk`` selected a virtual key it enforced a budget against. AI Gateway
+    has one equivalent — ``cf-aig-metadata``, a JSON object attached to the log
+    entry — so both values ride in it and correlation with Vigil's local
+    ``LLMInteractionLog`` row survives by the same UUID (#185).
+
+    What does not survive is the gateway *enforcing* the budget: that lived in
+    Bifrost's virtual keys, and its replacement is the cost/budget surface of
+    workstream B. The key id is carried for attribution, not enforcement.
+    """
+    metadata: Dict[str, str] = {}
     if interaction_id:
-        headers["x-bf-lh-vigil-interaction-id"] = interaction_id
+        metadata["vigil_interaction_id"] = interaction_id
     try:
         from core.llm.cost.budget import get_active_vk, should_enforce
 
         if should_enforce():
             vk = get_active_vk()
             if vk:
-                headers["x-bf-vk"] = vk
+                metadata["vigil_budget_key"] = vk
     except Exception as exc:
-        logger.debug("budget_service unavailable (%s); proceeding without x-bf-vk", exc)
-    return headers
+        logger.debug(
+            "budget_service unavailable (%s); proceeding without budget metadata", exc
+        )
+    if not metadata:
+        return {}
+    return {"cf-aig-metadata": json.dumps(metadata, sort_keys=True)}
 
 
 def _pre_dispatch_sanitize(
@@ -195,16 +230,26 @@ def _pre_dispatch_sanitize(
 
 
 class LLMRouter:
-    """Dispatches chat completions through the Bifrost gateway.
+    """Dispatches chat completions through Cloudflare AI Gateway.
 
     The router does NOT own the DB session. Callers construct a
     ``ProviderSpec`` from an ``LLMProviderConfig`` row (via
     ``provider_spec_from_row``) and pass it in. This keeps the worker
     hot path free of DB imports and makes unit-testing trivial.
+
+    ``base_url`` pins every dispatch to one endpoint regardless of provider — a
+    gateway-shaped mock in tests, or a single compatible endpoint in dev. Left
+    unset (the deployed case) each dispatch resolves the provider's own
+    endpoint, because AI Gateway puts the provider in the URL path.
     """
 
-    def __init__(self, bifrost_url: Optional[str] = None):
-        self.bifrost_url = (bifrost_url or _bifrost_url()).rstrip("/")
+    def __init__(self, base_url: Optional[str] = None):
+        self.base_url = base_url.rstrip("/") if base_url else None
+
+    def _endpoint_for(self, provider: ProviderSpec) -> str:
+        if self.base_url:
+            return self.base_url
+        return openai_shape_base_url(provider.provider_type, provider.base_url)
 
     # ---- path selection --------------------------------------------------
 
@@ -224,22 +269,18 @@ class LLMRouter:
         thinking_budget: int = 10000,
         interaction_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a chat completion via Bifrost.
+        """Send a chat completion via AI Gateway.
 
-        Anthropic calls hit Bifrost's ``/anthropic`` passthrough so
-        extended thinking and native prompt caching round-trip intact.
-        Other providers use Bifrost's OpenAI-format ``/v1`` endpoint.
-
-        ``interaction_id`` (when set) is attached as the
-        ``x-bf-lh-vigil-interaction-id`` header — Bifrost's logging plugin
-        captures any ``x-bf-lh-*`` header into ``LogEntry.metadata``, so
-        operators can correlate Vigil's local ``LLMInteractionLog`` row
-        with the matching Bifrost log entry by that UUID. (#185)
+        Every provider goes out OpenAI-shaped, to the gateway endpoint that
+        provider is routed at. ``interaction_id`` (when set) rides in
+        ``cf-aig-metadata`` so operators can correlate Vigil's local
+        ``LLMInteractionLog`` row with the gateway's log entry by that UUID.
+        (#185)
         """
         messages, system_prompt = _pre_dispatch_sanitize(messages, system_prompt)
         model = model or provider.default_model
 
-        extra_headers = _bifrost_headers(interaction_id)
+        extra_headers = _gateway_headers(interaction_id)
         # Convert empty dict back to None so the dispatch helpers can use a
         # truthy check for "should I send any extra headers" without leaking
         # an empty dict into the SDK call.
@@ -250,7 +291,7 @@ class LLMRouter:
         # passthrough to keep extended thinking and cache_control; both were
         # traded away, and by #632 nothing asked for either.
         return await _wrap_budget_errors(
-            lambda: self._dispatch_bifrost_openai(
+            lambda: self._dispatch_openai_shape(
                 provider=provider,
                 messages=messages,
                 system_prompt=system_prompt,
@@ -264,7 +305,7 @@ class LLMRouter:
 
     # ---- backends --------------------------------------------------------
 
-    async def _dispatch_bifrost_openai(
+    async def _dispatch_openai_shape(
         self,
         *,
         provider: ProviderSpec,
@@ -290,11 +331,14 @@ class LLMRouter:
         oai_messages.extend(anthropic_messages_to_openai(messages))
 
         client = AsyncOpenAI(
-            base_url=f"{self.bifrost_url}/v1",
-            api_key="bifrost",  # Bifrost ignores this; per-provider keys are in its config
+            base_url=self._endpoint_for(provider),
+            api_key=_provider_api_key(provider),
         )
         kwargs: Dict[str, Any] = {
-            "model": f"{provider.provider_type}/{model}",
+            # Unprefixed. Bifrost routed by "{provider}/{model}"; AI Gateway
+            # routes by URL path, so the provider is already in the endpoint
+            # and a prefix here would reach the upstream as a bogus model id.
+            "model": model,
             "messages": oai_messages,
             "max_tokens": max_tokens,
         }
@@ -336,7 +380,7 @@ class LLMRouter:
                 "cache_read_tokens": cache_read,
                 "cache_creation_tokens": 0,
                 "provider": provider.provider_type,
-                "path": "bifrost",
+                "path": "ai_gateway",
             }
         finally:
             # AsyncOpenAI holds an httpx connection pool; close it so file
@@ -358,7 +402,7 @@ class LLMRouter:
         include_usage: bool = False,
     ):
         """Yield raw OpenAI stream chunks (tool-call deltas, finish_reason,
-        usage) for non-Anthropic Bifrost providers."""
+        usage) for OpenAI-shaped providers."""
         from openai import AsyncOpenAI
 
 
@@ -371,11 +415,13 @@ class LLMRouter:
         oai_messages.extend(anthropic_messages_to_openai(messages))
 
         client = AsyncOpenAI(
-            base_url=f"{self.bifrost_url}/v1",
-            api_key="bifrost",
+            base_url=self._endpoint_for(provider),
+            api_key=_provider_api_key(provider),
         )
         kwargs: Dict[str, Any] = {
-            "model": f"{provider.provider_type}/{model}",
+            # Unprefixed, for the same reason as the non-streaming site: the
+            # provider is a segment of the endpoint, not part of the model id.
+            "model": model,
             "messages": oai_messages,
             "max_tokens": max_tokens,
             "stream": True,
@@ -386,7 +432,7 @@ class LLMRouter:
             kwargs["temperature"] = temperature
         if tools:
             kwargs["tools"] = anthropic_tools_to_openai(tools)
-        extra_headers = _bifrost_headers(interaction_id)
+        extra_headers = _gateway_headers(interaction_id)
         if extra_headers:
             kwargs["extra_headers"] = extra_headers
 
@@ -419,7 +465,7 @@ class LLMRouter:
         tools: Optional[List[Dict[str, Any]]] = None,
         interaction_id: Optional[str] = None,
     ):
-        """Yield OpenAI-format text chunks for non-Anthropic Bifrost providers."""
+        """Yield OpenAI-format text chunks for OpenAI-shaped providers."""
         async for chunk in self.stream_openai_raw(
             provider=provider,
             messages=messages,
