@@ -165,6 +165,9 @@ class Settings(BaseSettings):
     # Where the agent worker listens. Two calls go this way rather than through
     # the queue: a chat turn, which is synchronous, and a run's projection.
     agent_url: str = "http://localhost:6989"
+    # Where the edge Worker listens. A chat turn is dispatched to its conversation's
+    # Durable Object here and answered with the durable stream to read.
+    edge_url: str = "http://localhost:8787"
     anthropic_base_url: str = ""
     # Cloudflare AI Gateway — the inference path for provider traffic. Account
     # and gateway id compose the per-provider endpoint (the provider is a path
