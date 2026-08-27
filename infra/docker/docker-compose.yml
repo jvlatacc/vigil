@@ -368,6 +368,10 @@ services:
       - dev  # Only start in dev profile
 
   # ─── Observability stack (opt-in: --profile observability) ────────────────
+  # Development only. In the Cloudflare topology nothing collects telemetry
+  # beside the Python tier: OTEL_EXPORTER_OTLP_ENDPOINT points at an external
+  # OTLP endpoint and these four containers have no deployed counterpart. Do not
+  # treat this collector as the production trace path.
 
   # OpenTelemetry Collector — receives OTLP spans/metrics, fans out to Jaeger + Prometheus
   otel-collector:

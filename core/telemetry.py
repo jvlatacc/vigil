@@ -7,7 +7,13 @@ the application.
 
 Environment variables:
     VIGIL_OTEL_ENABLED              Master switch ("true"/"1"/"yes" to enable)
-    OTEL_EXPORTER_OTLP_ENDPOINT     Collector address (default http://localhost:4317)
+    OTEL_EXPORTER_OTLP_ENDPOINT     Collector or managed OTLP address
+                                    (default http://localhost:4317)
+    OTEL_EXPORTER_OTLP_PROTOCOL     "grpc" (default) or "http/protobuf"
+    OTEL_EXPORTER_OTLP_INSECURE     Force plaintext/TLS; unset derives it from
+                                    the endpoint scheme
+    OTEL_EXPORTER_OTLP_HEADERS      Read by the exporter itself; use it to
+                                    authenticate to a managed OTLP endpoint
     VIGIL_OTEL_RECORD_LLM_CONTENT   Opt-in to recording LLM prompts/responses (default off)
     VIGIL_OTEL_RECORD_IOC_VALUES    Opt-in to recording raw finding/IOC content (default off)
     ENVIRONMENT                     Deployment environment label (default "development")
@@ -57,6 +63,46 @@ def get_investigation_id() -> Optional[str]:
 
 def _is_otel_enabled() -> bool:
     return get_settings().vigil_otel_enabled
+
+
+# Accepted OTEL_EXPORTER_OTLP_PROTOCOL values, mapped to the exporter this
+# module can construct. "http" and "http/json" are accepted as aliases because
+# the Python exporter only implements protobuf over HTTP.
+_OTLP_PROTOCOLS = {
+    "grpc": "grpc",
+    "http": "http/protobuf",
+    "http/protobuf": "http/protobuf",
+    "http/json": "http/protobuf",
+}
+
+
+def _resolve_otlp_protocol(configured: str) -> str:
+    """Normalize OTEL_EXPORTER_OTLP_PROTOCOL, warning on anything unknown.
+
+    A typo must not silently disable telemetry: falling back to gRPC keeps spans
+    flowing to a local collector, and the warning says which value was ignored.
+    """
+    normalized = (configured or "").strip().lower()
+    if normalized in _OTLP_PROTOCOLS:
+        return _OTLP_PROTOCOLS[normalized]
+    logger.warning(
+        "Unknown OTEL_EXPORTER_OTLP_PROTOCOL %r — using grpc. Valid values: %s",
+        configured,
+        ", ".join(sorted(_OTLP_PROTOCOLS)),
+    )
+    return "grpc"
+
+
+def _use_insecure_channel(endpoint: str, override: Optional[bool]) -> bool:
+    """Decide whether the OTLP channel skips TLS.
+
+    Spans carry investigation and finding attributes, so an external endpoint
+    reached over https must not be downgraded to plaintext. The scheme is the
+    honest signal; the override exists for endpoints written without one.
+    """
+    if override is not None:
+        return override
+    return not endpoint.strip().lower().startswith("https://")
 
 
 # Opt-in flag helpers live in core.telemetry_config so the sanitizer can
@@ -184,17 +230,36 @@ def _do_init(service_name: str) -> None:
         }
     )
 
+    protocol = _resolve_otlp_protocol(settings.otel_exporter_otlp_protocol)
+    insecure = _use_insecure_channel(endpoint, settings.otel_exporter_otlp_insecure)
+
     # --- TracerProvider ---
-    try:
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        span_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-    except Exception:
+    # Both exporters read OTEL_EXPORTER_OTLP_HEADERS themselves, which is how a
+    # managed endpoint gets its auth header without this module handling it.
+    if protocol == "http/protobuf":
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as OTLPSpanExporterHTTP,
         )
         span_exporter = OTLPSpanExporterHTTP(endpoint=endpoint)
+    else:
+        try:
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter,
+            )
+            span_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=insecure)
+        except Exception as exc:
+            # grpcio is an optional dependency. Say so rather than falling back
+            # mutely: HTTP wants port 4318, and a 4317 endpoint will now fail.
+            logger.warning(
+                "gRPC OTLP exporter unavailable (%s) — falling back to "
+                "http/protobuf against %s",
+                exc,
+                endpoint,
+            )
+            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                OTLPSpanExporter as OTLPSpanExporterHTTP,
+            )
+            span_exporter = OTLPSpanExporterHTTP(endpoint=endpoint)
 
     batch_processor = BatchSpanProcessor(
         span_exporter,
@@ -234,9 +299,12 @@ def _do_init(service_name: str) -> None:
             )
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             metric_reader = PeriodicExportingMetricReader(
-                OTLPMetricExporter(endpoint=endpoint, insecure=True)
+                OTLPMetricExporter(endpoint=endpoint, insecure=insecure)
             )
-        except Exception:
+        except Exception as exc:
+            # Neither reader is available: metrics are off, traces are not.
+            # Logged because "no metrics appeared" is otherwise unexplainable.
+            logger.warning("No OTLP metric exporter available (%s) — metrics disabled", exc)
             metric_reader = None
 
     meter_kwargs: dict = {"resource": resource}
@@ -248,7 +316,11 @@ def _do_init(service_name: str) -> None:
     _meter_provider = meter_provider
 
     logger.info(
-        "OpenTelemetry initialized for service '%s' → %s", service_name, endpoint
+        "OpenTelemetry initialized for service '%s' → %s (%s, tls=%s)",
+        service_name,
+        endpoint,
+        protocol,
+        not insecure,
     )
 
 
