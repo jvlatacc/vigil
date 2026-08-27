@@ -82,8 +82,12 @@ NOT_SETTINGS = {
     # Per-provider names built at runtime, so they cannot be static fields.
     "ANTHROPIC_EXTRA_MODELS",
     "OPENAI_EXTRA_MODELS",
-    # Read by third-party SDKs and tooling, not by Vigil code.
+    # Read by third-party SDKs and tooling, not by Vigil code. The OTLP
+    # exporter reads OTEL_EXPORTER_OTLP_HEADERS itself (see core/telemetry.py),
+    # the same way it reads the other OTEL_EXPORTER_OTLP_* knobs that aren't
+    # Settings fields either.
     "AWS_REGION",
+    "OTEL_EXPORTER_OTLP_HEADERS",
     "OTEL_TRACES_SAMPLER",
     "OTEL_TRACES_SAMPLER_ARG",
     # Consumed outside the Python backend (shell scripts, compose, Vite).
