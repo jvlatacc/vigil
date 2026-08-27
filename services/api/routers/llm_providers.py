@@ -3,6 +3,13 @@
 See GH issue #88. Each row in `llm_provider_configs` represents a configured
 LLM backend (Anthropic, OpenAI, Ollama, ...). API keys are stored in the
 secrets_manager under a generated ref name, never in the DB.
+
+The secret store is the only place a provider key lives. Writing it here is the
+whole of a rotation: ``core.llm.router.router`` resolves the row's
+``api_key_ref`` on every dispatch, so the next inference call picks up the new
+value. Bifrost previously required a second write — a push of the plaintext key
+into its own per-provider-type config — which is what made "saved in the UI" and
+"actually in use" two different states.
 """
 
 from __future__ import annotations
@@ -15,8 +22,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from core.llm.bifrost.admin import push_provider_key, sync_all_provider_models
 from core.llm.providers import provider_service
+from core.llm.providers.catalog_sync import sync_all_provider_models
 from core.platform.url_safety import UrlSafetyError, validate_provider_url
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
 from core.time import utcnow
@@ -147,9 +154,9 @@ def _validate_type(provider_type: str) -> None:
 def _schedule_catalog_resync(reason: str) -> None:
     """Invalidate the model-list cache and fire a background sync.
 
-    Called from provider CRUD so the UI dropdown and Bifrost's allow-list
-    reflect the change immediately, rather than waiting up to the next
-    scheduled refresh. Best-effort — never blocks the response.
+    Called from provider CRUD so the UI dropdown reflects the change
+    immediately, rather than waiting up to the next scheduled refresh.
+    Best-effort — never blocks the response.
     """
     import asyncio
 
@@ -195,9 +202,6 @@ async def create_provider(
         api_key_ref = _secret_ref_for(provider_id)
         if not set_secret(api_key_ref, payload.api_key):
             raise HTTPException(status_code=500, detail="Failed to persist API key")
-        # Push live to Bifrost so subsequent LLM calls use the new key
-        # without waiting for a container restart.
-        push_provider_key(payload.provider_type, payload.api_key)
 
     row = LLMProviderConfig(
         provider_id=provider_id,
@@ -245,17 +249,10 @@ async def update_provider(
         if payload.api_key == "":
             delete_secret(ref)
             row.api_key_ref = None
-            # Bifrost's key is shared per provider_type, so only blank it if
-            # no same-type sibling still has a key — otherwise re-push the
-            # survivor's so the type keeps a working credential.
-            provider_service.reconcile_bifrost_key_for_type(
-                db, row.provider_type, provider_id
-            )
         else:
             if not set_secret(ref, payload.api_key):
                 raise HTTPException(status_code=500, detail="Failed to persist API key")
             row.api_key_ref = ref
-            push_provider_key(row.provider_type, payload.api_key)
 
     if payload.is_default is True:
         row.is_default = True
@@ -316,13 +313,6 @@ async def delete_provider(
             delete_secret(row.api_key_ref)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to delete secret %s: %s", row.api_key_ref, exc)
-        # Bifrost's key is shared per provider_type. Only wipe it if this was
-        # the last keyed provider of its type; otherwise re-push a surviving
-        # sibling's key so the type isn't left without a working credential.
-        # (``row`` is still in the session here — exclude it explicitly.)
-        provider_service.reconcile_bifrost_key_for_type(
-            db, row.provider_type, provider_id
-        )
 
     provider_service.remove(db, row)
     _schedule_catalog_resync(f"deleted provider {provider_id}")
@@ -626,9 +616,8 @@ async def refresh_provider_models(
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    """Force a live rediscovery for one provider and push the union of
-    same-type providers' models to Bifrost's allow-list. Invalidates the
-    registry's TTL cache so the next dropdown fetch sees fresh data.
+    """Force a live rediscovery for one provider. Invalidates the registry's
+    TTL cache so the next dropdown fetch sees fresh data.
     """
     require_settings_admin(current_user)
     row = provider_service.get_provider(db, provider_id)
@@ -636,9 +625,9 @@ async def refresh_provider_models(
         raise HTTPException(status_code=404, detail="provider not found")
 
     invalidate_model_cache()
-    # Run the same union-of-same-type sync used at startup so Bifrost
-    # sees the new state too, not just the backend's cache.
-    sync_results = await sync_all_provider_models()
+    # Run the same sync used at startup, so this row and every sibling land
+    # in the cache from one pass rather than drifting apart.
+    await sync_all_provider_models()
 
     try:
         models = await fetch_provider_models(row)
@@ -648,7 +637,6 @@ async def refresh_provider_models(
         "provider_id": provider_id,
         "provider_type": row.provider_type,
         "models": models,
-        "bifrost_sync": sync_results.get(row.provider_type, False),
     }
 
 
@@ -656,12 +644,11 @@ async def refresh_provider_models(
 async def refresh_all_provider_models(
     current_user: User = Depends(get_current_active_user),
 ):
-    """Force live rediscovery across every active provider and push the
-    resulting allow-lists to Bifrost. Useful after enabling a new
-    provider or rotating keys in bulk.
+    """Force live rediscovery across every active provider. Useful after
+    enabling a new provider or rotating keys in bulk.
     """
     require_settings_admin(current_user)
 
     invalidate_model_cache()
     sync_results = await sync_all_provider_models()
-    return {"bifrost_sync": sync_results}
+    return {"models_by_provider": sync_results.get("models_by_provider", {})}

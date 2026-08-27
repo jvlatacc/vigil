@@ -152,15 +152,14 @@ def secrets_store():
         store.pop(key, None)
         return True
 
-    # provider_service reads secrets too, when picking a surviving sibling's key.
+    # The router is the only secret writer now — provider_service stopped
+    # reading keys when the shared per-type Bifrost credential went away.
     with patch(
         "services.api.routers.llm_providers.set_secret", side_effect=fake_set
     ), patch(
         "services.api.routers.llm_providers.get_secret", side_effect=fake_get
     ), patch(
         "services.api.routers.llm_providers.delete_secret", side_effect=fake_delete
-    ), patch(
-        "core.llm.providers.provider_service.get_secret", side_effect=fake_get
     ):
         yield store
 
@@ -275,136 +274,64 @@ def test_delete_removes_secret(client, secrets_store):
     assert "llm_provider_openai-prod_api_key" not in secrets_store
 
 
-@pytest.fixture()
-def bifrost_pushes():
-    """Capture every push_provider_key(provider_type, value) call."""
-    calls = []
-
-    def fake_push(provider_type: str, value: str) -> bool:
-        calls.append((provider_type, value))
-        return True
-
-    # Two bound names: the router pushes directly on create/rotate, and
-    # provider_service pushes when reconciling the shared per-type key.
-    with patch(
-        "services.api.routers.llm_providers.push_provider_key", side_effect=fake_push
-    ), patch(
-        "core.llm.providers.provider_service.push_provider_key", side_effect=fake_push
-    ):
-        yield calls
+def _key_ref(provider_id: str) -> str:
+    return f"llm_provider_{provider_id}_api_key"
 
 
-def test_delete_last_of_type_clears_bifrost_key(client, secrets_store, bifrost_pushes):
-    """Deleting the only provider of a type blanks the shared Bifrost key."""
-    client.post(
+def _create_provider(client, provider_id: str, api_key: str, ptype: str = "openai"):
+    return client.post(
         "/api/llm/providers/",
         json={
-            "provider_id": "openai-prod",
-            "provider_type": "openai",
-            "name": "OpenAI",
+            "provider_id": provider_id,
+            "provider_type": ptype,
+            "name": provider_id,
             "default_model": "gpt-4o",
-            "api_key": "sk-only",
+            "api_key": api_key,
         },
     )
-    bifrost_pushes.clear()  # drop the create-time push
 
-    r = client.delete("/api/llm/providers/openai-prod")
+
+def test_rotating_a_key_replaces_the_stored_secret(client, secrets_store):
+    """A rotation is one write, to the row's own secret ref.
+
+    The store is the only copy of the key and the router resolves the ref on
+    every dispatch, so overwriting it here is the whole of a rotation — there
+    is no second surface that could still be serving the old value.
+    """
+    _create_provider(client, "openai-prod", "sk-old")
+    assert secrets_store[_key_ref("openai-prod")] == "sk-old"
+
+    r = client.put("/api/llm/providers/openai-prod", json={"api_key": "sk-new"})
     assert r.status_code == 200
-    # Last provider of its type → clear the credential.
-    assert ("openai", "") in bifrost_pushes
-    assert ("openai", "sk-only") not in bifrost_pushes
+    assert r.json()["has_api_key"] is True
+    assert secrets_store[_key_ref("openai-prod")] == "sk-new"
 
 
-def test_delete_with_sibling_repushes_sibling_key(
-    client, secrets_store, bifrost_pushes
-):
-    """Deleting one provider re-pushes a same-type sibling's key, never blank."""
-    client.post(
-        "/api/llm/providers/",
-        json={
-            "provider_id": "openai-a",
-            "provider_type": "openai",
-            "name": "A",
-            "default_model": "gpt-4o",
-            "api_key": "sk-aaa",
-        },
-    )
-    client.post(
-        "/api/llm/providers/",
-        json={
-            "provider_id": "openai-b",
-            "provider_type": "openai",
-            "name": "B",
-            "default_model": "gpt-4o",
-            "api_key": "sk-bbb",
-        },
-    )
-    bifrost_pushes.clear()
+def test_delete_leaves_same_type_sibling_key_intact(client, secrets_store):
+    """Deleting one provider must not disturb a sibling of the same type.
+
+    Keys are per-row, so there is nothing shared to reconcile: the sibling's
+    secret is untouched and it keeps serving traffic.
+    """
+    _create_provider(client, "openai-a", "sk-aaa")
+    _create_provider(client, "openai-b", "sk-bbb")
 
     r = client.delete("/api/llm/providers/openai-a")
     assert r.status_code == 200
-    # Sibling b survives with its key → re-push it, do NOT blank the type.
-    assert ("openai", "sk-bbb") in bifrost_pushes
-    assert ("openai", "") not in bifrost_pushes
-    # The deleted provider's own secret is still removed.
-    assert "llm_provider_openai-a_api_key" not in secrets_store
+    assert _key_ref("openai-a") not in secrets_store
+    assert secrets_store[_key_ref("openai-b")] == "sk-bbb"
 
 
-def test_update_clear_with_sibling_repushes_sibling_key(
-    client, secrets_store, bifrost_pushes
-):
-    """Clearing one provider's key re-pushes a same-type sibling's key."""
-    client.post(
-        "/api/llm/providers/",
-        json={
-            "provider_id": "openai-a",
-            "provider_type": "openai",
-            "name": "A",
-            "default_model": "gpt-4o",
-            "api_key": "sk-aaa",
-        },
-    )
-    client.post(
-        "/api/llm/providers/",
-        json={
-            "provider_id": "openai-b",
-            "provider_type": "openai",
-            "name": "B",
-            "default_model": "gpt-4o",
-            "api_key": "sk-bbb",
-        },
-    )
-    bifrost_pushes.clear()
+def test_clearing_a_key_leaves_same_type_sibling_key_intact(client, secrets_store):
+    """Clearing one provider's key is likewise scoped to that row."""
+    _create_provider(client, "openai-a", "sk-aaa")
+    _create_provider(client, "openai-b", "sk-bbb")
 
     r = client.put("/api/llm/providers/openai-a", json={"api_key": ""})
     assert r.status_code == 200
     assert r.json()["has_api_key"] is False
-    # openai-a's own secret is gone, but the shared Bifrost key falls back
-    # to sibling b's rather than being blanked.
-    assert "llm_provider_openai-a_api_key" not in secrets_store
-    assert ("openai", "sk-bbb") in bifrost_pushes
-    assert ("openai", "") not in bifrost_pushes
-
-
-def test_update_clear_last_of_type_blanks_bifrost_key(
-    client, secrets_store, bifrost_pushes
-):
-    """Clearing the only provider's key blanks the shared Bifrost key."""
-    client.post(
-        "/api/llm/providers/",
-        json={
-            "provider_id": "openai-solo",
-            "provider_type": "openai",
-            "name": "Solo",
-            "default_model": "gpt-4o",
-            "api_key": "sk-solo",
-        },
-    )
-    bifrost_pushes.clear()
-
-    r = client.put("/api/llm/providers/openai-solo", json={"api_key": ""})
-    assert r.status_code == 200
-    assert ("openai", "") in bifrost_pushes
+    assert _key_ref("openai-a") not in secrets_store
+    assert secrets_store[_key_ref("openai-b")] == "sk-bbb"
 
 
 def test_set_default_enforces_single_default(client, secrets_store, session):

@@ -21,7 +21,7 @@ from services.api.middleware.auth import get_current_active_user, require_settin
 from core.storage.models import User
 from core.platform import service_manager
 from core.platform.autostart_config import get_autostart_services, set_autostart_services
-from core.llm.bifrost.admin import sync_after_ollama_start
+from core.llm.providers.catalog_sync import sync_after_ollama_start
 from core.platform.service_manager import SERVICES, ActionResult, ServiceStatus
 from core.routing import Auth, RouterMeta
 
