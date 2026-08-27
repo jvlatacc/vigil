@@ -1,0 +1,109 @@
+# Cloudflare topology for the Vigil chart.
+#
+#   helm template vigil infra/helm/vigil -f infra/helm/vigil/values-cloudflare.yaml \
+#     --set postgresql.external.host=pg.example.com \
+#     --set redis.external.url=rediss://redis.example.com:6379/0 \
+#     --set secrets.postgresPassword=... \
+#     --set config.OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com
+#
+# What this profile changes: no datastore and no telemetry backend runs inside
+# the cluster. Postgres, Redis and the OTLP endpoint are all external, which is
+# the arrangement the Cloudflare Containers tier requires -- a Container cannot
+# host a database (no non-HTTP inbound, ephemeral disk) and has no sidecar to
+# collect traces into.
+#
+# What it does not change: values.yaml still describes the legacy in-cluster
+# deployment, unmodified, so the pre-cutover path keeps working. Nothing here is
+# a Cloudflare API call; wrangler config and Hyperdrive bindings are the deploy
+# half of workstream F.
+#
+# Rendering this profile without the four values above fails on purpose. An
+# empty postgresql.external.host would render a DATABASE_URL pointing at nothing
+# and the failure would surface as a confusing connection error at runtime
+# instead of at install time.
+
+# -----------------------------------------------------------------------------
+# Stateful services: managed, not in-cluster
+# -----------------------------------------------------------------------------
+postgresql:
+  enabled: false
+  bitnami:
+    enabled: false
+  external:
+    # Required. Must be a pgvector-capable server: findings.embedding is
+    # vector(768) with an HNSW index, which stock postgres:16 cannot serve.
+    host: ""
+    port: 5432
+    database: deeptempo_soc
+    username: deeptempo
+    # Managed Postgres over the public internet: TLS is not optional.
+    sslRequired: true
+    existingSecret: ""
+    existingSecretKey: POSTGRES_PASSWORD
+
+redis:
+  enabled: false
+  bitnami:
+    enabled: false
+  external:
+    # Required. Full URL, e.g. rediss://:password@redis.example.com:6379/0.
+    url: ""
+    existingSecret: ""
+    existingSecretKey: REDIS_URL
+
+# The init Job runs infra/database/init/ against whatever DATABASE_URL resolves
+# to, which is now a managed server. Left enabled: the schema still has to exist,
+# and the Job is idempotent. Disable it if your managed Postgres is provisioned
+# by a separate migration pipeline.
+dbInit:
+  enabled: true
+
+# -----------------------------------------------------------------------------
+# Telemetry: external OTLP only
+# -----------------------------------------------------------------------------
+# The in-cluster collector subchart is off, so nothing rewrites
+# OTEL_EXPORTER_OTLP_ENDPOINT and the value in config below is what ships.
+otelCollector:
+  enabled: false
+
+observability:
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs. In the Cloudflare topology metrics
+    # are scraped by whatever backend owns the OTLP endpoint, not by an operator
+    # in this cluster.
+    enabled: false
+
+config:
+  VIGIL_OTEL_ENABLED: "true"
+  # Required. No in-cluster fallback exists in this profile -- an unset endpoint
+  # means the SDK silently drops every span.
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  # HTTP rather than gRPC: the same protocol a Cloudflare Container can use for
+  # egress, so both halves of the tier are configured identically.
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf"
+  OTEL_TRACES_SAMPLER: "parentbased_traceidratio"
+  OTEL_TRACES_SAMPLER_ARG: "0.1"
+
+# -----------------------------------------------------------------------------
+# Daemon state
+# -----------------------------------------------------------------------------
+# Still a PVC here, because Kubernetes has one and this is the Kubernetes path.
+# The Containers equivalent of this 10Gi volume is the `state` block in
+# infra/cloudflare/containers/python-tier.json, which stays configurable
+# (instance disk vs R2 over FUSE) until the stateDirectory inventory says which
+# of these files a restart may lose. See that manifest's README.
+daemon:
+  persistence:
+    enabled: true
+    size: 10Gi
+
+# -----------------------------------------------------------------------------
+# Dev-only extras, off
+# -----------------------------------------------------------------------------
+# Neither belongs in a topology whose datastore is managed and whose log source
+# is the customer's own Splunk.
+splunk:
+  enabled: false
+
+pgadmin:
+  enabled: false

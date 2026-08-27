@@ -1,4 +1,4 @@
-"""One egress: every LLM call leaves through Bifrost, on one schema.
+"""One egress: every LLM call leaves through AI Gateway, on one schema.
 
 ADR 0011 decided this and nothing enforced it. `main` reached models four ways —
 llm_gateway, llm_router, llm_format, llm_clients — plus provider-specific paths
@@ -41,6 +41,16 @@ PROVIDER_HOSTS = (
     "api.openai.com",
     "generativelanguage.googleapis.com",
 )
+
+# The gateway's own host. Composing an endpoint from it is the sanctioned
+# egress; naming it anywhere else means a second place knows the URL shape, and
+# the two drift.
+GATEWAY_HOST = "gateway.ai.cloudflare.com"
+
+# The one module that composes gateway URLs.
+ALLOWED_GATEWAY_NAMING = {
+    "core/llm/ai_gateway.py",
+}
 
 # Where naming a provider host is the point rather than a bypass.
 ALLOWED_HOSTS = {
@@ -109,23 +119,34 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return lines
 
 
-def hosts_in(path: Path) -> list[tuple[int, str]]:
+def _string_constants(path: Path) -> list[tuple[int, str]]:
+    """Non-docstring string literals in *path*, with line numbers."""
     try:
         tree = ast.parse(path.read_text())
     except SyntaxError:
         return []
 
     prose = _docstrings(tree)
-    found = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-            continue
-        if node.lineno in prose:
-            continue
-        for host in PROVIDER_HOSTS:
-            if host in node.value:
-                found.append((node.lineno, host))
-    return found
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.lineno not in prose
+    ]
+
+
+def hosts_in(path: Path) -> list[tuple[int, str]]:
+    return [
+        (line, host)
+        for line, value in _string_constants(path)
+        for host in PROVIDER_HOSTS
+        if host in value
+    ]
+
+
+def gateway_naming_in(path: Path) -> list[int]:
+    return [line for line, value in _string_constants(path) if GATEWAY_HOST in value]
 
 
 @pytest.mark.unit
@@ -153,7 +174,26 @@ def test_no_provider_host_is_dialled_directly():
     ]
     assert not violations, (
         "A provider host was named outside the key-validation exception. All traffic "
-        "goes to BIFROST_URL; the gateway decides which provider it reaches:\n  "
+        "goes to an AI Gateway endpoint, which is what decides the provider it "
+        "reaches:\n  "
+        + "\n  ".join(violations)
+    )
+
+
+@pytest.mark.unit
+def test_the_gateway_url_is_composed_in_one_place():
+    # The provider is a path segment of the gateway URL, so anywhere that
+    # rebuilds the URL also encodes the routing rule -- and a second copy is how
+    # a provider ends up appended twice, or not at all.
+    violations = [
+        f"{_relative(path)}:{line}: names {GATEWAY_HOST}"
+        for path in python_files()
+        if _relative(path) not in ALLOWED_GATEWAY_NAMING
+        for line in gateway_naming_in(path)
+    ]
+    assert not violations, (
+        "The AI Gateway host was named outside core/llm/ai_gateway.py. Resolve an "
+        "endpoint with gateway_base_url() / openai_shape_base_url() instead:\n  "
         + "\n  ".join(violations)
     )
 
@@ -170,3 +210,15 @@ def test_the_allow_lists_stay_honest():
     assert (
         not stale
     ), "ALLOWED_CONSTRUCTION entries no longer build a client:\n  " + "\n  ".join(stale)
+
+    orphaned = [
+        entry
+        for entry in ALLOWED_GATEWAY_NAMING
+        if not (REPO_ROOT / entry).exists()
+        or not gateway_naming_in(REPO_ROOT / entry)
+    ]
+    assert (
+        not orphaned
+    ), "ALLOWED_GATEWAY_NAMING entries no longer name the gateway:\n  " + "\n  ".join(
+        orphaned
+    )

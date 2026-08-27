@@ -6,6 +6,7 @@ with mocked openai / anthropic clients.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,10 +17,17 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(REPO))
 
+from core.config import get_settings
+from core.llm.ai_gateway import AIGatewayNotConfigured
 from core.llm.router.router import (LLMRouter, ProviderSpec,
                                     provider_spec_from_row)
 
 pytestmark = pytest.mark.unit
+
+# A gateway-shaped endpoint: AI Gateway's provider path, pinned on the router so
+# these tests exercise dispatch rather than endpoint composition (that is
+# tests/unit/llm/test_ai_gateway.py).
+MOCK_GATEWAY = "https://gateway.example/v1/acct123/vigil-gw/openai"
 
 
 def _anthropic_spec() -> ProviderSpec:
@@ -61,13 +69,13 @@ def _openai_spec() -> ProviderSpec:
 
 
 # ---------------------------------------------------------------------------
-# Dispatch — Bifrost branch
+# Dispatch — AI Gateway branch
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_dispatch_bifrost_for_ollama():
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+async def test_dispatch_through_gateway_for_ollama():
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="hello", tool_calls=None))
@@ -88,15 +96,17 @@ async def test_dispatch_bifrost_for_ollama():
             system_prompt="be terse",
         )
     oai_ctor.assert_called_once()
-    # base_url must be the Bifrost URL the router was constructed with
-    assert oai_ctor.call_args.kwargs["base_url"] == "http://test-bifrost:8080/v1"
+    # base_url must be the gateway endpoint the router was constructed with
+    assert oai_ctor.call_args.kwargs["base_url"] == MOCK_GATEWAY
 
     kwargs = mock_client.chat.completions.create.call_args.kwargs
-    assert kwargs["model"] == "ollama/llama3.1:8b"
+    # Unprefixed: the provider is in the URL path, not the model string. A
+    # "ollama/" prefix here reaches the upstream as a model it does not have.
+    assert kwargs["model"] == "llama3.1:8b"
     assert kwargs["messages"][0] == {"role": "system", "content": "be terse"}
     assert kwargs["messages"][1] == {"role": "user", "content": "hi"}
 
-    assert out["path"] == "bifrost"
+    assert out["path"] == "ai_gateway"
     assert out["provider"] == "ollama"
     assert out["content"] == "hello"
     assert out["input_tokens"] == 5
@@ -106,14 +116,14 @@ async def test_dispatch_bifrost_for_ollama():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_bifrost_translates_anthropic_tools_and_messages():
-    """The daemon builds tools/messages in Anthropic shape. The OpenAI Bifrost
+async def test_dispatch_translates_anthropic_tools_and_messages():
+    """The daemon builds tools/messages in Anthropic shape. The OpenAI-shape
     dispatch must translate both (input_schema->parameters, tool_use->tool_calls,
     tool_result->role:tool) and normalize the response tool_calls back to
     {id,name,input} dicts, or the daemon's multi-turn tool loop breaks on
     non-Anthropic providers.
     """
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     returned_tc = SimpleNamespace(
         id="call_9",
         function=SimpleNamespace(name="get_case", arguments='{"case_id": "C1"}'),
@@ -179,14 +189,14 @@ async def test_dispatch_bifrost_translates_anthropic_tools_and_messages():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_bifrost_openai_extracts_cache_read_tokens():
+async def test_dispatch_openai_shape_extracts_cache_read_tokens():
     """#184 acceptance #2: OpenAI prompt-cache tokens were dropped on the floor
     by the dispatch layer, leaving cache hits billed at full input rate. Verify
     `usage.prompt_tokens_details.cached_tokens` is now read into
     `cache_read_tokens` (and `cache_creation_tokens` stays 0 — OpenAI doesn't
     bill cache creation as a separate tier the way Anthropic does).
     """
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="cached!", tool_calls=None))
@@ -216,11 +226,11 @@ async def test_dispatch_bifrost_openai_extracts_cache_read_tokens():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_bifrost_openai_no_cache_details_safe():
+async def test_dispatch_openai_shape_no_cache_details_safe():
     """When prompt_tokens_details is missing (older OpenAI responses or models
     without cache support), cache_read_tokens defaults to 0 — must not raise.
     """
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="x", tool_calls=None))
@@ -245,13 +255,12 @@ async def test_dispatch_bifrost_openai_no_cache_details_safe():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_propagates_interaction_id_as_bifrost_log_header_openai():
-    """#185: each LLM call carries an `x-bf-lh-vigil-interaction-id` header
-    so Bifrost's logging plugin can correlate the LogEntry back to Vigil's
-    local LLMInteractionLog row by UUID. The `x-bf-lh-*` prefix is
-    Bifrost's logging-headers convention — anything with that prefix gets
-    captured into LogEntry.metadata."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+async def test_dispatch_propagates_interaction_id_as_gateway_metadata():
+    """#185: each LLM call carries the interaction UUID so the gateway's log
+    entry can be correlated back to Vigil's local LLMInteractionLog row. AI
+    Gateway's equivalent of Bifrost's `x-bf-lh-*` convention is a single
+    `cf-aig-metadata` JSON object."""
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))
@@ -275,14 +284,16 @@ async def test_dispatch_propagates_interaction_id_as_bifrost_log_header_openai()
 
     headers = mock_client.chat.completions.create.call_args.kwargs.get("extra_headers")
     assert headers is not None
-    assert headers.get("x-bf-lh-vigil-interaction-id") == interaction_id
+    assert json.loads(headers["cf-aig-metadata"])["vigil_interaction_id"] == (
+        interaction_id
+    )
 
 
 @pytest.mark.asyncio
 async def test_dispatch_omits_extra_headers_when_no_interaction_id():
     """No interaction_id passed → no extra_headers kwarg, so we don't
     accidentally inject empty headers into every call."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))
@@ -307,11 +318,12 @@ async def test_dispatch_omits_extra_headers_when_no_interaction_id():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_attaches_vk_header_when_budget_enforce_active():
-    """#186: when budget_service.should_enforce() is True and a VK is
-    configured, dispatch must attach `x-bf-vk: <vk>` so Bifrost's
-    governance layer enforces the budget upstream of the call."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+async def test_dispatch_attaches_budget_key_metadata_when_enforce_active():
+    """#186: when budget_service.should_enforce() is True and a key is
+    configured, dispatch carries it in `cf-aig-metadata` for attribution.
+    Bifrost's virtual keys enforced the budget at the gateway; AI Gateway has
+    no equivalent, so this is a log attribution, not enforcement."""
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))
@@ -335,14 +347,14 @@ async def test_dispatch_attaches_vk_header_when_budget_enforce_active():
 
     headers = mock_client.chat.completions.create.call_args.kwargs.get("extra_headers")
     assert headers is not None
-    assert headers.get("x-bf-vk") == "sk-bf-test-vk"
+    assert json.loads(headers["cf-aig-metadata"])["vigil_budget_key"] == "sk-bf-test-vk"
 
 
 @pytest.mark.asyncio
-async def test_dispatch_omits_vk_header_when_enforcement_off():
-    """DEV_MODE / LLM_BUDGET_UNLIMITED → should_enforce() is False →
-    don't attach x-bf-vk so Bifrost's bootstrap (no-VK) path applies."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+async def test_dispatch_omits_budget_key_metadata_when_enforcement_off():
+    """DEV_MODE / LLM_BUDGET_UNLIMITED → should_enforce() is False → the key
+    is not logged to the gateway at all."""
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     fake_resp = SimpleNamespace(
         choices=[
             SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))
@@ -371,12 +383,12 @@ async def test_dispatch_omits_vk_header_when_enforcement_off():
 
 @pytest.mark.asyncio
 async def test_dispatch_translates_402_into_budget_exceeded():
-    """Bifrost returns 402 when the VK budget is exhausted. The router
-    must translate that into the typed BudgetExceeded so the chat UI
-    can render a banner instead of a 500 toast."""
+    """A 402 from the gateway or the upstream provider means the spend cap is
+    hit. The router must translate it into the typed BudgetExceeded so the chat
+    UI renders a banner instead of a 500 toast."""
     from core.llm.cost.budget import BudgetExceeded
 
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     err = SimpleNamespace(status_code=402, message="$5 of $5 spent")
     raise_err = type("FakeAPIErr", (Exception,), {})("budget hit")
     raise_err.status_code = 402  # type: ignore[attr-defined]
@@ -412,7 +424,7 @@ async def test_dispatch_retries_a_429_rather_than_failing_the_run():
     wait failed the run and was reported as being out of credit. The agent
     worker had always retried the same response.
     """
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     limited = type("FakeAPIErr", (Exception,), {})("rate limited")
     limited.status_code = 429  # type: ignore[attr-defined]
 
@@ -443,7 +455,7 @@ async def test_dispatch_does_not_swallow_non_budget_errors():
     """Only 402/429 map to BudgetExceeded. A 500 should propagate as-is
     so the caller sees the real error and doesn't think it's a budget
     issue."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     raise_err = type("FakeAPIErr", (Exception,), {})("upstream blew up")
     raise_err.status_code = 500  # type: ignore[attr-defined]
 
@@ -598,11 +610,11 @@ async def _achunks(chunks):
 
 @pytest.mark.asyncio
 async def test_dispatch_openai_stream_yields_text_and_skips_empty():
-    """The chat SSE path streams non-Anthropic providers through Bifrost's
-    OpenAI-compatible /v1 endpoint. Text deltas must surface as
+    """The chat SSE path streams every provider through its AI Gateway
+    OpenAI-shaped endpoint. Text deltas must surface as
     {"type": "text", "content": ...}; frames with no choices or no content
     (e.g. role/usage-only frames) must be skipped."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     chunks = [
         _delta_chunk("Hello"),
         SimpleNamespace(choices=[]),  # no choices -> skipped
@@ -627,12 +639,12 @@ async def test_dispatch_openai_stream_yields_text_and_skips_empty():
         {"type": "text", "content": "Hello"},
         {"type": "text", "content": ", world"},
     ]
-    # base_url must be Bifrost's OpenAI-compatible /v1 endpoint
-    assert oai_ctor.call_args.kwargs["base_url"] == "http://test-bifrost:8080/v1"
+    # base_url must be the gateway endpoint, not a provider host
+    assert oai_ctor.call_args.kwargs["base_url"] == MOCK_GATEWAY
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert kwargs["stream"] is True
-    # model is provider-prefixed so Bifrost routes to the right backend
-    assert kwargs["model"] == "ollama/llama3.1:8b"
+    # Unprefixed on the streaming path too: the provider is in the URL.
+    assert kwargs["model"] == "llama3.1:8b"
     assert kwargs["messages"][0] == {"role": "system", "content": "be terse"}
     # client is closed on normal completion (no httpx pool leak)
     mock_client.close.assert_awaited_once()
@@ -640,7 +652,7 @@ async def test_dispatch_openai_stream_yields_text_and_skips_empty():
 
 @pytest.mark.asyncio
 async def test_stream_openai_raw_include_usage_sets_stream_options():
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
     mock_client = MagicMock()
     mock_client.close = AsyncMock()
     mock_client.chat.completions.create = AsyncMock(return_value=_achunks([]))
@@ -666,7 +678,7 @@ async def test_stream_openai_raw_closes_client_on_early_disconnect():
     """If the SSE consumer goes away mid-stream, GeneratorExit propagates into
     stream_openai_raw's yield and the finally must still close the client so
     the httpx pool doesn't leak under load."""
-    router = LLMRouter(bifrost_url="http://test-bifrost:8080")
+    router = LLMRouter(base_url=MOCK_GATEWAY)
 
     async def _endless():
         for i in range(100):  # far more than the consumer will read
@@ -706,3 +718,136 @@ async def test_stream_openai_raw_closes_client_on_early_disconnect():
 #   test_*_anthropic_with_thinking_* and test_is_default_anthropic_recognizes_
 #   legacy_refs — the fallback they described handed default-Anthropic thinking
 #     calls to ClaudeService for its tool loop. That loop went in #631.
+
+
+# ---------------------------------------------------------------------------
+# Endpoint resolution — router with no pinned base_url (the deployed case)
+# ---------------------------------------------------------------------------
+
+
+def _configure_gateway(monkeypatch):
+    monkeypatch.setenv("AI_GATEWAY_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("AI_GATEWAY_ID", "vigil-gw")
+    monkeypatch.delenv("AI_GATEWAY_OPENAI_BASE_URL", raising=False)
+    get_settings.cache_clear()
+
+
+def _stub_openai_client():
+    fake_resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))
+        ],
+        model="gpt-4o-mini",
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+    )
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_resp)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_dispatch_resolves_the_provider_scoped_gateway_endpoint(monkeypatch):
+    """Unpinned, dispatch composes the endpoint for the provider it was handed.
+
+    The provider is a path segment, so a hosted provider's own base_url must not
+    win over the gateway — that would leave the one-egress ratchet true on paper
+    and false at runtime. The stored provider key travels on the request,
+    because AI Gateway forwards Authorization rather than holding credentials.
+    """
+    _configure_gateway(monkeypatch)
+    router = LLMRouter()
+    mock_client = _stub_openai_client()
+
+    with patch("openai.AsyncOpenAI", return_value=mock_client) as oai_ctor, patch(
+        "core.llm.router.router.get_secret", return_value="sk-openai-real"
+    ):
+        out = await router.dispatch(
+            provider=_openai_spec(),
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert oai_ctor.call_args.kwargs["base_url"] == (
+        "https://gateway.ai.cloudflare.com/v1/acct123/vigil-gw/openai"
+    )
+    assert oai_ctor.call_args.kwargs["api_key"] == "sk-openai-real"
+    assert mock_client.chat.completions.create.call_args.kwargs["model"] == (
+        "gpt-4o-mini"
+    )
+    assert out["path"] == "ai_gateway"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_keeps_a_local_provider_on_its_own_endpoint(monkeypatch):
+    """Ollama runs on the host and AI Gateway cannot reach it, so the row's
+    base_url stays authoritative and the key stays a placeholder."""
+    _configure_gateway(monkeypatch)
+    router = LLMRouter()
+    mock_client = _stub_openai_client()
+
+    with patch("openai.AsyncOpenAI", return_value=mock_client) as oai_ctor:
+        await router.dispatch(
+            provider=_ollama_spec(),
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert oai_ctor.call_args.kwargs["base_url"] == "http://localhost:11434/v1"
+    assert oai_ctor.call_args.kwargs["api_key"] == "unused"
+
+
+@pytest.mark.asyncio
+async def test_stream_resolves_the_provider_scoped_gateway_endpoint(monkeypatch):
+    """Streaming resolves the same way as non-streaming — one seam, not two."""
+    _configure_gateway(monkeypatch)
+    router = LLMRouter()
+    mock_client = MagicMock()
+    mock_client.close = AsyncMock()
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=_achunks([_delta_chunk("Hello")])
+    )
+
+    with patch("openai.AsyncOpenAI", return_value=mock_client) as oai_ctor, patch(
+        "core.llm.router.router.get_secret", return_value="sk-openai-real"
+    ):
+        out = [
+            ev
+            async for ev in router.dispatch_openai_stream(
+                provider=_openai_spec(),
+                messages=[{"role": "user", "content": "hi"}],
+                interaction_id="uuid-bbbb-2222",
+            )
+        ]
+
+    assert out == [{"type": "text", "content": "Hello"}]
+    assert oai_ctor.call_args.kwargs["base_url"] == (
+        "https://gateway.ai.cloudflare.com/v1/acct123/vigil-gw/openai"
+    )
+    kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert kwargs["model"] == "gpt-4o-mini"
+    metadata = json.loads(kwargs["extra_headers"]["cf-aig-metadata"])
+    assert metadata["vigil_interaction_id"] == "uuid-bbbb-2222"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_fails_loudly_when_the_gateway_is_unconfigured(monkeypatch):
+    """No account/gateway id and no override: raise rather than silently fall
+    back to the provider host, which would bill direct and drop caching, rate
+    limits and analytics."""
+    for key in (
+        "AI_GATEWAY_ACCOUNT_ID",
+        "AI_GATEWAY_ID",
+        "AI_GATEWAY_OPENAI_BASE_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+
+    # AsyncOpenAI is patched so a regression here fails the assertion instead of
+    # actually dialling the provider from CI.
+    with patch("openai.AsyncOpenAI", return_value=_stub_openai_client()), patch(
+        "core.llm.router.router.get_secret", return_value="sk-openai-real"
+    ):
+        with pytest.raises(AIGatewayNotConfigured):
+            await LLMRouter().dispatch(
+                provider=_openai_spec(),
+                messages=[{"role": "user", "content": "hi"}],
+            )

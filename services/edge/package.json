@@ -1,0 +1,32 @@
+{
+  "name": "@vigil/edge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Vigil edge tier: the Cloudflare Worker front door and the Flue agents that run behind it",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "deploy:check": "vite build && wrangler deploy --dry-run --config dist/vigil_edge/wrangler.json"
+  },
+  "dependencies": {
+    "@flue/runtime": "2.0.3",
+    "hono": "^4.13.5",
+    "valibot": "^1.4.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.16.1",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@flue/vite": "2.0.3",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.45.0"
+  }
+}

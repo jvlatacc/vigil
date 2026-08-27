@@ -9,11 +9,12 @@ from typing import Optional
 
 from fastapi import HTTPException
 
+from core.agents.internal_token import TOKEN_SECRET
 from core.secrets import get_secret
 
 logger = logging.getLogger(__name__)
 
-TOKEN_SECRET = "AGENT_INTERNAL_TOKEN"
+__all__ = ["TOKEN_SECRET", "authorise"]
 
 
 # The token alone, since ADR 0014. This paired with a loopback check until #635

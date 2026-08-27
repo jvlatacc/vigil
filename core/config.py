@@ -165,7 +165,19 @@ class Settings(BaseSettings):
     # Where the agent worker listens. Two calls go this way rather than through
     # the queue: a chat turn, which is synchronous, and a run's projection.
     agent_url: str = "http://localhost:6989"
+    # Where the edge Worker listens. A chat turn is dispatched to its conversation's
+    # Durable Object here and answered with the durable stream to read.
+    edge_url: str = "http://localhost:8787"
     anthropic_base_url: str = ""
+    # Cloudflare AI Gateway — the inference path for provider traffic. Account
+    # and gateway id compose the per-provider endpoint (the provider is a path
+    # segment: see core/llm/ai_gateway.py); the two per-provider overrides win
+    # when set, which is how a mock gateway or a dev-local compatible endpoint
+    # is pointed at without touching code.
+    ai_gateway_account_id: str = ""
+    ai_gateway_id: str = ""
+    ai_gateway_anthropic_base_url: str = ""
+    ai_gateway_openai_base_url: str = ""
     ollama_url: str = "http://localhost:11434"
     default_model: str = "claude-sonnet-4-6"
     ollama_extra_tool_models: str = ""
@@ -190,6 +202,13 @@ class Settings(BaseSettings):
     vigil_otel_record_llm_content: bool = False
     vigil_otel_record_ioc_values: bool = False
     otel_exporter_otlp_endpoint: str = "http://localhost:4317"
+    # "grpc" (4317) or "http/protobuf" (4318). Managed OTLP endpoints and
+    # Cloudflare Container egress generally want the HTTP one.
+    otel_exporter_otlp_protocol: str = "grpc"
+    # None = derive from the endpoint scheme (https:// -> TLS). Set explicitly
+    # only to force plaintext to an in-cluster collector reached over https, or
+    # TLS to an endpoint whose scheme is omitted.
+    otel_exporter_otlp_insecure: Optional[bool] = None
 
     # Daemon
     daemon_log_level: str = "INFO"

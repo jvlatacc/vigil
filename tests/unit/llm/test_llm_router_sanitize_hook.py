@@ -14,6 +14,7 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(REPO))
 
+from core.config import get_settings  # noqa: E402
 from core.llm.router.router import (LLMRouter, ProviderSpec,  # noqa: E402
                                     _pre_dispatch_sanitize,
                                     _wrap_tool_results_in_messages)
@@ -158,6 +159,12 @@ async def test_dispatch_invokes_sanitize_hook(monkeypatch):
     the same one on the surviving OpenAI egress.
     """
     monkeypatch.delenv("PROMPT_INJECTION_BLOCK", raising=False)
+    # Dispatch resolves an AI Gateway endpoint per provider and refuses to reach
+    # a provider host directly, so a gateway has to be configured to get as far
+    # as the hook this test is about.
+    monkeypatch.setenv("AI_GATEWAY_ACCOUNT_ID", "acct123")
+    monkeypatch.setenv("AI_GATEWAY_ID", "vigil-gw")
+    get_settings.cache_clear()
 
     fake_resp = SimpleNamespace(
         choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=None))],
