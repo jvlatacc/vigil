@@ -6654,6 +6654,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/twin/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Twin Graph
+         * @description The network as findings see it: entities, relationships, pinned findings.
+         *
+         *     Read like the findings list — same auth posture, no row cap, exclusions
+         *     honoured by default.
+         */
+        get: operations["get_api_twin_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/": {
         parameters: {
             query?: never;
@@ -12672,6 +12695,68 @@ export interface components {
             start_time?: string | null;
             /** Total */
             total: number;
+        };
+        /**
+         * TwinEdgeSchema
+         * @description One observed relationship between two nodes.
+         */
+        TwinEdgeSchema: {
+            /** Finding Ids */
+            finding_ids?: string[];
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "flow" | "link";
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+            /** Weight */
+            weight: number;
+        };
+        /**
+         * TwinGraphSchema
+         * @description The whole map in one payload.
+         */
+        TwinGraphSchema: {
+            /** Edges */
+            edges?: components["schemas"]["TwinEdgeSchema"][];
+            /** Generated At */
+            generated_at: string;
+            /** Nodes */
+            nodes?: components["schemas"]["TwinNodeSchema"][];
+            /** Unattributed Finding Ids */
+            unattributed_finding_ids?: string[];
+        };
+        /**
+         * TwinNodeSchema
+         * @description One map node: a host, an address, an account, or the Unattributed sink.
+         */
+        TwinNodeSchema: {
+            /** Case Ids */
+            case_ids?: string[];
+            /** Finding Ids */
+            finding_ids?: string[];
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "host" | "ip" | "user" | "unattributed";
+            /** Label */
+            label: string;
+            /** Severity Counts */
+            severity_counts?: {
+                [key: string]: number;
+            };
+            /** X */
+            x?: number | null;
+            /** Y */
+            y?: number | null;
         };
         /**
          * UpdateConversationRequest
@@ -24639,6 +24724,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_twin_graph: {
+        parameters: {
+            query?: {
+                /** @description Leave analyst-excluded IPs off the map. Findings left with no other entity move to Unattributed; the findings list's own exclusion view is untouched. */
+                apply_exclusions?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinGraphSchema"];
                 };
             };
             /** @description Validation Error */
