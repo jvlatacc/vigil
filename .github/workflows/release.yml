@@ -163,7 +163,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           syft scan "${IMAGE}@${DIGEST}" \
-            -o "cyclonedx-json=vigil-sbom-backend-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=vigil-sbom-backend-${VERSION}.cdx.json"
 
       # Keyless, mirroring the sign step above: same subject, no --key — the
       # job's id-token: write supplies GitHub OIDC. Consumers verify with the
@@ -283,7 +283,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           syft scan "${IMAGE}@${DIGEST}" \
-            -o "cyclonedx-json=vigil-sbom-daemon-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=vigil-sbom-daemon-${VERSION}.cdx.json"
 
       # Keyless, mirroring the sign step above: same subject, no --key — the
       # job's id-token: write supplies GitHub OIDC. Consumers verify with the
@@ -398,7 +398,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           syft scan "${IMAGE}@${DIGEST}" \
-            -o "cyclonedx-json=vigil-sbom-agent-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=vigil-sbom-agent-${VERSION}.cdx.json"
 
       # Keyless, mirroring the sign step above: same subject, no --key — the
       # job's id-token: write supplies GitHub OIDC. Consumers verify with the
@@ -617,16 +617,16 @@ jobs:
           # Whole source tree — a directory scan, so it also catches the
           # medic uv.lock and the Dockerfiles.
           syft scan . \
-            -o "cyclonedx-json=sbom-dist/vigil-sbom-source-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-source-${VERSION}.cdx.json"
 
           # Per-image SBOMs, regenerated from the plumbed index digests — the
           # exact digests signed and attested in the build jobs.
           syft scan "ghcr.io/vigil-soc/vigil-backend@${{ needs.build-backend.outputs.digest }}" \
-            -o "cyclonedx-json=sbom-dist/vigil-sbom-backend-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-backend-${VERSION}.cdx.json"
           syft scan "ghcr.io/vigil-soc/vigil-daemon@${{ needs.build-daemon.outputs.digest }}" \
-            -o "cyclonedx-json=sbom-dist/vigil-sbom-daemon-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-daemon-${VERSION}.cdx.json"
           syft scan "ghcr.io/vigil-soc/vigil-agent@${{ needs.build-agent.outputs.digest }}" \
-            -o "cyclonedx-json=sbom-dist/vigil-sbom-agent-${VERSION}.cdx.json"
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-agent-${VERSION}.cdx.json"
 
       # Support-tarball convention: a .sha256 sibling per file holding the
       # bare file name, so `sha256sum -c <file>.sha256` works as pasted.
@@ -660,6 +660,8 @@ jobs:
             sbom-dist/vigil-sbom-npm-agent-${{ needs.version.outputs.version }}.cdx.json.sha256
             sbom-dist/vigil-sbom-npm-mcp-packages-${{ needs.version.outputs.version }}.cdx.json
             sbom-dist/vigil-sbom-npm-mcp-packages-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-source-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-source-${{ needs.version.outputs.version }}.cdx.json.sha256
           body: |
 
             ---
