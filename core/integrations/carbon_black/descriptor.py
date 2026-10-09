@@ -17,5 +17,7 @@ CARBON_BLACK = register_descriptor(
             IntegrationField("api_key", secret=True),
             IntegrationField("org_key"),
         ),
+        # tool.py answers two read tools and one that quarantines a device.
+        mutating_tools=("cb_quarantine",),
     )
 )
