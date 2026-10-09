@@ -43,7 +43,9 @@ class FakeExecutor:
         self.fail = fail
         self.applied: list[tuple[Any, int]] = []
 
-    async def apply(self, action: Any, ttl_seconds: int) -> ActionResult:
+    async def apply(
+        self, action: Any, ttl_seconds: int, *, namespaces: tuple[str, ...] = ()
+    ) -> ActionResult:
         self.applied.append((action, ttl_seconds))
         if self.fail:
             return ActionResult(success=False, error="boom")
