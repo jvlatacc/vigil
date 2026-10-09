@@ -101,6 +101,7 @@ BUILTIN_AGENTS = [
         "specialization": "Alert Triage & Prioritization",
         "recommended_tools": [
             "list_findings",
+            "enumerate_wazuh_findings",
             "get_finding",
             "create_case",
             "recall_entity",
@@ -190,6 +191,7 @@ BUILTIN_AGENTS = [
         "specialization": "Signal Correlation & Pattern Analysis",
         "recommended_tools": [
             "list_findings",
+            "enumerate_wazuh_findings",
             "create_case",
             "get_technique_rollup",
             "recall_entity",
@@ -257,6 +259,7 @@ Confidence scoring:
             "get_case",
             "list_cases",
             "list_findings",
+            "enumerate_wazuh_findings",
             "recall_entity",
             "read_skill",
             "list_learning_episodes",
@@ -364,6 +367,7 @@ check_detection_candidate lints and replays a candidate Sigma rule against event
         "specialization": "Compliance & Policy",
         "recommended_tools": [
             "list_findings",
+            "enumerate_wazuh_findings",
             "get_finding",
             "list_cases",
             "list_completed_hunts",
