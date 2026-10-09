@@ -31,6 +31,7 @@ from core.integrations.integration_secrets import (
     redact_secrets,
     secret_fields_for,
     split_secrets,
+    unregistered_credential_fields,
 )
 from core.intent import intent_file
 from core.llm.defaults import DEFAULT_MODEL
@@ -898,6 +899,29 @@ def set_integrations_config(
         Success status
     """
     config_service = _for_user(current_user)
+
+    # A credential-shaped value in an unregistered field would be persisted
+    # plaintext to the DB / JSON mirror (E7): the registry never routes it to
+    # the encrypted store. Refuse the save and name the fields — the detail
+    # carries names, never values. Typing the field as a secret (which
+    # registers it) and re-saving moves the value into the store.
+    flagged = [
+        (integration_id, field)
+        for integration_id, raw_config in config.integrations.items()
+        for field in unregistered_credential_fields(integration_id, raw_config or {})
+    ]
+    if flagged:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Credential-shaped values are stored encrypted, not in the "
+                "integration config: "
+                + "; ".join(
+                    f"integration '{iid}' field '{field}'" for iid, field in flagged
+                )
+                + ". Define the field as a secret (password-typed) and re-save."
+            ),
+        )
 
     # A stored credential is sent to whatever destination is saved, so moving
     # one requires the caller to supply the credential again. Checked for every
