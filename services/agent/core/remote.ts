@@ -9,7 +9,7 @@ export interface RemoteOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-const FAILURE_KINDS = new Set(["invalid_args", "refused", "timeout", "unavailable", "backend_error"]);
+const FAILURE_KINDS = new Set(["invalid_args", "refused", "timeout", "unavailable", "backend_error", "denied"]);
 
 function unavailable(detail: string): ToolResult {
   return { ok: false, failure: { kind: "unavailable", detail } };

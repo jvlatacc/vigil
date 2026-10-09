@@ -91,7 +91,7 @@ describe("a tool that runs in the other process", () => {
 });
 
 describe("the failure kind survives the hop", () => {
-  it.each(["invalid_args", "refused", "unavailable", "backend_error"] as const)("relays %s as itself", async (kind) => {
+  it.each(["invalid_args", "refused", "unavailable", "backend_error", "denied"] as const)("relays %s as itself", async (kind) => {
     const { fetch } = answering({ ok: false, failure: { kind, detail: "as reported" } });
     const result = await dispatchTo(fetch).invoke(TOOL, {});
     expect(result).toEqual({ ok: false, failure: { kind, detail: "as reported" } });

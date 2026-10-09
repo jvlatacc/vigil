@@ -56,6 +56,10 @@ LAZY_SINGLETON_ALLOWED = {
     ("core/integrations/opensearch/tool.py", "get_opensearch_service"),
     ("core/integrations/splunk/tool.py", "get_splunk_service"),
     ("core/integrations/vstrike/client.py", "get_vstrike_service"),
+    # Module-private and already injectable: tests reset it through
+    # reset_token_providers(), and the registry only defers each server's
+    # HTTP client and refresh state until the transport first needs a token.
+    ("core/integrations/mcp/oauth.py", "token_providers"),
     # Module-private and already injectable: every caller may pass its own
     # ``data_service``, and this only defers the connection for those that don't.
     ("core/findings/enrichment/service.py", "_default_data_service"),

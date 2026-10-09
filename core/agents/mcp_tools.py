@@ -119,6 +119,15 @@ async def execute_mcp_tool(
     if tool_name not in registry.get_tool_names():
         return None, False
 
+    # Gated once the name is known to be a real MCP tool and before anything
+    # runs: no in-process call, no child process, no secrets read on a denied
+    # dispatch. The backend ladder's gate is tools.invoke in tool_registry;
+    # this is the MCP half's own.
+    from core.agents.tool_registry import ensure_dispatch_permission
+    from core.auth.permissions import MCP_USE_PERMISSION
+
+    ensure_dispatch_permission(tool_name, MCP_USE_PERMISSION)
+
     from core.integrations.mcp.surface import VIGIL_SERVER
 
     if server == VIGIL_SERVER:

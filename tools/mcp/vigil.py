@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Iterator, Optional
 from mcp.server.mcpserver import MCPServer
 
 from core.agents import tool_registry
+from core.agents.tool_registry import ToolDenied, ensure_dispatch_permission
+from core.auth.permissions import MCP_USE_PERMISSION
 from core.cases.agent_closure import service_session
 from core.storage.schemas.case_entities import (
     CaseClosureInfoSchema,
@@ -23,7 +25,32 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
-mcp = MCPServer("vigil")
+
+
+class GatedMCPServer(MCPServer):
+    """Refuses, at the one dispatch point, a caller without ``mcp.use``.
+
+    Every call that reaches this method -- an external client's through /mcp,
+    a hunt's or a chat turn's through the in-process bridge -- is an MCP tool
+    call, so it is gated as one here, the way the backend ladder gates its own
+    dispatch. A refusal answers as an error result under the tool's name rather
+    than crashing the session: the same shape a failing tool's answer takes.
+    """
+
+    async def call_tool(self, name: str, arguments: dict, context=None):
+        try:
+            ensure_dispatch_permission(name, MCP_USE_PERMISSION)
+        except ToolDenied as denied:
+            from mcp.types import CallToolResult, TextContent
+
+            return CallToolResult(
+                is_error=True,
+                content=[TextContent(type="text", text=str(denied))],
+            )
+        return await super().call_tool(name, arguments, context)
+
+
+mcp = GatedMCPServer("vigil")
 
 # The frozen tools: names and input schemas promised to external callers, held
 # by tools/mcp/frozen_tools.snapshot.json. Rule: a tool is frozen when the HTTP

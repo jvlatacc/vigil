@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from core.agents.integration_tools import resolve_integration_call
 from core.agents.internal_auth import authorise
 from core.agents.mcp_tools import MCPFailure, execute_mcp_tool, split_tool_name
-from core.agents.tool_registry import MANIFEST, execute_backend_tool
+from core.agents.tool_registry import MANIFEST, ToolDenied, execute_backend_tool
 from core.auth import tool_principal
 from core.deps import provide_mcp_registry
 from core.integrations.mcp.registry import MCPRegistry
@@ -219,6 +219,18 @@ async def invoke(
             result, handled, source = await _run(body, registry)
     except asyncio.TimeoutError:
         return _failure("timeout", timeoutMs=body.bounds.timeout_ms)
+    # A denial at the dispatch gate: the bound caller may not run this tool at
+    # all. It is an answer about the person, not a visibility gap, and the
+    # warning line is the operational journal of the refusal -- the envelope
+    # carries the same words to the agent layer.
+    except ToolDenied as exc:
+        logger.warning(
+            "tool %s denied for %s: %s required",
+            body.tool,
+            exc.caller or "(no principal)",
+            exc.permission,
+        )
+        return _failure("denied", detail=str(exc))
     # An MCP server that could not be reached is a gap in visibility, not a defect
     # in the call, and the hunt records the two differently.
     except MCPFailure as exc:
