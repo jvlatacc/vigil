@@ -3133,6 +3133,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config/response-breaker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Response Breaker
+         * @description Read the containment breaker's state without inserting a default row.
+         *
+         *     A failed read is a 503, not "open": reporting an armed breaker while the
+         *     stored state may be tripped would invite exactly the containment the
+         *     breaker exists to stop.
+         */
+        get: operations["get_api_config_response-breaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/config/response-breaker/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Response Breaker
+         * @description Open a tripped breaker — a person's action: the trip ends when they
+         *     say so, not when the daemon feels rested. An armed breaker is returned
+         *     as-is: no write, no second OPENED log, no new audit row.
+         *
+         *     The write is stamped with the signed-in operator, so the config audit
+         *     trail names who resumed automatic containment.
+         */
+        post: operations["post_api_config_response-breaker_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/config/s3": {
         parameters: {
             query?: never;
@@ -11642,6 +11691,29 @@ export interface components {
             /** Playbook */
             playbook: string;
         };
+        /**
+         * ResponseBreakerState
+         * @description The breaker as stored: state, the rule that tripped it, the counts
+         *     that completed the signature, and who ended the trip.
+         */
+        ResponseBreakerState: {
+            /** Auto Resume At */
+            auto_resume_at?: string | null;
+            /** Counts */
+            counts?: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason?: string | null;
+            /** Reset At */
+            reset_at?: string | null;
+            /** Reset By */
+            reset_by?: string | null;
+            /** State */
+            state: string;
+            /** Tripped At */
+            tripped_at?: string | null;
+        };
         /** ReviewRequest */
         ReviewRequest: {
             /** Action */
@@ -18390,6 +18462,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProtectedTargetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_config_response-breaker": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseBreakerState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_config_response-breaker_reset": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResponseBreakerState"];
                 };
             };
             /** @description Validation Error */
