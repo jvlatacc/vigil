@@ -45,6 +45,13 @@ from core.storage.models.config import (
     ThreatIndicator,
     UserPreference,
 )
+from core.storage.models.edge import (
+    EDGE_NODE_STATUSES,
+    EDGE_POLICY_STATUSES,
+    EdgeJournalReceipt,
+    EdgeNode,
+    EdgePolicy,
+)
 from core.storage.models.episodic import (
     EpisodicDistilFailure,
     EpisodicDistilMarker,
@@ -96,6 +103,11 @@ __all__ = [
     "Conversation",
     "CustomAgent",
     "CustomWorkflow",
+    "EDGE_NODE_STATUSES",
+    "EDGE_POLICY_STATUSES",
+    "EdgeJournalReceipt",
+    "EdgeNode",
+    "EdgePolicy",
     "EpisodicDistilFailure",
     "EpisodicDistilMarker",
     "EpisodicGap",
