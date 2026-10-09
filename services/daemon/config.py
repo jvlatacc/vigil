@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 from core.config import DEFAULT_REDIS_URL, get_settings
 from core.ingestion.kafka_config import KafkaConfig  # re-exported for DaemonConfig
@@ -41,12 +40,16 @@ class ProcessingConfig:
     # policy before any LLM call. Default off; the flag is an autonomy knob
     # declared in INTENT.md (triage.jit_fast_path_enabled).
     jit_fast_path_enabled: bool = False
+    # Seconds between scheduled maturity passes that compile, suspend, and
+    # retire compiled policies (services/daemon/maturity.py). Single-flight
+    # by DB advisory lock inside the pass.
+    jit_maturity_interval: int = 900
 
 
 @dataclass
 class EscalationConfig:
     enabled: bool = True
-    escalate_severities: List[str] = field(default_factory=lambda: ["critical", "high"])
+    escalate_severities: list[str] = field(default_factory=lambda: ["critical", "high"])
     slack_enabled: bool = True
     slack_channel: str = "#soc-alerts"
     pagerduty_enabled: bool = False
@@ -126,7 +129,7 @@ class DaemonConfig:
 
     # Where each intent knob's value came from (env | db | default), keyed by
     # attribute path, recorded by from_env() for the INTENT.md observe report.
-    sources: Dict[str, str] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "DaemonConfig":
@@ -162,6 +165,7 @@ class DaemonConfig:
             settings.daemon_enrich_backfill_max_age_hours
         )
         config.processing.jit_fast_path_enabled = settings.jit_fast_path_enabled
+        config.processing.jit_maturity_interval = settings.jit_maturity_interval
 
         config.response = ResponseConfig.from_settings(settings)
 
