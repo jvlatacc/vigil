@@ -61,6 +61,7 @@ class TaskScheduler:
             "cleanups_run": 0,
             "fastpath_leases_rolled_back": 0,
             "fastpath_intents_reconciled": 0,
+            "fastpath_shadow_rows_closed": 0,
             "errors": 0,
         }
 
@@ -433,6 +434,7 @@ class TaskScheduler:
         memory, so a crashed or restarted daemon never leaves a lease
         alive.
         """
+        from core.response.fastpath.adjudication import close_expired_shadow_rows
         from core.response.fastpath.config import FastPathConfig
         from core.response.fastpath.executors import default_registry
         from core.response.fastpath.ledger import (
@@ -456,16 +458,25 @@ class TaskScheduler:
             reconciled["retried_applied"] + reconciled["aborted_failed"]
         )
 
-        if rolled["expired"] or reconciled["stale"]:
+        # Shadow rows never apply, so the expiry scan above never sees
+        # them; closing expired ones here (off-thread, same cadence) frees
+        # their idempotency keys before they pin an entity's next live
+        # lease (deferred from PR-3 to this slice).
+        shadow_closed = await asyncio.to_thread(close_expired_shadow_rows)
+        self.stats["fastpath_shadow_rows_closed"] += shadow_closed
+
+        if rolled["expired"] or reconciled["stale"] or shadow_closed:
             logger.info(
                 "Fastpath lease sweep: %d expired (%d rolled back, %d errors), "
-                "%d stale intents (%d retried, %d aborted)",
+                "%d stale intents (%d retried, %d aborted), "
+                "%d shadow rows closed",
                 rolled["expired"],
                 rolled["rolled_back"],
                 rolled["errors"],
                 reconciled["stale"],
                 reconciled["retried_applied"],
                 reconciled["aborted_failed"],
+                shadow_closed,
             )
 
         return {
@@ -475,6 +486,7 @@ class TaskScheduler:
             "stale_scanned": reconciled["stale"],
             "retried_applied": reconciled["retried_applied"],
             "aborted_failed": reconciled["aborted_failed"],
+            "shadow_rows_closed": shadow_closed,
         }
 
     async def _run_probe_sweep(self):
