@@ -31,6 +31,13 @@ HEALTH_PORT_VAR = "VIGIL_EDGE_HEALTH_PORT"
 NODE_LABELS_VAR = "VIGIL_EDGE_NODE_LABELS"
 EVE_PATH_VAR = "VIGIL_EDGE_EVE_PATH"
 JOURNAL_MAX_BYTES_VAR = "VIGIL_EDGE_JOURNAL_MAX_BYTES"
+K8S_API_URL_VAR = "VIGIL_EDGE_K8S_API_URL"
+K8S_TOKEN_FILE_VAR = "VIGIL_EDGE_K8S_TOKEN_FILE"
+K8S_CA_FILE_VAR = "VIGIL_EDGE_K8S_CA_FILE"
+REAPER_INTERVAL_VAR = "VIGIL_EDGE_REAPER_INTERVAL_SECONDS"
+
+DEFAULT_K8S_TOKEN_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+DEFAULT_K8S_CA_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
 
 DEFAULT_JOURNAL_MAX_BYTES = 64 * 1024 * 1024
 
@@ -72,6 +79,13 @@ class EdgeConfig:
     node_labels: dict[str, str] = field(default_factory=dict)
     eve_path: Path | None = None
     journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
+    # Cluster mode's containment. None = no API server configured, the
+    # NetworkPolicy executor is not installed. Token/CA default to the pod's
+    # own service-account mount.
+    k8s_api_url: str | None = None
+    k8s_token_file: Path = DEFAULT_K8S_TOKEN_FILE
+    k8s_ca_file: Path = DEFAULT_K8S_CA_FILE
+    reaper_interval_seconds: int = 60
     edge_version: str = __version__
 
     @classmethod
@@ -108,6 +122,16 @@ class EdgeConfig:
         model = "qwen2.5:1.5b" if raw_model is None else raw_model.strip()
         eve_path = (env.get(EVE_PATH_VAR) or "").strip()
 
+        # Cluster mode's API server: explicit env wins; otherwise the pod's
+        # own service environment. Neither present -> the NetworkPolicy
+        # executor is not installed and dispatch records no_executor.
+        k8s_api_url = (env.get(K8S_API_URL_VAR) or "").strip()
+        if not k8s_api_url:
+            host = (env.get("KUBERNETES_SERVICE_HOST") or "").strip()
+            port = (env.get("KUBERNETES_SERVICE_PORT_HTTPS") or "443").strip()
+            if host:
+                k8s_api_url = f"https://{host}:{port}"
+
         raw_journal_max = (env.get(JOURNAL_MAX_BYTES_VAR) or "").strip()
         journal_max_bytes = DEFAULT_JOURNAL_MAX_BYTES
         if raw_journal_max:
@@ -120,6 +144,20 @@ class EdgeConfig:
             if journal_max_bytes <= 0:
                 raise ConfigError(
                     f"{JOURNAL_MAX_BYTES_VAR} must be positive, got {journal_max_bytes}"
+                )
+
+        raw_reaper = (env.get(REAPER_INTERVAL_VAR) or "").strip()
+        reaper_interval = 60
+        if raw_reaper:
+            try:
+                reaper_interval = int(raw_reaper)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{REAPER_INTERVAL_VAR} must be an integer seconds count, got {raw_reaper!r}"
+                ) from exc
+            if reaper_interval <= 0:
+                raise ConfigError(
+                    f"{REAPER_INTERVAL_VAR} must be positive, got {reaper_interval}"
                 )
 
         return cls(
@@ -143,6 +181,10 @@ class EdgeConfig:
             node_labels=dict(parsed_labels),
             eve_path=Path(eve_path) if eve_path else None,
             journal_max_bytes=journal_max_bytes,
+            k8s_api_url=k8s_api_url or None,
+            k8s_token_file=Path(env.get(K8S_TOKEN_FILE_VAR) or DEFAULT_K8S_TOKEN_FILE),
+            k8s_ca_file=Path(env.get(K8S_CA_FILE_VAR) or DEFAULT_K8S_CA_FILE),
+            reaper_interval_seconds=reaper_interval,
         )
 
     def validate(self) -> list[str]:
@@ -155,5 +197,9 @@ class EdgeConfig:
         if not 1 <= self.health_port <= 65535:
             problems.append(
                 f"{HEALTH_PORT_VAR} must be 1-65535, got {self.health_port}"
+            )
+        if self.mode == "cluster" and not self.k8s_api_url:
+            problems.append(
+                f"{K8S_API_URL_VAR} (or KUBERNETES_SERVICE_HOST) is required in cluster mode"
             )
         return problems

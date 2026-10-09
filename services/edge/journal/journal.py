@@ -307,6 +307,21 @@ class HashJournal:
 
     # -- caps (the gate's CapsView) ----------------------------------------
 
+    def _successful_revert_seqs(self) -> set[int]:
+        """Local sequences of decision records closed by a successful
+        revert. Failed reverts deliberately do not appear: the work stays
+        pending until the revert is real."""
+        closed: set[int] = set()
+        for record in self._records:
+            if record.kind != KIND_REVERT:
+                continue
+            if record.payload.get("success") is not True:
+                continue
+            revert_of = record.payload.get("revert_of")
+            if isinstance(revert_of, int):
+                closed.add(revert_of)
+        return closed
+
     def _executed_decisions(self) -> list[tuple[JournalRecord, dict[str, Any]]]:
         """Decision records that actually took effect: outcome=execute with a
         successful executor apply. Failed applies bound nothing — only real
@@ -342,13 +357,7 @@ class HashJournal:
     def active_blocks(self, now: datetime) -> int:
         """Executed blocks whose TTL has not expired and that no successful
         revert has closed — the bundle's max-active-blocks cap input."""
-        reverted = {
-            record.payload.get("revert_of")
-            for record in self._records
-            if record.kind == KIND_REVERT
-            and record.payload.get("revert_of") is not None
-            and record.payload.get("success") is True
-        }
+        reverted = self._successful_revert_seqs()
         active = 0
         for record, payload in self._executed_decisions():
             if record.local_sequence in reverted:
@@ -361,6 +370,31 @@ class HashJournal:
             if ts <= now < ts + timedelta(seconds=ttl):
                 active += 1
         return active
+
+    def pending_reverts(
+        self, now: datetime
+    ) -> list[tuple[JournalRecord, dict[str, Any]]]:
+        """Executed blocks whose TTL has expired and that no successful
+        revert has closed — the TTL reaper's work queue. The queue is
+        derived from durable journal history, so it survives restarts: a
+        block whose process died mid-TTL is still reaped after reboot.
+        Failed reverts stay here until a revert actually succeeds."""
+        reverted = self._successful_revert_seqs()
+        pending: list[tuple[JournalRecord, dict[str, Any]]] = []
+        for record, payload in self._executed_decisions():
+            if record.local_sequence in reverted:
+                continue
+            ref = (payload.get("execution") or {}).get("ref")
+            if not isinstance(ref, str) or not ref:
+                continue
+            action = payload.get("action") or {}
+            ttl = action.get("ttl_seconds")
+            ts = _parse_ts(record.timestamp)
+            if ts is None or not isinstance(ttl, int):
+                continue
+            if now >= ts + timedelta(seconds=ttl):
+                pending.append((record, payload))
+        return pending
 
     # -- verification ------------------------------------------------------
 

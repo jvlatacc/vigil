@@ -90,3 +90,75 @@ def test_validate_collects_missing_node_id() -> None:
 def test_validate_clean_for_a_full_config() -> None:
     config = EdgeConfig.from_env({"VIGIL_EDGE_NODE_ID": "node-1"})
     assert config.validate() == []
+
+
+def test_validate_flags_cluster_mode_without_api_url() -> None:
+    problems = EdgeConfig.from_env(
+        {"VIGIL_EDGE_NODE_ID": "node-1", "VIGIL_EDGE_MODE": "cluster"}
+    ).validate()
+    assert any("VIGIL_EDGE_K8S_API_URL" in p for p in problems)
+
+
+def test_k8s_api_url_defaults_to_none_off_cluster() -> None:
+    # No explicit URL and no in-cluster service environment: the
+    # NetworkPolicy executor is not installed.
+    assert EdgeConfig.from_env({}).k8s_api_url is None
+
+
+def test_k8s_api_url_derives_from_in_cluster_env() -> None:
+    config = EdgeConfig.from_env(
+        {
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+        }
+    )
+    assert config.k8s_api_url == "https://10.96.0.1:443"
+
+
+def test_k8s_api_url_env_overrides_in_cluster_derivation() -> None:
+    config = EdgeConfig.from_env(
+        {
+            "KUBERNETES_SERVICE_HOST": "10.96.0.1",
+            "KUBERNETES_SERVICE_PORT_HTTPS": "443",
+            "VIGIL_EDGE_K8S_API_URL": "https://api.example:6443",
+        }
+    )
+    assert config.k8s_api_url == "https://api.example:6443"
+
+
+def test_k8s_credential_files_default_to_service_account_mounts() -> None:
+    config = EdgeConfig.from_env({})
+    assert config.k8s_token_file.name == "token"
+    assert config.k8s_token_file.parts[-3:] == (
+        "kubernetes.io",
+        "serviceaccount",
+        "token",
+    )
+    assert config.k8s_ca_file.name == "ca.crt"
+
+
+def test_k8s_credential_files_take_env_values() -> None:
+    config = EdgeConfig.from_env(
+        {
+            "VIGIL_EDGE_K8S_TOKEN_FILE": "/run/secrets/edge/token",
+            "VIGIL_EDGE_K8S_CA_FILE": "/run/secrets/edge/ca.crt",
+        }
+    )
+    assert str(config.k8s_token_file) == "/run/secrets/edge/token"
+    assert str(config.k8s_ca_file) == "/run/secrets/edge/ca.crt"
+
+
+def test_reaper_interval_defaults_to_60s() -> None:
+    assert EdgeConfig.from_env({}).reaper_interval_seconds == 60
+
+
+def test_reaper_interval_parses_env_value() -> None:
+    config = EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "15"})
+    assert config.reaper_interval_seconds == 15
+
+
+def test_bad_reaper_interval_raises() -> None:
+    with pytest.raises(ConfigError, match="VIGIL_EDGE_REAPER_INTERVAL_SECONDS"):
+        EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "soon"})
+    with pytest.raises(ConfigError, match="must be positive"):
+        EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "0"})
