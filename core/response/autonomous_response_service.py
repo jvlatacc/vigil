@@ -382,6 +382,8 @@ class AutonomousResponseService:
                         reason=action.reason,
                         parameters=params,
                     )
+                elif action.action_type == "honey_route":
+                    result = self._execute_honey_route(action)
 
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.
@@ -480,3 +482,49 @@ class AutonomousResponseService:
         except Exception as e:  # noqa: BLE001
             logger.exception("Cloudflare action %s failed", action_type)
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # MTD honey-route executor
+    # ------------------------------------------------------------------
+
+    def _execute_honey_route(self, action) -> Dict[str, Any]:
+        """Execute an approved honey_route through the honey_router integration.
+
+        Lazy import and the ``is_integration_enabled`` gate are the Cloudflare
+        precedent: the enforcement modules (and their storage imports) stay
+        off installs that never enable the integration. With no backend
+        configured this returns an honest structured failure — the
+        ``isolate_host`` rule: a fabricated success would record a routing
+        that never happened, and the attacker would keep probing production.
+        """
+        from core.config import is_integration_enabled
+
+        if not is_integration_enabled("honey_router"):
+            return {
+                "success": False,
+                "error": "unsupported_action_type",
+                "message": "No enforcement backend is configured for honey-routing",
+            }
+
+        params = action.parameters or {}
+        decoy_id = params.get("decoy_id")
+        if not decoy_id:
+            return {
+                "success": False,
+                "error": "missing_decoy_id",
+                "message": "honey_route action carries no decoy_id parameter",
+            }
+
+        try:
+            from core.integrations.honey_router import route as honey_router
+        except Exception as e:  # noqa: BLE001
+            return {
+                "success": False,
+                "error": f"core.integrations.honey_router unavailable: {e}",
+            }
+
+        return honey_router.route(
+            attacker_ip=action.target,
+            decoy_id=str(decoy_id),
+            ttl_seconds=params.get("session_ttl_seconds"),
+        )

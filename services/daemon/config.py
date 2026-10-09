@@ -76,6 +76,12 @@ class SchedulerConfig:
     # — so the sweep runs whether or not the fastpath enable switch is
     # on: disabling stops NEW leases; it never orphans live ones.
     fastpath_lease_sweep_interval: int = 60
+    # Honey-route TTL sweep (core.integrations.honey_router), same logic:
+    # executed routes release by TTL even after MTD is disabled — a
+    # config flip must never strand an attacker pinned to a decoy.
+    # Constant for v1, no settings knob: the sweep is cheap when no
+    # routes exist and correctness says it must run regardless.
+    mtd_route_sweep_interval: int = 60
 
 
 @dataclass

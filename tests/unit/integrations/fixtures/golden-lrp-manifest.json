@@ -1,0 +1,41 @@
+{
+  "apiVersion": "cilium.io/v2",
+  "kind": "CiliumLocalRedirectPolicy",
+  "metadata": {
+    "labels": {
+      "app.kubernetes.io/managed-by": "vigil",
+      "vigil.io/attacker": "ip-203.0.113.7",
+      "vigil.io/decoy-id": "decoy-ssh-01",
+      "vigil.io/honey-route": "true"
+    },
+    "name": "vigil-honey-fec52565aa0c",
+    "namespace": "vigil-decoys"
+  },
+  "spec": {
+    "redirectBackend": {
+      "localEndpointSelector": {
+        "matchLabels": {
+          "vigil.io/decoy-id": "decoy-ssh-01"
+        }
+      },
+      "toPorts": [
+        {
+          "port": "2222",
+          "protocol": "TCP"
+        }
+      ]
+    },
+    "redirectFrontend": {
+      "addressMatcher": {
+        "ip": "10.42.0.77",
+        "toPorts": [
+          {
+            "port": "2222",
+            "protocol": "TCP"
+          }
+        ]
+      }
+    },
+    "skipRedirectFromBackend": true
+  }
+}

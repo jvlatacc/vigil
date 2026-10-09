@@ -62,6 +62,7 @@ class TaskScheduler:
             "fastpath_leases_rolled_back": 0,
             "fastpath_intents_reconciled": 0,
             "fastpath_shadow_rows_closed": 0,
+            "mtd_routes_unrouted": 0,
             "errors": 0,
         }
 
@@ -112,6 +113,20 @@ class TaskScheduler:
                 name="fastpath_lease_sweep",
                 func=self._run_fastpath_lease_sweep,
                 interval=self.config.fastpath_lease_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # Honey-route TTL sweep (core.integrations.honey_router), the same
+        # datastore-enforcement logic: releasing executed routes must run
+        # whether or not the MTD enable switch is on — disabling stops NEW
+        # routes; it never strands an attacker pinned to a decoy.
+        self._tasks.append(
+            ScheduledTask(
+                name="mtd_route_sweep",
+                func=self._run_mtd_route_sweep,
+                interval=self.config.mtd_route_sweep_interval,
                 enabled=True,
                 run_on_start=False,
             )
@@ -510,6 +525,32 @@ class TaskScheduler:
             "aborted_failed": reconciled["aborted_failed"],
             "shadow_rows_closed": shadow_closed,
         }
+
+    async def _run_mtd_route_sweep(self):
+        """Release honey-routes whose session TTL expired.
+
+        Delegates to core.integrations.honey_router.sweep_expired_routes,
+        which runs the scan and the unroute calls off-thread with no
+        session open across an executor call — the fastpath sweep's
+        priority-inversion guard, again. Runs regardless of the MTD
+        enable switch: disabling stops NEW routes; it never strands an
+        attacker pinned to a decoy.
+        """
+        from core.integrations.honey_router.route import sweep_expired_routes
+
+        result = await sweep_expired_routes()
+        self.stats["mtd_routes_unrouted"] += result["unrouted"]
+        if result["expired"] or result["failed"]:
+            logger.info(
+                "MTD route sweep: %d expired (%d unrouted, %d failed, "
+                "%d retried next tick), scanned %d",
+                result["expired"],
+                result["unrouted"],
+                result["failed"],
+                result["expired"] - result["unrouted"] - result["failed"],
+                result["scanned"],
+            )
+        return result
 
     async def _run_probe_sweep(self):
         """Score the probes past their hour (#924), then queue today's (#923)."""
