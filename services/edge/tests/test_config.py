@@ -92,6 +92,13 @@ def test_validate_clean_for_a_full_config() -> None:
     assert config.validate() == []
 
 
+def test_validate_flags_cluster_mode_without_api_url() -> None:
+    problems = EdgeConfig.from_env(
+        {"VIGIL_EDGE_NODE_ID": "node-1", "VIGIL_EDGE_MODE": "cluster"}
+    ).validate()
+    assert any("VIGIL_EDGE_K8S_API_URL" in p for p in problems)
+
+
 def test_k8s_api_url_defaults_to_none_off_cluster() -> None:
     # No explicit URL and no in-cluster service environment: the
     # NetworkPolicy executor is not installed.
@@ -139,3 +146,19 @@ def test_k8s_credential_files_take_env_values() -> None:
     )
     assert str(config.k8s_token_file) == "/run/secrets/edge/token"
     assert str(config.k8s_ca_file) == "/run/secrets/edge/ca.crt"
+
+
+def test_reaper_interval_defaults_to_60s() -> None:
+    assert EdgeConfig.from_env({}).reaper_interval_seconds == 60
+
+
+def test_reaper_interval_parses_env_value() -> None:
+    config = EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "15"})
+    assert config.reaper_interval_seconds == 15
+
+
+def test_bad_reaper_interval_raises() -> None:
+    with pytest.raises(ConfigError, match="VIGIL_EDGE_REAPER_INTERVAL_SECONDS"):
+        EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "soon"})
+    with pytest.raises(ConfigError, match="must be positive"):
+        EdgeConfig.from_env({"VIGIL_EDGE_REAPER_INTERVAL_SECONDS": "0"})

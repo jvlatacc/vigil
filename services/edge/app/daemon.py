@@ -22,6 +22,7 @@ from services.edge.journal.journal import (
 if TYPE_CHECKING:
     from services.edge.app.config import EdgeConfig
     from services.edge.observations.base import Observation, ObservationInput
+    from services.edge.policy.model import Bundle
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ class EdgeDaemon:
         from services.edge.observations.file_tail import FileTail
         from services.edge.policy.cache import BundleCache
         from services.edge.policy.envelope import load_trust_root
+        from services.edge.reaper import TtlReaper
 
         config = self.config
         self._journal = HashJournal(
@@ -127,6 +129,12 @@ class EdgeDaemon:
             restored.previous is not None,
         )
         self._executors = ExecutorRegistry()
+        self._wire_executors(config)
+        self._reaper = TtlReaper(
+            self._journal,
+            self._executors,
+            interval_seconds=config.reaper_interval_seconds,
+        )
         self._advisor = None
         if config.model is not None and config.model.strip():
             self._advisor = SlmAdvisor(
@@ -144,6 +152,39 @@ class EdgeDaemon:
             home = bundle.segment_scope.cidrs if bundle is not None else ()
             self._inputs.append(
                 FileTail(config.eve_path, home_cidrs=home, state_dir=config.data_dir)
+            )
+
+    def _wire_executors(self, config: EdgeConfig) -> None:
+        """Register the deployment mode's executors under the bundle-bound
+        wrapper: every apply rechecks the live signed bundle, so a revoked
+        or swapped bundle stops authorizing new containment immediately
+        while undoing a block stays always-permitted."""
+        from services.edge.executors.k8s_networkpolicy import (
+            K8sExecutorConfig,
+            K8sNetworkPolicyExecutor,
+        )
+        from services.edge.executors.nftables import NftablesExecutor, run_command
+        from services.edge.executors.registry import BundleBound
+
+        def bundle_fn() -> Bundle | None:
+            return self._cache.current
+
+        if config.mode == "gateway":
+            self._executors.register(
+                BundleBound(NftablesExecutor("nftables", run_command), bundle_fn)
+            )
+        else:  # cluster mode: the API server + service-account mount
+            self._executors.register(
+                BundleBound(
+                    K8sNetworkPolicyExecutor(
+                        K8sExecutorConfig(
+                            api_url=config.k8s_api_url or "",
+                            token_file=config.k8s_token_file,
+                            ca_file=config.k8s_ca_file,
+                        )
+                    ),
+                    bundle_fn,
+                )
             )
 
     async def run(self) -> None:
@@ -169,6 +210,7 @@ class EdgeDaemon:
                     source.run(self.handle_observation), name=f"input:{source.name}"
                 )
             )
+        tasks.append(loop.create_task(self._reaper.run_forever(), name="ttl-reaper"))
         logger.info("Edge daemon running: %d task(s)", len(tasks))
         await self._shutdown_event.wait()
 

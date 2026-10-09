@@ -34,6 +34,7 @@ JOURNAL_MAX_BYTES_VAR = "VIGIL_EDGE_JOURNAL_MAX_BYTES"
 K8S_API_URL_VAR = "VIGIL_EDGE_K8S_API_URL"
 K8S_TOKEN_FILE_VAR = "VIGIL_EDGE_K8S_TOKEN_FILE"
 K8S_CA_FILE_VAR = "VIGIL_EDGE_K8S_CA_FILE"
+REAPER_INTERVAL_VAR = "VIGIL_EDGE_REAPER_INTERVAL_SECONDS"
 
 DEFAULT_K8S_TOKEN_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 DEFAULT_K8S_CA_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
@@ -84,6 +85,7 @@ class EdgeConfig:
     k8s_api_url: str | None = None
     k8s_token_file: Path = DEFAULT_K8S_TOKEN_FILE
     k8s_ca_file: Path = DEFAULT_K8S_CA_FILE
+    reaper_interval_seconds: int = 60
     edge_version: str = __version__
 
     @classmethod
@@ -144,6 +146,20 @@ class EdgeConfig:
                     f"{JOURNAL_MAX_BYTES_VAR} must be positive, got {journal_max_bytes}"
                 )
 
+        raw_reaper = (env.get(REAPER_INTERVAL_VAR) or "").strip()
+        reaper_interval = 60
+        if raw_reaper:
+            try:
+                reaper_interval = int(raw_reaper)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{REAPER_INTERVAL_VAR} must be an integer seconds count, got {raw_reaper!r}"
+                ) from exc
+            if reaper_interval <= 0:
+                raise ConfigError(
+                    f"{REAPER_INTERVAL_VAR} must be positive, got {reaper_interval}"
+                )
+
         return cls(
             node_id=(env.get(NODE_ID_VAR) or "").strip(),
             mode=mode,
@@ -168,6 +184,7 @@ class EdgeConfig:
             k8s_api_url=k8s_api_url or None,
             k8s_token_file=Path(env.get(K8S_TOKEN_FILE_VAR) or DEFAULT_K8S_TOKEN_FILE),
             k8s_ca_file=Path(env.get(K8S_CA_FILE_VAR) or DEFAULT_K8S_CA_FILE),
+            reaper_interval_seconds=reaper_interval,
         )
 
     def validate(self) -> list[str]:
@@ -180,5 +197,9 @@ class EdgeConfig:
         if not 1 <= self.health_port <= 65535:
             problems.append(
                 f"{HEALTH_PORT_VAR} must be 1-65535, got {self.health_port}"
+            )
+        if self.mode == "cluster" and not self.k8s_api_url:
+            problems.append(
+                f"{K8S_API_URL_VAR} (or KUBERNETES_SERVICE_HOST) is required in cluster mode"
             )
         return problems

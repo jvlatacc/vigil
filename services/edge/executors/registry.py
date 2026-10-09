@@ -45,8 +45,14 @@ class Executor(Protocol):
     ``namespaces`` is the bundle's signed scope for the pair — executors never
     widen it."""
 
-    name: str
-    action_types: frozenset[str]
+    # Read-only identity: an executor's name and action types are fixed at
+    # construction (nftables takes its name as an argument for deterministic
+    # chain naming), so the protocol promises no one can swap them.
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def action_types(self) -> frozenset[str]: ...
 
     async def apply(
         self, action: Action, ttl_seconds: int, *, namespaces: tuple[str, ...] = ()

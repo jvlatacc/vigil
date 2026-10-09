@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -33,7 +34,7 @@ class FakeNft:
         self.chains: dict[str, dict[str, Any]] = {}
         self.add_table_calls = 0
 
-    async def __call__(self, argv: list[str]) -> tuple[int, str, str]:
+    async def __call__(self, argv: Sequence[str]) -> tuple[int, str, str]:
         op, rest = argv[1], argv[2:]
         kind = rest[0] if rest else ""
         if op == "list":
@@ -239,7 +240,7 @@ def test_command_failure_fails_the_whole_apply() -> None:
     executor = make_executor(fake)
 
     # Wrap the fake so the flush (the first command after ensure) fails.
-    async def failing(argv: list[str]) -> tuple[int, str, str]:
+    async def failing(argv: Sequence[str]) -> tuple[int, str, str]:
         if argv[1] == "flush":
             return (1, "", "boom")
         return await fake(argv)

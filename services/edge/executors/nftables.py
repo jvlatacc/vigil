@@ -151,12 +151,21 @@ class NftablesExecutor:
         self._resolver = resolver
 
     @property
-    def executor_name(self) -> str:
+    def name(self) -> str:
         return self._executor_name
+
+    @property
+    def action_types(self) -> frozenset[str]:
+        return frozenset({"block_ip", "block_domain"})
 
     # -- apply ---------------------------------------------------------------
 
-    async def apply(self, action: Action, ttl_seconds: int) -> ActionResult:
+    async def apply(
+        self, action: Action, ttl_seconds: int, *, namespaces: tuple[str, ...] = ()
+    ) -> ActionResult:
+        # ``namespaces`` is accepted for Executor-protocol uniformity and
+        # deliberately unused: gateway-mode nftables rules are host-scoped,
+        # there is no namespace concept to scope them to.
         chain = chain_name(self._executor_name, action)
         try:
             # block_domain resolves first: a dead resolver must not leave
