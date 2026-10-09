@@ -38,6 +38,11 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "SPLUNK_URL",
     "SPLUNK_VERIFY_SSL",
     "STORY_PATHS",
+    # Kernel enforcement (ebpf-xdp): consumed inside the MCP child and the
+    # approved-action executor via resolve(), and read by the enforcement
+    # daemon process itself — never a Settings.model_fields name.
+    "VIGIL_ENFORCEMENT_URL",
+    "VIGIL_ENFORCEMENT_TOKEN",
     "VSTRIKE_BASE_URL",
     "VSTRIKE_VERIFY_SSL",
     # Per-integration CA paths, resolved like the fields above.
