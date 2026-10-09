@@ -63,6 +63,7 @@ class TaskScheduler:
             "fastpath_intents_reconciled": 0,
             "fastpath_shadow_rows_closed": 0,
             "mtd_routes_unrouted": 0,
+            "mtd_canaries_rotated": 0,
             "errors": 0,
         }
 
@@ -127,6 +128,21 @@ class TaskScheduler:
                 name="mtd_route_sweep",
                 func=self._run_mtd_route_sweep,
                 interval=self.config.mtd_route_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # Canary-credential rotation (core.response.decoy_rotation), the
+        # containment invariant the spec locks: decoys hold canary
+        # credentials only, rotated on a schedule. Also not gated on the MTD
+        # enable switch — deactivating MTD must never leave stale canaries
+        # behind in active decoys.
+        self._tasks.append(
+            ScheduledTask(
+                name="mtd_canary_rotation",
+                func=self._run_mtd_canary_rotation,
+                interval=self.config.mtd_canary_rotation_interval,
                 enabled=True,
                 run_on_start=False,
             )
@@ -525,6 +541,28 @@ class TaskScheduler:
             "aborted_failed": reconciled["aborted_failed"],
             "shadow_rows_closed": shadow_closed,
         }
+
+    async def _run_mtd_canary_rotation(self):
+        """Rotate the canary credentials the active decoy registry references.
+
+        Delegates to core.response.decoy_rotation.rotate_active_canaries,
+        which runs the credential-store writes and the rotated_at stamps
+        off-thread (the route sweep's shape). A canary that could not be
+        written counts as failed and is retried next tick — the registry's
+        rotated_at never claims a rotation that did not happen.
+        """
+        from core.response.decoy_rotation import rotate_active_canaries_async
+
+        result = await rotate_active_canaries_async()
+        self.stats["mtd_canaries_rotated"] += result["rotated"]
+        if result["rotated"] or result["failed"]:
+            logger.info(
+                "MTD canary rotation: %d rotated, %d failed (of %d active decoy rows)",
+                result["rotated"],
+                result["failed"],
+                result["scanned"],
+            )
+        return result
 
     async def _run_mtd_route_sweep(self):
         """Release honey-routes whose session TTL expired.
