@@ -115,8 +115,9 @@ def to_internal_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
 
     id -> finding_id, source -> data_source, iocs -> entity_context,
     raw_data -> entity_context.source_evidence, mitre_techniques ->
-    mitre_predictions. A key already present under its internal name wins.
-    Returns a new dict; the caller's is not mutated.
+    mitre_predictions, metadata -> source_metadata. A key already present
+    under its internal name wins. Returns a new dict; the caller's is not
+    mutated.
     """
     out = dict(finding)
     for common, internal in (("id", "finding_id"), ("source", "data_source")):
@@ -159,6 +160,13 @@ def to_internal_finding(finding: Dict[str, Any]) -> Dict[str, Any]:
             techniques = {str(t): 1.0 for t in techniques if t}
         if isinstance(techniques, dict):
             out["mitre_predictions"] = techniques
+
+    # Source-system provenance (the Wazuh ingest builds one). Persisted under
+    # its internal name; a scalar is kept, wrapped, so nothing the source
+    # sent is silently dropped.
+    meta = _json_object(out.pop("metadata", None))
+    if not _blank(meta) and _blank(out.get("source_metadata")):
+        out["source_metadata"] = meta if isinstance(meta, dict) else {"metadata": meta}
     return out
 
 
@@ -352,6 +360,7 @@ class IngestionService:
                     description=finding_data.get("description"),
                     entity_context=finding_data.get("entity_context"),
                     evidence_links=finding_data.get("evidence_links"),
+                    source_metadata=finding_data.get("source_metadata"),
                     cluster_id=finding_data.get("cluster_id"),
                     severity=finding_data.get("severity"),
                     status=finding_data.get("status", "new"),
