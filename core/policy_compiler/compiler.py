@@ -53,9 +53,9 @@ class ArchetypeEvidence:
     outcomes: Mapping[str, int]
     consistency: float
     analyst_overrides: int
-    observed_severity: str
-    observed_recommended_action: str
-    observed_category: str
+    observed_severity: str | None
+    observed_recommended_action: str | None
+    observed_category: str | None
 
     def resolved(self) -> int:
         return int(self.outcomes.get("resolved", 0))
@@ -162,6 +162,16 @@ def compile_policy(
         raise CompileError(
             "techniques: empty — technique predictions are the archetype's "
             "identity; compile nothing without them"
+        )
+    if not (
+        evidence.observed_severity
+        and evidence.observed_category
+        and evidence.observed_recommended_action
+    ):
+        raise CompileError(
+            "observed triage: incomplete — the resolved runs record no complete "
+            "severity/category/action to replay, and a decision with holes in "
+            "it is not one the fast path may write"
         )
 
     policy_id = archetype_policy_id(evidence)

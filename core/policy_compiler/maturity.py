@@ -348,6 +348,93 @@ def _replayable_category(value: Any) -> str | None:
     return value if isinstance(value, str) and _CATEGORY_SHAPE.match(value) else None
 
 
+# --- The pass ---------------------------------------------------------------
+
+
+def run_maturity_pass_sync(now: datetime | None = None) -> dict[str, int]:
+    """One pass in a worker thread: lock, gather, compile, apply lifecycle.
+
+    Returns a counts report for the daemon log and the tests. Single-flight:
+    a second instance's ``pg_try_advisory_xact_lock`` fails and it reports a
+    skipped pass rather than compiling against the first one's transaction.
+    """
+    if now is None:
+        now = utcnow()
+
+    min_runs = int(get_ai_operations_setting(MIN_RUNS_KEY, MIN_RUNS_DEFAULT))
+    min_consistency = float(
+        get_ai_operations_setting(MIN_CONSISTENCY_KEY, MIN_CONSISTENCY_DEFAULT)
+    )
+    window_days = int(get_ai_operations_setting(WINDOW_DAYS_KEY, WINDOW_DAYS_DEFAULT))
+    drift_limit = int(get_ai_operations_setting(DRIFT_LIMIT_KEY, DRIFT_LIMIT_DEFAULT))
+    window_start = now - timedelta(days=window_days)
+
+    report: dict[str, int] = {
+        "lock_skipped": 0,
+        "runs_in_window": 0,
+        "archetypes_eligible": 0,
+        "candidates_written": 0,
+        "shadowed": 0,
+        "unchanged": 0,
+        "compile_errors": 0,
+        "suspended": 0,
+        "retired": 0,
+    }
+
+    with unit_of_work() as session:
+        if not _try_lock(session):
+            report["lock_skipped"] = 1
+            return report
+
+        runs = _run_observations(session, window_start)
+        report["runs_in_window"] = len(runs)
+
+        groups: dict[tuple[str, str], list[RunObservation]] = {}
+        for run in runs:
+            groups.setdefault((run.workflow_id, run.data_source), []).append(run)
+
+        for (workflow_id, data_source), group in sorted(groups.items()):
+            evidence = build_evidence(
+                workflow_id, data_source, group, window_days=window_days
+            )
+            if evidence is None:
+                continue
+            if not is_eligible(
+                evidence, min_runs=min_runs, min_consistency=min_consistency
+            ):
+                continue
+            report["archetypes_eligible"] += 1
+            _compile_and_store(
+                session,
+                evidence,
+                now=now,
+                report=report,
+            )
+
+        _apply_lifecycle(
+            session,
+            now=now,
+            window_start=window_start,
+            drift_limit=drift_limit,
+            report=report,
+        )
+
+    return report
+
+
+async def run_maturity_pass(now: datetime | None = None) -> dict[str, int]:
+    """The pass off the event loop — the sync session work runs in a thread."""
+    return await asyncio.to_thread(run_maturity_pass_sync, now)
+
+
+def _try_lock(session: Session) -> bool:
+    """Take the pass's advisory transaction lock; False means someone else has."""
+    row = session.execute(
+        text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": LOCK_OBJECT_ID}
+    ).scalar()
+    return bool(row)
+
+
 def _run_observations(session: Session, window_start: datetime) -> list[RunObservation]:
     """Read every terminal run in the window and classify its outcome.
 
@@ -503,3 +590,248 @@ def _recorded_triage(finding: Any) -> tuple[str | None, ...]:
         _replayable_action(enrichment.get("recommended_action")),
     )
 
+
+def _compile_and_store(
+    session: Session,
+    evidence: ArchetypeEvidence,
+    *,
+    now: datetime,
+    report: dict[str, int],
+) -> None:
+    """Compile the evidence and write the version the store is missing.
+
+    Dedupe is by content hash against the archetype's head version: the hash
+    is clock-stable, so an unchanged archetype recompiled every pass writes
+    nothing. A changed archetype appends a version — the id covers identity
+    (workflow, match sets), the version covers content.
+    """
+    try:
+        head = session.execute(
+            select(CompiledPolicy.version, CompiledPolicy.content_hash)
+            .where(CompiledPolicy.policy_id == archetype_policy_id(evidence))
+            .order_by(CompiledPolicy.version.desc())
+            .limit(1)
+        ).first()
+    except Exception:
+        logger.exception(
+            "maturity job could not read the head of %s", evidence.workflow_id
+        )
+        return
+
+    try:
+        result = compile_policy(
+            evidence, now=now, previous_version=head.version if head else None
+        )
+    except CompileError as exc:
+        # Eligible evidence that cannot become an honest policy is a bug in
+        # the evidence or the compiler — log it, never swallow it into a
+        # quiet pass.
+        report["compile_errors"] += 1
+        logger.error(
+            "maturity job refused eligible evidence for %s: %s",
+            evidence.workflow_id,
+            exc,
+        )
+        return
+
+    if head and head.content_hash == result.content_hash:
+        report["unchanged"] += 1
+        return
+
+    document = dict(result.ir)
+    try:
+        # The compile validation gate: the IR must be representable in every
+        # export format before it shadows (ADR 0001 — an export that cannot
+        # exist means the IR overclaimed). Render digests are pinned in the
+        # stored document; the content hash excludes them, so pinning keeps
+        # the hash stable.
+        rendered = [
+            (target, render(_stored_policy(document), target))
+            for target in RENDER_TARGETS
+        ]
+        document["renders"] = build_render_hashes(rendered)
+        document["state"] = "shadow"
+    except Exception as exc:
+        logger.error(
+            "policy %s v%s stays a candidate: renders failed validation: %s",
+            result.policy_id,
+            result.version,
+            exc,
+        )
+
+    # The row is built once, document complete: a JSONB column does not track
+    # in-place mutation, so the state flip cannot come back to patch the dict.
+    session.add(
+        CompiledPolicy(
+            policy_id=result.policy_id,
+            version=result.version,
+            state=document["state"],
+            policy_ir=document,
+            content_hash=result.content_hash,
+            maturity_evidence=dict(document["maturity"]),
+            compiled_at=now,
+            compiled_by=AUTO_ACTOR,
+        )
+    )
+    report["candidates_written"] += 1
+
+    if document["state"] == "shadow":
+        # Validation gate passed: the candidate shadows. It cannot act there —
+        # shadow only logs — and promotion stays human-only.
+        report["shadowed"] += 1
+        logger.info(
+            "compiled policy %s v%s is shadowing (%s)",
+            result.policy_id,
+            result.version,
+            document["maturity"].get("consistency"),
+        )
+
+
+def _stored_policy(document: Mapping[str, Any]) -> PolicyIR:
+    """The document as a PolicyIR for rendering (state is not hashed)."""
+    return PolicyIR.from_dict(dict(document))
+
+
+def _apply_lifecycle(
+    session: Session,
+    *,
+    now: datetime,
+    window_start: datetime,
+    drift_limit: int,
+    report: dict[str, int],
+) -> None:
+    """Drift auto-brake and staleness retirement for every live policy.
+
+    The same pass owns both edges: one job holds the evidence for compiling
+    and for taking it back. A policy drifting over the limit suspends (a
+    wrong policy needs review before it either resumes or retires); a policy
+    nothing matches retires. Retired is terminal and kept for audit.
+    """
+    rows = (
+        session.execute(
+            select(CompiledPolicy).where(
+                CompiledPolicy.state.in_(("shadow", "active", "suspended"))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        drift = _drift_counts(session, row, window_start)
+        if row.state in ("shadow", "active") and drift > drift_limit:
+            row.state = "suspended"
+            row.suspended_by = AUTO_ACTOR
+            row.suspended_at = now
+            report["suspended"] += 1
+            logger.warning(
+                "policy %s v%s auto-suspended: %s drift signals in the window "
+                "(limit %s) — disagreements and analyst reopens of "
+                "policy-triaged closures",
+                row.policy_id,
+                row.version,
+                drift,
+                drift_limit,
+            )
+            continue
+        if _policy_is_stale(session, row, window_start):
+            row.state = "retired"
+            row.retired_by = AUTO_ACTOR
+            row.retired_at = now
+            report["retired"] += 1
+            logger.info(
+                "policy %s v%s retired: no finding matched it in the window",
+                row.policy_id,
+                row.version,
+            )
+
+
+def _drift_counts(session: Session, row: CompiledPolicy, window_start: datetime) -> int:
+    """Disagreements with the eventual LLM outcome plus policy-triage reopens.
+
+    Both signals live in the window and name the policy: disagreement rows are
+    the current version's backfilled ``agrees = false`` decisions; reopens are
+    cases holding a finding the policy applied to (``outcome='applied'``)
+    whose closure row exists but whose status is no longer closed.
+    """
+    disagreements = session.execute(
+        select(func.count())
+        .select_from(CompiledPolicyDecision)
+        .where(
+            CompiledPolicyDecision.policy_id == row.policy_id,
+            CompiledPolicyDecision.policy_version == row.version,
+            CompiledPolicyDecision.agrees.is_(False),
+            CompiledPolicyDecision.evaluated_at >= window_start,
+        )
+    ).scalar()
+
+    triaged_finding_ids = select(CompiledPolicyDecision.finding_id).where(
+        CompiledPolicyDecision.policy_id == row.policy_id,
+        CompiledPolicyDecision.outcome == "applied",
+        CompiledPolicyDecision.evaluated_at >= window_start,
+    )
+    reopens = session.execute(
+        select(func.count(func.distinct(Case.case_id)))
+        .select_from(Case)
+        .join(case_findings, case_findings.c.case_id == Case.case_id)
+        .join(CaseClosureInfo, CaseClosureInfo.case_id == Case.case_id)
+        .where(
+            case_findings.c.finding_id.in_(triaged_finding_ids),
+            Case.status != CASE_CLOSED_STATUS,
+            Case.updated_at >= window_start,
+        )
+    ).scalar()
+
+    return int(disagreements or 0) + int(reopens or 0)
+
+
+def _policy_is_stale(
+    session: Session, row: CompiledPolicy, window_start: datetime
+) -> bool:
+    """Whether no windowed finding matches the policy, asked of the evaluator.
+
+    The stored document is the thing the fast path would evaluate, so
+    staleness is its own match semantics, not a second one. The scan is
+    capped at the most recent windowed findings for the policy's data sources
+    (all windowed findings when the match binds no source); the policy's
+    state rides in from the row, since the stored document's state field is
+    not what the row says after a lifecycle edge.
+    """
+    policy = PolicyIR.from_dict(dict(row.policy_ir))
+    policy = replace(policy, state=row.state)
+
+    findings_query = (
+        select(Finding.finding_id, Finding.data_source, Finding.entity_context)
+        .where(Finding.timestamp >= window_start)
+        .order_by(Finding.timestamp.desc())
+        .limit(STALENESS_SCAN_CAP)
+    )
+    if policy.match.data_source is not None:
+        findings_query = findings_query.where(
+            Finding.data_source.in_(policy.match.data_source)
+        )
+    findings = session.execute(findings_query).all()
+    if not findings:
+        return True
+
+    prediction_ids = [finding.finding_id for finding in findings]
+    techniques: dict[str, set[str]] = {}
+    for finding_id, technique_id in session.execute(
+        select(
+            FindingMitrePrediction.finding_id,
+            FindingMitrePrediction.technique_id,
+        ).where(FindingMitrePrediction.finding_id.in_(prediction_ids))
+    ).all():
+        techniques.setdefault(finding_id, set()).add(technique_id)
+
+    for finding in findings:
+        probe = {
+            "finding_id": finding.finding_id,
+            "data_source": finding.data_source,
+            "mitre_predictions": {
+                technique: 1.0 for technique in techniques.get(finding.finding_id, ())
+            },
+            "entity_context": finding.entity_context or {},
+        }
+        if evaluate([policy], probe) is not None:
+            return False
+    return True
