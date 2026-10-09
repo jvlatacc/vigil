@@ -128,7 +128,7 @@ async def test_token_endpoint_outage_is_not_called_a_rejection(monkeypatch):
 
 async def test_client_logs_and_marks_span_on_error_result(caplog):
     class _Service:
-        servers = {"demo": object()}
+        servers = {"demo": SimpleNamespace(is_http=False)}
 
     client = MCPClient(_Service())
     session = MagicMock()

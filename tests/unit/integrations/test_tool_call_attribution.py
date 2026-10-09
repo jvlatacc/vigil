@@ -49,7 +49,7 @@ def _rows(store):
 class _Service:
     """Just enough MCPService for the funnel: one known server."""
 
-    servers = {"demo": object()}
+    servers = {"demo": SimpleNamespace(is_http=False)}
 
     def is_server_enabled(self, name):
         return True
@@ -95,7 +95,10 @@ async def test_funnel_row_carries_the_bound_caller(audit_store):
 
 
 async def test_funnel_row_for_a_server_reported_error(audit_store):
-    server_error = {"error": True, "content": [{"type": "text", "text": "vendor said no"}]}
+    server_error = {
+        "error": True,
+        "content": [{"type": "text", "text": "vendor said no"}],
+    }
     client = _client_with_session(server_error)
     with acting_as("ada"):
         result = await client.call_tool("demo", "do_it", {})
