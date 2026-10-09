@@ -267,6 +267,27 @@ def get_technique_rollup(min_confidence: float = 0.0, time_range: str = "all") -
 
 
 @mcp.tool()
+def query_decoy_sessions(
+    session_id: Optional[str] = None,
+    decoy_service: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """Read decoy sessions captured by the MTD capture plane, newest first.
+
+    One row per session: the decoy, the attacker's entity key, the window,
+    the routing action, what the attacker did, and the ATT&CK techniques.
+    Read-only, and principal-scoped — a call with no one bound is refused,
+    because the transcripts are evidence.
+    """
+    return _call(
+        tool_registry.query_decoy_sessions,
+        session_id=session_id,
+        decoy_service=decoy_service,
+        limit=limit,
+    )
+
+
+@mcp.tool()
 def list_cases(
     status: Optional[str] = None,
     severity: Optional[str] = None,
