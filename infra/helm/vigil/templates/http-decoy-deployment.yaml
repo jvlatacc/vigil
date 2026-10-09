@@ -1,0 +1,83 @@
+{{- if .Values.httpDecoy.enabled }}
+{{- /* HTTP decoy (MTD plane 03): a plausible internal appliance for
+       honey-routed attacker sessions — login, dashboard, upload. In-cluster
+       HTTP only (see decoy-services.yaml); its one outbound call is the
+       daemon webhook ingest, and egress is default-deny beyond that. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vigil.httpDecoy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "http-decoy") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "http-decoy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.componentLabels" (dict "context" . "component" "http-decoy") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.httpDecoy.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vigil.serviceAccountName" . }}
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: http-decoy
+          image: {{ include "vigil.image" (dict "context" . "component" "httpDecoy") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "httpDecoy") }}
+          command:
+            - python
+            - -m
+            - services.decoy.http_decoy
+          ports:
+            - name: http
+              containerPort: {{ .Values.decoys.ports.http }}
+          envFrom:
+            {{- include "vigil.envFrom" . | nindent 12 }}
+          env:
+            {{- include "vigil.env" . | nindent 12 }}
+            {{- with .Values.httpDecoy.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # /health is served on the container's own interface; the Service
+          # never needs to expose it for probes to work.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.decoys.ports.http }}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.decoys.ports.http }}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 2
+          resources:
+            {{- toYaml .Values.httpDecoy.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      {{- with .Values.httpDecoy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.httpDecoy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.httpDecoy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
