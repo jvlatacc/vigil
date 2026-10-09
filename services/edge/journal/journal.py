@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -127,6 +128,12 @@ class _State:
     anchor: str = GENESIS_HASH
     loss_counters: dict[str, int] = field(default_factory=dict)
     evicted_ranges: list[list[int]] = field(default_factory=list)
+    # Terminal local state for records the control plane refused outright
+    # (shape rejections — a journal record the wire contract cannot
+    # express). They never re-upload and never block window closure; the
+    # drift report surfaces them every closure. Transient failures
+    # ("import_failed") are NOT here — those stay unacked and retry.
+    rejected: dict[str, str] = field(default_factory=dict)
 
 
 def _parse_ts(value: str) -> datetime | None:
@@ -152,6 +159,9 @@ class HashJournal:
         self._records: list[JournalRecord] = []
         self._state = _State()
         self.over_budget = False
+        # Post-durability observer (the daemon's offline-window snapshot);
+        # compaction drops acked records, so the report collects as they land.
+        self.on_append: Callable[[JournalRecord], None] | None = None
         data_dir.mkdir(parents=True, exist_ok=True)
         self._load()
 
@@ -188,6 +198,10 @@ class HashJournal:
             os.fsync(handle.fileno())
         self._records.append(record)
         self._persist_state()
+        if self.on_append is not None:
+            # Observers run after durability: a snapshot taken for the
+            # offline-window drift report never sees a record that was lost.
+            self.on_append(record)
         return record
 
     def _next_sequence(self) -> int:
@@ -269,8 +283,14 @@ class HashJournal:
 
     def unacked(self) -> list[JournalRecord]:
         """Records the server has not durably acknowledged, in local-sequence
-        order — the reconciliation upload list."""
-        return [r for r in self._records if r.local_sequence > self._state.acked_upto]
+        order — the reconciliation upload list. Rejected records are
+        terminal locally and never re-upload."""
+        return [
+            r
+            for r in self._records
+            if r.local_sequence > self._state.acked_upto
+            and str(r.local_sequence) not in self._state.rejected
+        ]
 
     @property
     def acked_upto(self) -> int:
@@ -283,6 +303,29 @@ class HashJournal:
             return
         self._state.acked_upto = upto
         self._compact()
+
+    def mark_rejected(self, sequence: int, reason: str) -> None:
+        """Record the control plane's terminal refusal of one record (a
+        shape the wire contract cannot express). The record stops consuming
+        the upload path and cannot block offline-window closure; its
+        refusal stays auditable in the state file's rejection ledger and
+        the drift report — the payload itself leaves the live journal when
+        the ack watermark later compacts past it."""
+        previous = self._state.rejected.get(str(sequence))
+        self._state.rejected[str(sequence)] = reason
+        if previous != reason:
+            self._persist_state()
+
+    @property
+    def rejected(self) -> list[dict[str, Any]]:
+        """The rejection ledger for the drift report: what the control
+        plane refused and why, so nothing disappears quietly."""
+        return [
+            {"local_sequence": int(seq), "reason": reason}
+            for seq, reason in sorted(
+                self._state.rejected.items(), key=lambda kv: int(kv[0])
+            )
+        ]
 
     def _compact(self) -> None:
         """Drop the acked prefix from memory and disk; the retained segment's
@@ -452,6 +495,10 @@ class HashJournal:
                     evicted_ranges=[
                         list(pair) for pair in raw.get("evicted_ranges", [])
                     ],
+                    rejected={
+                        str(seq): str(reason)
+                        for seq, reason in raw.get("rejected", {}).items()
+                    },
                 )
             except (OSError, ValueError) as exc:
                 logger.error(
@@ -493,6 +540,7 @@ class HashJournal:
                 "anchor": self._state.anchor,
                 "loss_counters": self._state.loss_counters,
                 "evicted_ranges": self._state.evicted_ranges,
+                "rejected": self._state.rejected,
             },
             sort_keys=True,
         )
