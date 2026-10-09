@@ -1223,6 +1223,84 @@
       "nullable": false
     }
   },
+  "containment_actions": {
+    "action_type": {
+      "data_type": "character varying(40)",
+      "nullable": false
+    },
+    "applied_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "created_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "decision_rule": {
+      "data_type": "text",
+      "nullable": false
+    },
+    "entity_id": {
+      "data_type": "text",
+      "nullable": false
+    },
+    "entity_type": {
+      "data_type": "character varying(30)",
+      "nullable": false
+    },
+    "escalated_approval_action_id": {
+      "data_type": "character varying(80)",
+      "nullable": true
+    },
+    "expires_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "finding_id": {
+      "data_type": "character varying(50)",
+      "nullable": true
+    },
+    "id": {
+      "data_type": "character varying(80)",
+      "nullable": false
+    },
+    "idempotency_key": {
+      "data_type": "text",
+      "nullable": false
+    },
+    "is_shadow": {
+      "data_type": "boolean",
+      "nullable": false
+    },
+    "observed": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "rollback_reason": {
+      "data_type": "character varying(30)",
+      "nullable": true
+    },
+    "rolled_back_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "status": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    },
+    "ttl_seconds": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "undo_payload": {
+      "data_type": "jsonb",
+      "nullable": true
+    },
+    "updated_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    }
+  },
   "conversations": {
     "agent_id": {
       "data_type": "character varying(60)",
@@ -1814,6 +1892,10 @@
     },
     "severity": {
       "data_type": "character varying(20)",
+      "nullable": true
+    },
+    "source_metadata": {
+      "data_type": "jsonb",
       "nullable": true
     },
     "status": {

@@ -270,6 +270,50 @@ class Settings(BaseSettings):
     daemon_high_action_floor: float = 0.80
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
+    # Speculative-containment Fast-Path: deterministic, LLM-free micro-
+    # containment decided in the store-to-triage window. See
+    # core.response.fastpath. Ships apply-disabled and in shadow mode;
+    # enabling is an operator decision backed by shadow-replay data.
+    daemon_fastpath_enabled: bool = False
+    daemon_fastpath_shadow_mode: bool = True
+    # Lease TTL: the default a fresh lease carries, clamped by the gate into
+    # [min, max] so no setting can outlive the ceiling.
+    daemon_fastpath_default_ttl_seconds: int = 300
+    daemon_fastpath_min_ttl_seconds: int = 60
+    daemon_fastpath_max_ttl_seconds: int = 900
+    # Blast-radius caps, each enforced by the gate on its own.
+    daemon_fastpath_max_leases_per_entity: int = 1
+    daemon_fastpath_max_leases_per_window: int = 20
+    daemon_fastpath_window_seconds: int = 3600
+    # Anti-flap: minimum seconds between a rollback and the next apply on
+    # the same entity. A stuck pending intent older than the apply timeout
+    # is reconciled by the TTL sweeper.
+    daemon_fastpath_anti_flap_rollback_floor_seconds: int = 600
+    daemon_fastpath_apply_timeout_seconds: int = 60
+    # The confidence band, mirroring the response band above but tunable
+    # independently: the millisecond path may need a higher bar than the
+    # deliberation loop it precedes.
+    daemon_fastpath_confidence_threshold: float = 0.90
+    daemon_fastpath_review_threshold: float = 0.85
+    daemon_fastpath_monitor_threshold: float = 0.70
+    daemon_fastpath_critical_action_floor: float = 0.70
+    daemon_fastpath_high_action_floor: float = 0.80
+    # Severity band eligible for a lease, and the micro-containment
+    # vocabulary the gate may choose from (see core.response.fastpath).
+    daemon_fastpath_allowed_severities: Annotated[List[str], NoDecode] = [
+        "critical",
+        "high",
+    ]
+    daemon_fastpath_allowed_action_types: Annotated[List[str], NoDecode] = [
+        "challenge",
+        "rate_limit",
+        "tarpit",
+        "latency_injection",
+        "pin_session",
+    ]
+    # Critical-asset allowlist: principals the gate never leases against,
+    # regardless of severity.
+    daemon_fastpath_deny_targets: Annotated[List[str], NoDecode] = []
     # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
     # and validates them; nothing else reads them here. Origin enforcement is
     # ON by default: unregistered-key deployments get human approval instead
@@ -365,6 +409,9 @@ class Settings(BaseSettings):
     @field_validator(
         "extension_connector_allowlist",
         "daemon_escalate_severities",
+        "daemon_fastpath_allowed_severities",
+        "daemon_fastpath_allowed_action_types",
+        "daemon_fastpath_deny_targets",
         "kafka_topics",
         mode="before",
     )
