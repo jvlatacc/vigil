@@ -87,6 +87,24 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # Bootstrap for the secrets manager itself, which cannot depend on Settings.
     "ENABLE_KEYRING",
     "SECRETS_BACKEND",
+    # Edge daemon (services/edge): an isolated node-side daemon with its own
+    # pyproject/uv.lock and env protocol (services/edge/app/config.py). It is
+    # not part of the central Settings and deliberately shares no env contract
+    # with it; these names belong to the daemon's own config surface.
+    "VIGIL_EDGE_CONTROL_URL",
+    "VIGIL_EDGE_CREDENTIAL_FILE",
+    "VIGIL_EDGE_DATA_DIR",
+    "VIGIL_EDGE_ENABLED",
+    "VIGIL_EDGE_ENROLLMENT_TOKEN",
+    "VIGIL_EDGE_EVE_PATH",
+    "VIGIL_EDGE_HEALTH_PORT",
+    "VIGIL_EDGE_MODE",
+    "VIGIL_EDGE_MODEL",
+    "VIGIL_EDGE_MODEL_DIGEST",
+    "VIGIL_EDGE_NODE_ID",
+    "VIGIL_EDGE_NODE_LABELS",
+    "VIGIL_EDGE_OLLAMA_URL",
+    "VIGIL_EDGE_TRUST_STORE",
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
