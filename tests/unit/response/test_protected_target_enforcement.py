@@ -119,6 +119,9 @@ class _RulesService:
 def _executor(rows, rules):
     service = AutonomousResponseService.__new__(AutonomousResponseService)
     service.approval_service = _RulesService(rows, rules)
+    # The executor reads the quota knobs from the config its constructor
+    # would set; __new__ skips that, so the helper supplies it directly.
+    service.config = ResponseConfig()
     service._execute_cloudflare_action = lambda **_: {"success": True}
     return service
 
