@@ -78,7 +78,7 @@ jobs:
           # buildkitd.toml): anonymous GHA runner pulls share Docker Hub
           # quotas and 429 before the build starts. Buildkit falls back to
           # docker.io when the mirror lacks a manifest.
-          config: infra/docker/buildkitd.toml
+          buildkitd-config: infra/docker/buildkitd.toml
 
       - name: Build Medic image
         uses: docker/build-push-action@v7
