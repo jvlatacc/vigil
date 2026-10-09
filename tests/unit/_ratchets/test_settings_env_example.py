@@ -99,11 +99,15 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "VIGIL_EDGE_EVE_PATH",
     "VIGIL_EDGE_HEALTH_PORT",
     "VIGIL_EDGE_JOURNAL_MAX_BYTES",
+    "VIGIL_EDGE_K8S_API_URL",
+    "VIGIL_EDGE_K8S_CA_FILE",
+    "VIGIL_EDGE_K8S_TOKEN_FILE",
     "VIGIL_EDGE_MODE",
     "VIGIL_EDGE_MODEL",
     "VIGIL_EDGE_MODEL_DIGEST",
     "VIGIL_EDGE_NODE_ID",
     "VIGIL_EDGE_NODE_LABELS",
+    "VIGIL_EDGE_REAPER_INTERVAL_SECONDS",
     # services/edge EdgeConfig (the sovereign daemon's own config) reads these;
     # not core Settings fields.
     "VIGIL_EDGE_SEGMENT_SCOPE",
