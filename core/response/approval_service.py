@@ -77,7 +77,25 @@ class ActionType(Enum):
     WAF_BLOCK = "waf_block"  # Cloudflare WAF IP Access Rule
     GATEWAY_BLOCK = "gateway_block"  # Cloudflare Zero Trust Gateway DNS/HTTP rule
     ACCESS_REVOKE = "access_revoke"  # Cloudflare Zero Trust Access session revoke
+    XDP_BLOCK_IP = "xdp_block_ip"  # Kernel XDP drop of a source IP (enforcement daemon)
+    SOCKET_REDIRECT = "socket_redirect"  # Kernel sockmap redirect to the capture sink
+    INTERDICT_PROCESS = (
+        "interdict_process"  # Kernel BPF-LSM (or signal) process interdict
+    )
     CUSTOM = "custom"
+
+
+# Kernel enforcement actions run on the privileged per-host enforcement daemon
+# (services/enforcement) through the ebpf_xdp integration helpers, not an
+# external vendor API. They ship human-only while the INTENT.md enforcement
+# posture stands (enforcement.force_manual_approval).
+KERNEL_ACTION_TYPES: frozenset[str] = frozenset(
+    {
+        ActionType.XDP_BLOCK_IP.value,
+        ActionType.SOCKET_REDIRECT.value,
+        ActionType.INTERDICT_PROCESS.value,
+    }
+)
 
 
 class ActionStatus(Enum):
