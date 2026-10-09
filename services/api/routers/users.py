@@ -6,17 +6,17 @@ Handles user CRUD operations, role assignment, and user administration.
 
 import asyncio
 import logging
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from core.auth.auth_service import AuthService
+from core.auth.auth_service import AuthService, union_permission_maps
 from core.auth.password_validator import PasswordPolicyError, validate_password_strength
 from core.auth.token_blacklist import revoke_all_for_user
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
-from core.storage.models import Role, User
+from core.storage.models import Role, RoleAssignment, User
 from core.storage.schemas import RoleSchema, UserSchema
 from services.api.middleware.auth import get_current_user
 
@@ -57,15 +57,24 @@ class ChangeUserRoleRequest(BaseModel):
     role_id: str
 
 
-def _can_assign_role(current_user: User, target_role: Role, session: Session) -> bool:
-    """Return True only if current_user holds every permission granted by target_role.
+class SetUserRolesRequest(BaseModel):
+    """Replace a user's additional role assignments (the primary role is untouched)."""
 
-    Prevents a user with users.write from assigning a role that grants
-    more privileges than they themselves have.
+    role_ids: List[str]
+
+
+def _can_assign_roles(current_user: User, roles: List[Role], session: Session) -> bool:
+    """Return True only if current_user holds every permission in the union of roles.
+
+    Prevents a user with users.write from assigning — as a primary role or as
+    additional assignments — a combination that grants more privileges than
+    they themselves have. Multi-role makes the union the thing to compare:
+    analyst+senior jointly can grant what either alone cannot.
     """
     current_perms = AuthService.get_user_permissions(current_user.user_id, session)
-    for perm, granted in (target_role.permissions or {}).items():
-        if granted and not current_perms.get(perm, False):
+    granted = union_permission_maps(role.permissions for role in roles)
+    for perm, ok in granted.items():
+        if ok and not current_perms.get(perm, False):
             return False
     return True
 
@@ -230,7 +239,7 @@ def create_user(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
         )
 
-    if not _can_assign_role(current_user, role, session):
+    if not _can_assign_roles(current_user, [role], session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot assign a role with more privileges than your own",
@@ -297,7 +306,7 @@ def _apply_user_update(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
             )
-        if not _can_assign_role(current_user, role, session):
+        if not _can_assign_roles(current_user, [role], session):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot assign a role with more privileges than your own",
@@ -436,7 +445,7 @@ def _apply_role_change(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
         )
 
-    if not _can_assign_role(current_user, role, session):
+    if not _can_assign_roles(current_user, [role], session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot assign a role with more privileges than your own",
@@ -500,6 +509,155 @@ async def change_user_role(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to change user role",
+        )
+
+
+def _user_roles_payload(session: Session, user: User) -> dict:
+    """The union view of what a user holds: primary role first, then assignments."""
+    roles = AuthService.effective_roles(user, session)
+    return {
+        "user_id": user.user_id,
+        "primary_role_id": user.role_id,
+        "roles": RoleSchema.dump_many(roles),
+        "permissions": AuthService.get_user_permissions(user.user_id, session),
+    }
+
+
+def _apply_role_assignments(
+    session: Session, current_user: User, user_id: str, role_ids: List[str]
+) -> tuple[User, dict]:
+    """Sync half of set_user_roles. Returns the user and the union-view payload."""
+    user = session.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+
+    # De-duplicate and drop the primary role: granting what the user already
+    # holds as primary is a no-op, not a second row saying it twice.
+    requested: List[str] = []
+    for role_id in role_ids:
+        if role_id != user.role_id and role_id not in requested:
+            requested.append(role_id)
+
+    roles: List[Role] = []
+    for role_id in requested:
+        role = session.query(Role).filter(Role.role_id == role_id).first()
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
+            )
+        roles.append(role)
+
+    # The escalation guard reads the union of everything being granted —
+    # the same rule a primary-role change obeys. Two grants the actor holds
+    # separately are one grant the actor may make together.
+    if not _can_assign_roles(current_user, roles, session):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot assign a role with more privileges than your own",
+        )
+
+    # Replace, not merge: the PUT is the whole additional set, so removing a
+    # role is omitting it — the same contract the primary-role PUT keeps.
+    session.query(RoleAssignment).filter(
+        RoleAssignment.user_id == user.user_id
+    ).delete()
+    for role in roles:
+        session.add(
+            RoleAssignment(
+                user_id=user.user_id,
+                role_id=role.role_id,
+                granted_by=current_user.username,
+            )
+        )
+
+    # Flush so the read-back sees the new rows; the request's unit of work
+    # commits.
+    session.flush()
+    return user, _user_roles_payload(session, user)
+
+
+@router.get("/{user_id}/roles")
+def list_user_roles(
+    user_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: UnitOfWorkSession,
+):
+    """
+    List every role a user holds (requires users.read, or the user themself).
+
+    The union view: the primary role first, additional assignments after.
+    What the user may do is the union of these — the same list authorization
+    resolves, so the screen and the engine cannot disagree.
+    """
+    if user_id != current_user.user_id and not AuthService.check_permission(
+        current_user.user_id, "users.read"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: users.read required",
+        )
+
+    user = session.query(User).filter(User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+
+    return _user_roles_payload(session, user)
+
+
+@router.put("/{user_id}/roles")
+async def set_user_roles(
+    user_id: str,
+    request: SetUserRolesRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    session: UnitOfWorkSession,
+):
+    """
+    Replace a user's additional role assignments (requires users.write).
+
+    The primary role is ``users.role_id`` and changes through PUT /{user_id};
+    this manages the grants on top of it. A permission change, so the target's
+    tokens are revoked the way a primary-role change revokes them.
+    """
+    try:
+        if not AuthService.check_permission(current_user.user_id, "users.write"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission denied: users.write required",
+            )
+
+        user, payload = await asyncio.to_thread(
+            _apply_role_assignments, session, current_user, user_id, request.role_ids
+        )
+
+        try:
+            await revoke_all_for_user(user.user_id)
+        except Exception as exc:
+            logger.error(
+                "Roles changed for %s but revoke_all_for_user failed: %s. "
+                "Old tokens may remain valid until natural expiry.",
+                user.username,
+                exc,
+            )
+
+        logger.info(
+            "User roles set by %s: %s -> %s",
+            current_user.username,
+            user.username,
+            request.role_ids,
+        )
+        return payload
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Set user roles error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to set user roles",
         )
 
 

@@ -6726,6 +6726,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users/{user_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List User Roles
+         * @description List every role a user holds (requires users.read, or the user themself).
+         *
+         *     The union view: the primary role first, additional assignments after.
+         *     What the user may do is the union of these — the same list authorization
+         *     resolves, so the screen and the engine cannot disagree.
+         */
+        get: operations["get_api_users_user_id_roles"];
+        /**
+         * Set User Roles
+         * @description Replace a user's additional role assignments (requires users.write).
+         *
+         *     The primary role is ``users.role_id`` and changes through PUT /{user_id};
+         *     this manages the grants on top of it. A permission change, so the target's
+         *     tokens are revoked the way a primary-role change revokes them.
+         */
+        put: operations["put_api_users_user_id_roles"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agent-runs": {
         parameters: {
             query?: never;
@@ -11886,6 +11918,14 @@ export interface components {
         ServerEnabledRequest: {
             /** Enabled */
             enabled: boolean;
+        };
+        /**
+         * SetUserRolesRequest
+         * @description Replace a user's additional role assignments (the primary role is untouched).
+         */
+        SetUserRolesRequest: {
+            /** Role Ids */
+            role_ids: string[];
         };
         /** SkillCaseResult */
         SkillCaseResult: {
@@ -24365,6 +24405,76 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ChangeUserRoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_users_user_id_roles: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_api_users_user_id_roles: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetUserRolesRequest"];
             };
         };
         responses: {

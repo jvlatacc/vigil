@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 from core import redis_client
 from core.config import DEFAULT_REDIS_URL, get_settings
 from core.storage.connection import DatabaseConfig, get_db_manager
-from core.storage.models import Base, Role
+from core.storage.models import Base, Role, RoleAssignment, User
 from services.api.middleware.rate_limit import limiter
 
 pytestmark = [pytest.mark.integration, pytest.mark.database]
@@ -186,6 +186,16 @@ def test_first_admin_can_bootstrap_login_and_reach_an_authenticated_route(client
     body = login.json()
     assert body["user"]["role_id"] == "role-admin"
     assert "users.write" in body["user"]["permissions"]
+
+    # The first admin holds role-admin twice — primary and assignment row — so
+    # a later primary-role change can never demote the one account that can
+    # still fix it.
+    with Session(get_db_manager().engine) as s:
+        user = s.query(User).filter_by(username=ADMIN["username"]).one()
+        assigned = {
+            a.role_id for a in s.query(RoleAssignment).filter_by(user_id=user.user_id)
+        }
+    assert assigned == {"role-admin"}
 
     # Browser flow: the HttpOnly access_token cookie set by /login.
     me = client.get("/api/auth/me")

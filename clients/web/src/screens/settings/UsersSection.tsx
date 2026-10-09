@@ -41,7 +41,7 @@ function errText(e: unknown, fallback: string): string {
 
 export default function UsersSection({ notify }: SectionProps) {
   const { hasPermission } = useAuth()
-  const { users, roles, phase, error, reload, createUser, updateUser, deleteUser } = useUsers()
+  const { users, roles, phase, error, reload, createUser, updateUser, deleteUser, getUserRoles, setUserRoles } = useUsers()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<User | null>(null)
@@ -50,6 +50,11 @@ export default function UsersSection({ notify }: SectionProps) {
   const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<User | null>(null)
   const [deleting, setDeleting] = useState(false)
+  // Additional role assignments beyond the primary role, edited in the dialog.
+  // rolesAtOpen is what the user held when the dialog opened, so Save can tell
+  // a real change from a no-op and skip the token revocation it would cause.
+  const [extraRoles, setExtraRoles] = useState<string[]>([])
+  const [rolesAtOpen, setRolesAtOpen] = useState<string[]>([])
 
   const canWrite = hasPermission('users.write')
   const canDelete = hasPermission('users.delete')
@@ -87,6 +92,8 @@ export default function UsersSection({ notify }: SectionProps) {
     setEditing(null)
     setForm({ ...EMPTY_FORM, role_id: roles[0].role_id })
     setDialogError('')
+    setExtraRoles([])
+    setRolesAtOpen([])
     setDialogOpen(true)
   }
 
@@ -101,6 +108,16 @@ export default function UsersSection({ notify }: SectionProps) {
     })
     setDialogError('')
     setDialogOpen(true)
+    // The union view lists the primary role first; assignments are the rest.
+    getUserRoles(u.user_id)
+      .then((data) => {
+        const additional = data.roles
+          .map((r) => r.role_id)
+          .filter((id) => id !== data.primary_role_id)
+        setExtraRoles(additional)
+        setRolesAtOpen(additional)
+      })
+      .catch((e) => notify('err', errText(e, 'Failed to load role assignments')))
   }
 
   const validate = (): string | null => {
@@ -131,6 +148,14 @@ export default function UsersSection({ notify }: SectionProps) {
           email,
           role_id: form.role_id,
         })
+        // Additional roles only change when the edit actually moved them —
+        // a PUT of an unchanged set would still revoke the user's tokens.
+        const changed =
+          extraRoles.length !== rolesAtOpen.length ||
+          extraRoles.some((r) => !rolesAtOpen.includes(r))
+        if (changed) {
+          await setUserRoles(editing.user_id, extraRoles)
+        }
         notify('ok', `Updated ${form.username || editing.username}.`)
       } else {
         await createUser({ ...form, email })
@@ -301,9 +326,51 @@ export default function UsersSection({ notify }: SectionProps) {
               value={form.role_id}
               options={roleOptions}
               placeholder={roles.length ? 'Select a role…' : 'Loading roles…'}
-              onSelect={(v) => setForm({ ...form, role_id: v })}
+              onSelect={(v) => {
+                setForm({ ...form, role_id: v })
+                // A role promoted to primary stops being an additional chip;
+                // the server drops the duplicate row anyway.
+                setExtraRoles(extraRoles.filter((r) => r !== v))
+              }}
             />
           </Field>
+          {editing && (
+            <Field
+              label="Additional roles"
+              hint="Extra grants beyond the primary role — the user's permissions are the union of every role held."
+            >
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-wrap gap-1.5">
+                  {extraRoles.map((id) => (
+                    <span key={id} className="chip flex items-center gap-1">
+                      {roleName(id)}
+                      <button
+                        type="button"
+                        className="text-tx-3 hover:text-tx-1"
+                        title={`Remove ${roleName(id)}`}
+                        onClick={() => setExtraRoles(extraRoles.filter((r) => r !== id))}
+                      >
+                        <Icon name="close" size={11} />
+                      </button>
+                    </span>
+                  ))}
+                  {extraRoles.length === 0 && (
+                    <span className="text-xs text-tx-3">None beyond the primary role.</span>
+                  )}
+                </div>
+                <Select
+                  value=""
+                  options={roleOptions.filter(
+                    (o) => o.value !== form.role_id && !extraRoles.includes(o.value),
+                  )}
+                  placeholder="Add a role…"
+                  onSelect={(v) => {
+                    if (v && !extraRoles.includes(v)) setExtraRoles([...extraRoles, v])
+                  }}
+                />
+              </div>
+            </Field>
+          )}
           <div className="flex justify-end gap-2.5 mt-1">
             <button className="btn ghost" onClick={() => setDialogOpen(false)} disabled={saving}>
               Cancel
