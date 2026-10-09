@@ -1,0 +1,14 @@
+# Vendored subchart artifacts — verify with: sha256sum -c SHA256SUMS
+# Each digest is the published one for the pinned version, read from the
+# source the fetch resolved to at vendor time:
+# - postgresql 16.2.2: Bitnami; digest from charts.bitnami.com/bitnami
+#   index.yaml; artifact pulled from oci://registry-1.docker.io/bitnamicharts/postgresql:16.2.2
+#   (registry layer digest matches).
+# - redis 20.3.0: Bitnami; digest from charts.bitnami.com/bitnami index.yaml;
+#   artifact from https://charts.bitnami.com/bitnami/redis-20.3.0.tgz
+# - opentelemetry-collector 0.108.0: digest from
+#   https://open-telemetry.github.io/opentelemetry-helm-charts/index.yaml;
+#   artifact from the release URL that entry lists.
+a6cc6189b9d506d13f6b6873d30003d46c2623697944ffaf0c8eb49bdac6673f  charts/postgresql-16.2.2.tgz
+f9dd035ed6e7ecb9192de11787a177faee33bdceb58d35b11cf68b1666e3f2ca  charts/redis-20.3.0.tgz
+0ea2ea90404405fd0748f6c5c09da1ce581cb166689a4671aeb98ff2c00d782b  charts/opentelemetry-collector-0.108.0.tgz
