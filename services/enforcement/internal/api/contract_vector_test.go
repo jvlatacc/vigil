@@ -72,7 +72,7 @@ func TestContractVectors(t *testing.T) {
 					Supported: false, Reason: "capability probe refused (vector override)",
 				}
 			}
-			srv, err := New(contractToken, enforce.NewEnforcer(fk, enforce.TTLFloor*10))
+			srv, err := New(contractToken, enforce.NewEnforcer(fk, enforce.TTLFloor*10), "faked")
 			if err != nil {
 				t.Fatalf("building server: %v", err)
 			}

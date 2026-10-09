@@ -25,7 +25,10 @@ type FakeKernel struct {
 	mu       sync.Mutex
 	attached map[Kind]string
 	slots    map[Kind]int
-	entries  map[Kind]map[string]bool
+	// entries holds the value bytes the engine wrote (the expiry), so the
+	// reconciler's map-level view can decode them exactly like the real
+	// kernel map's contents.
+	entries  map[Kind]map[string][]byte
 	counters map[Kind]map[string]uint64
 	calls    map[Kind]*counts
 }
@@ -46,7 +49,7 @@ func NewFakeKernel(interfaceName string) *FakeKernel {
 		UpdateErr:  make(map[Kind]error),
 		attached:   make(map[Kind]string),
 		slots:      make(map[Kind]int),
-		entries:    make(map[Kind]map[string]bool),
+		entries:    make(map[Kind]map[string][]byte),
 		counters: map[Kind]map[string]uint64{
 			KindXDPDrop:          {"dropped_packets": 0},
 			KindSocketRedirect:   {"redirected_packets": 0},
@@ -108,11 +111,11 @@ func (f *FakeKernel) MapUpdate(kind Kind, key, value []byte) (string, int, error
 		return "", 0, fmt.Errorf("%s: map full", kind.mapName())
 	}
 	if f.entries[kind] == nil {
-		f.entries[kind] = make(map[string]bool)
+		f.entries[kind] = make(map[string][]byte)
 	}
 	slot := f.slots[kind]
 	f.slots[kind]++
-	f.entries[kind][string(key)] = true
+	f.entries[kind][string(key)] = append([]byte(nil), value...)
 	return MapPinDir + "/" + kind.mapName(), slot, nil
 }
 
@@ -122,6 +125,32 @@ func (f *FakeKernel) Release(kind Kind, key []byte) error {
 	f.call(kind).release++
 	// An absent key is a no-op, matching libbpf's quiet ENOENT on delete —
 	// releases stay idempotent at the kernel level too.
+	delete(f.entries[kind], string(key))
+	return nil
+}
+
+// Entries returns the kind's live entries with decoded expiries — the
+// map-level view the reconciler (mapStore) drives, and the seam that makes
+// TTL eviction CI-testable over the faked kernel.
+func (f *FakeKernel) Entries(kind Kind) ([]MapEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := []MapEntry{}
+	for key, val := range f.entries[kind] {
+		expiry, err := decodeExpiry(val)
+		if err != nil {
+			return nil, fmt.Errorf("%s key %x: %w", kind, key, err)
+		}
+		out = append(out, MapEntry{Key: []byte(key), Expiry: expiry})
+	}
+	return out, nil
+}
+
+// Evict removes one entry by key; an absent key is a no-op, matching the
+// kernel's quiet ENOENT on delete.
+func (f *FakeKernel) Evict(kind Kind, key []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	delete(f.entries[kind], string(key))
 	return nil
 }

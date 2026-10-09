@@ -47,7 +47,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthzDoc{
 		Status:          status,
 		UptimeSeconds:   int64(time.Since(s.started) / time.Second),
-		Kernel:          "faked",
+		Kernel:          s.kernelFaked,
 		Primitives:      prims,
 		ActionsEnforced: s.enforcedTotal.Load(),
 		ActionsReleased: s.releasedTotal.Load(),

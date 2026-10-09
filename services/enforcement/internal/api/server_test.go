@@ -16,7 +16,7 @@ func newTestServer(t *testing.T, fk *enforce.FakeKernel) *httptest.Server {
 	if fk == nil {
 		fk = enforce.NewFakeKernel("eth0")
 	}
-	srv, err := New(testToken, enforce.NewEnforcer(fk, enforce.TTLFloor*10))
+	srv, err := New(testToken, enforce.NewEnforcer(fk, enforce.TTLFloor*10), "faked")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -199,6 +199,32 @@ func TestHealthzShape(t *testing.T) {
 		if !p.Supported {
 			t.Errorf("primitive %q not supported on the fake kernel: %s", kind, p.Reason)
 		}
+	}
+}
+
+// A real loader reports an empty kernel_faked label — faked enforcement is
+// the only distinguishable case (contract).
+func TestHealthzRealLoaderReportsEmptyFakedLabel(t *testing.T) {
+	srv, err := New(testToken, enforce.NewEnforcer(enforce.NewFakeKernel("eth0"), enforce.TTLFloor*10), "")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	res := authedJSON(t, "GET", ts.URL+"/healthz", "", nil)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("healthz: status = %d, want 200", res.StatusCode)
+	}
+	var h struct {
+		Status      string `json:"status"`
+		KernelFaked string `json:"kernel_faked"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&h); err != nil {
+		t.Fatalf("decoding healthz: %v", err)
+	}
+	if h.Status != "ok" || h.KernelFaked != "" {
+		t.Errorf("healthz = {status: %q, kernel_faked: %q}, want {ok, \"\"}", h.Status, h.KernelFaked)
 	}
 }
 
