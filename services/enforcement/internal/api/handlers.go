@@ -15,8 +15,12 @@ func statusFor(code string) int {
 	case enforce.ErrCodeUnauthorized:
 		return http.StatusUnauthorized
 	case enforce.ErrCodeInvalidRequest, enforce.ErrCodeInvalidTarget, enforce.ErrCodeTTLBelowFloor,
-		enforce.ErrCodeUnsupportedKind, enforce.ErrCodeActionIDConflict:
+		enforce.ErrCodeUnsupportedKind:
 		return http.StatusUnprocessableEntity
+	case enforce.ErrCodeActionIDConflict:
+		// A used action_id with a different request is a conflict with
+		// current state (RFC 9110 §9.3.4), not a malformed body.
+		return http.StatusConflict
 	case enforce.ErrCodeUnknownAction:
 		return http.StatusNotFound
 	case enforce.ErrCodePrimitiveUnavailable, enforce.ErrCodeKernelError:

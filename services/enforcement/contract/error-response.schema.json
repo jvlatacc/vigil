@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/vigil/enforcement/contracts/error-response/v1",
+  "title": "Enforcement error response v1",
+  "description": "Every non-success reply from the enforcement API. The executor maps 'error' onto mark_failed payloads; codes are a closed vocabulary — a new code is a contract change, made in its own PR.",
+  "type": "object",
+  "required": ["error", "message"],
+  "additionalProperties": false,
+  "properties": {
+    "error": {
+      "enum": [
+        "unauthorized",
+        "invalid_request",
+        "unknown_action",
+        "action_id_conflict",
+        "unsupported_kind",
+        "invalid_target",
+        "ttl_below_floor",
+        "primitive_unavailable",
+        "kernel_error"
+      ]
+    },
+    "message": { "type": "string" },
+    "details": {
+      "description": "Machine-readable context. For invalid_target, details.reason is one of: missing_ip, unparseable_ip, loopback, multicast, unspecified, broadcast, link_local, missing_pid, bad_pid, bad_port, port_not_allowed, ip_not_allowed, pid_not_allowed.",
+      "type": "object"
+    }
+  }
+}
