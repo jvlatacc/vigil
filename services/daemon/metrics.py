@@ -110,6 +110,7 @@ class MetricsServer:
         self.responder = None
         self.scheduler = None
         self.orchestrator = None
+        self.cep = None  # CepTap — None when CEP is disabled
 
         self._tasks: Dict[str, asyncio.Task] = {}
 
@@ -118,6 +119,10 @@ class MetricsServer:
         self._tasks[name] = task
 
     def _component_state(self, name: str, component: Any) -> str:
+        # The CEP tap is a deliberate absence when disabled, not a failed
+        # component, and it has no run loop of its own to die.
+        if name == "cep":
+            return "running" if component is not None else "disabled"
         task = self._tasks.get(name)
         if component is None or task is None:
             return "not_initialized"
@@ -196,6 +201,7 @@ class MetricsServer:
                 ("responder", self.responder),
                 ("scheduler", self.scheduler),
                 ("orchestrator", self.orchestrator),
+                ("cep", self.cep),
             )
         }
         health["components"] = components
@@ -221,6 +227,7 @@ class MetricsServer:
             "responder": metrics.get("responder", {}),
             "scheduler": metrics.get("scheduler", {}),
             "orchestrator": metrics.get("orchestrator", {}),
+            "cep": metrics.get("cep", {}),
             "vendors": metrics["vendors"],
         }
 
@@ -250,5 +257,8 @@ class MetricsServer:
             orch_stats["active_agents"] = self.orchestrator._in_flight()
             orch_stats["enabled"] = self.orchestrator.enabled
             metrics["orchestrator"] = orch_stats
+
+        if self.cep:
+            metrics["cep"] = dict(self.cep.stats)
 
         return metrics
