@@ -10,11 +10,14 @@ BACKUP_LOOP_CONTAINER="vigil-backup-loop"
 
 usage() {
     cat <<EOF
-Usage: $0 [--daemon|-d] [--with <profile>] [--all]
+Usage: $0 [--daemon|-d] [--headless] [--with <profile>] [--all]
        $0 backup --repo PATH --passphrase-file PATH
        $0 restore --repo PATH --passphrase-file PATH [--snapshot ID] [--test]
 
   -d, --daemon      Run in the background (logs/ + pidfiles)
+      --headless    No frontend and no browser: skips the Vite dev server and
+                    the auto-open, and the ready banner points at headless
+                    onboarding and the /mcp endpoint instead of the console.
       --with NAME   Also start a profiled service (splunk, kafka, pgadmin,
                     jaeger, prometheus, grafana, otel-collector). Repeatable.
       --all         Also start every profiled service
@@ -202,9 +205,14 @@ esac
 DAEMON=0
 EXTRA_SERVICES=""
 ALL_PROFILES=0
+VIGIL_HEADLESS="${VIGIL_HEADLESS:-0}"
+# Capture the shell-provided value before load_env() re-sources .env over the
+# caller's variables — the same precedence BIND_HOST gets below.
+_CALLER_SKIP_FRONTEND="${SKIP_FRONTEND:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
         -d|--daemon) DAEMON=1 ;;
+        --headless) SKIP_FRONTEND=1; VIGIL_HEADLESS=1 ;;
         --all) ALL_PROFILES=1 ;;
         --with)
             [ -n "${2:-}" ] || { echo "--with requires a service name" >&2; exit 1; }
@@ -219,7 +227,8 @@ done
 # --- Prerequisites ---
 ensure_docker || exit 1
 
-SKIP_FRONTEND=0
+# Frontend runs by default; skip it from the environment or with --headless.
+SKIP_FRONTEND="${SKIP_FRONTEND:-0}"
 # Opt out explicitly (e.g. to run scripts/agent_up.sh by hand) with SKIP_AGENT=1.
 SKIP_AGENT="${SKIP_AGENT:-0}"
 if ! command -v node &>/dev/null; then
@@ -236,6 +245,10 @@ install_python_deps
 _CALLER_BIND_HOST="${BIND_HOST:-}"
 load_env
 [ -n "$_CALLER_BIND_HOST" ] && BIND_HOST="$_CALLER_BIND_HOST"
+# Same precedence as BIND_HOST: a shell-provided value outranks .env.
+[ -n "$_CALLER_SKIP_FRONTEND" ] && SKIP_FRONTEND="$_CALLER_SKIP_FRONTEND"
+# --headless outranks everything, including a SKIP_FRONTEND in .env.
+[ "${VIGIL_HEADLESS:-0}" -eq 1 ] && SKIP_FRONTEND=1
 export BIND_HOST="${BIND_HOST:-127.0.0.1}"
 # Auth is on unless .env opts into DEV_MODE; the backend needs a signing secret.
 ensure_jwt_secret || exit 1
