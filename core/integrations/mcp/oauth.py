@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass
 from secrets import token_urlsafe
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 
@@ -264,6 +264,9 @@ class OAuthTokenProvider:
         self._expires_at = 0.0
         self._metadata: Optional[Dict[str, Any]] = None
         self._rotated_out: Optional[str] = None
+        self._pending: Optional[Dict[str, str]] = (
+            None  # {verifier, state, redirect_uri}
+        )
         self.state = (
             ProviderState.NEEDS_CONSENT
             if config.grant == "authorization_code"
@@ -470,13 +473,135 @@ class OAuthTokenProvider:
 
     async def _resolve_issuer(self) -> str:
         """A configured issuer wins; otherwise one is discovered from the
-        server's own 401 challenge."""
+        server's own 401 challenge — the MCP authorization profile's entry
+        point (RFC 9728): the challenge names the protected-resource
+        metadata document, which names the authorization servers."""
         if self.config.issuer_url:
             return self.config.issuer_url
-        raise TokenError(
-            f"MCP server {self.config.server_name!r}: no issuer_url configured and "
-            "challenge-driven discovery is not wired yet"
+        try:
+            probe = await self._client().get(
+                self.config.server_url, headers={"Accept": "application/json"}
+            )
+        except httpx.HTTPError as exc:
+            raise TokenError(
+                f"could not reach {self.config.server_url} to read its OAuth "
+                f"challenge ({type(exc).__name__})"
+            ) from exc
+        if probe.status_code != 401:
+            raise TokenError(
+                f"{self.config.server_url} answered HTTP {probe.status_code} "
+                "instead of a 401 OAuth challenge"
+            )
+        params = parse_www_authenticate_challenge(
+            probe.headers.get("WWW-Authenticate", "")
         )
+        if params.get("scheme") != "bearer":
+            raise TokenError("server challenge is not a Bearer challenge")
+        prm_url = params.get("resource_metadata") or urljoin(
+            self.config.server_url, "/.well-known/oauth-protected-resource"
+        )
+        issuer = await self._protected_resource_issuer(prm_url)
+        if not issuer:
+            raise TokenError(
+                "protected-resource metadata named no authorization server"
+            )
+        return issuer
+
+    async def _protected_resource_issuer(self, prm_url: str) -> Optional[str]:
+        try:
+            resp = await self._client().get(
+                prm_url, headers={"Accept": "application/json"}
+            )
+        except httpx.HTTPError as exc:
+            raise TokenError(
+                f"protected-resource metadata could not be fetched ({type(exc).__name__})"
+            ) from exc
+        if resp.status_code != 200:
+            raise TokenError(
+                f"protected-resource metadata returned HTTP {resp.status_code}"
+            )
+        try:
+            doc = resp.json()
+        except ValueError as exc:
+            raise TokenError("protected-resource metadata is not JSON") from exc
+        servers = doc.get("authorization_servers") if isinstance(doc, dict) else None
+        if isinstance(servers, list) and servers:
+            return str(servers[0])
+        return None
+
+    # -- consent flow (authorization_code + PKCE) --------------------------
+
+    async def start_authorization(self, *, redirect_uri: str) -> Dict[str, str]:
+        """Begin the one interactive consent: build the authorization URL
+        with PKCE S256. Returns ``{authorization_url, state}``; the caller
+        opens the URL in a browser and completes via
+        ``complete_authorization``."""
+        if self.config.grant != "authorization_code":
+            raise TokenError(
+                "start_authorization applies to the authorization_code grant only"
+            )
+        metadata = await self._authorization_server_metadata()
+        authorize = metadata.get("authorization_endpoint")
+        if not authorize:
+            raise TokenError(
+                "authorization-server metadata carries no authorization_endpoint"
+            )
+        verifier, challenge = pkce_pair()
+        state = token_urlsafe(24)
+        self._pending = {
+            "verifier": verifier,
+            "state": state,
+            "redirect_uri": redirect_uri,
+        }
+        params = {
+            "response_type": "code",
+            "client_id": self.config.client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            # RFC 8707 on the front channel too, so the issuer binds the
+            # code to this resource before the token exchange restates it.
+            "resource": self.config.resource_url,
+        }
+        if self.config.scopes:
+            params["scope"] = " ".join(self.config.scopes)
+        return {
+            "authorization_url": f"{authorize}?{urlencode(params)}",
+            "state": state,
+        }
+
+    async def complete_authorization(self, *, code: str, state: str) -> None:
+        """Finish the consent flow: exchange the authorization code with the
+        stored verifier, persist the refresh token, and mark connected."""
+        pending = self._pending
+        if not pending or not state or state != pending["state"]:
+            self._pending = None
+            raise TokenError("authorization state mismatch — restart consent")
+        if not code:
+            raise TokenError("authorization callback carried no code")
+        doc = await self._token_request(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": pending["verifier"],
+                "redirect_uri": pending["redirect_uri"],
+            }
+        )
+        refresh = doc.get("refresh_token")
+        if not refresh:
+            # Without a refresh token every later call would need fresh
+            # consent — refuse the half-connected state rather than mint one
+            # that dies with the access token.
+            raise TokenError(
+                "issuer returned no refresh token; cannot complete connection"
+            )
+        if not set_secret(self.config.refresh_key, str(refresh)):
+            raise TokenError("could not persist the refresh token")
+        self._absorb(doc)
+        self._pending = None
+        self.state = ProviderState.CONNECTED
+        self.last_error = None
 
     # -- plumbing ---------------------------------------------------------
 
