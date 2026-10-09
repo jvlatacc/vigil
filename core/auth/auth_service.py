@@ -22,11 +22,28 @@ from sqlalchemy.orm import Session
 from core.config import get_settings
 from core.exceptions import default_on_error
 from core.secrets import get_secret
-from core.storage.models import Role, User
+from core.storage.models import Role, RoleAssignment, User
 from core.storage.unit_of_work import unit_of_work
 from core.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def union_permission_maps(maps) -> Dict[str, bool]:
+    """OR the permission maps of several roles into one.
+
+    Multi-role authorization is a union of grants: a user may do what any
+    role they hold may do. A role that lists a permission as ``false`` does
+    not veto another role's ``true`` — roles grant, they do not retract —
+    which is also why the value is coerced through ``bool`` rather than
+    trusted as-is.
+    """
+    merged: Dict[str, bool] = {}
+    for permissions in maps:
+        for permission, granted in (permissions or {}).items():
+            merged[permission] = merged.get(permission, False) or bool(granted)
+    return merged
+
 
 # Fernet tokens are urlsafe base64 of a version byte + timestamp, so they start
 # with "gAAAAA". Lowercase "g" is not base32, so legacy plaintext never matches.
@@ -498,6 +515,38 @@ class AuthService:
             return uri
 
     @staticmethod
+    def effective_roles(user: "User", session: Session) -> List[Role]:
+        """The user's primary role plus every role their assignments grant.
+
+        Authorization is a union of grants, so every check resolves through
+        this list rather than ``user.role_id`` alone. The primary role leads
+        (callers that want "the" role for display keep seeing it first) and
+        the rest follow ordered by role id, so two calls see the same list.
+
+        An assignment naming a role that no longer exists contributes
+        nothing rather than raising: a deleted custom role must not take
+        every permission check down with it.
+        """
+        role_ids: List[str] = [user.role_id]
+        role_ids.extend(
+            row.role_id
+            for row in session.query(RoleAssignment.role_id)
+            .filter(RoleAssignment.user_id == user.user_id)
+            .order_by(RoleAssignment.role_id)
+        )
+
+        roles: List[Role] = []
+        seen: set = set()
+        for role_id in role_ids:
+            if role_id in seen:
+                continue
+            seen.add(role_id)
+            role = session.query(Role).filter(Role.role_id == role_id).first()
+            if role is not None:
+                roles.append(role)
+        return roles
+
+    @staticmethod
     def check_permission(
         user_id: str, permission: str, session: Optional[Session] = None
     ) -> bool:
@@ -521,12 +570,13 @@ class AuthService:
             if not user or not user.is_active:
                 return False
 
-            role = session.query(Role).filter(Role.role_id == user.role_id).first()
-            if not role:
+            roles = AuthService.effective_roles(user, session)
+            if not roles:
                 return False
 
-            # Check permission in role's permissions JSONB
-            return role.permissions.get(permission, False)
+            return union_permission_maps(role.permissions for role in roles).get(
+                permission, False
+            )
 
     @staticmethod
     def get_user_permissions(
@@ -573,11 +623,11 @@ class AuthService:
             if not user:
                 return {}
 
-            role = session.query(Role).filter(Role.role_id == user.role_id).first()
-            if not role:
+            roles = AuthService.effective_roles(user, session)
+            if not roles:
                 return {}
 
-            return role.permissions
+            return union_permission_maps(role.permissions for role in roles)
 
     @staticmethod
     @default_on_error(None)
