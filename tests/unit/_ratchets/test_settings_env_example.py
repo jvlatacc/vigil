@@ -109,6 +109,10 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # core/edge/signing.py reads the bundle-signing key path through the
     # secrets manager (get_secret), not through Settings.
     "VIGIL_EDGE_SIGNING_KEY_FILE",
+    # start.sh reads SKIP_FRONTEND at bootstrap to skip the web console; the
+    # variable is shell-only and never part of Settings (carried over from the
+    # PR #49 merge, which documented it in env.example).
+    "SKIP_FRONTEND",
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
