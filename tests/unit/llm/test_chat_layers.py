@@ -24,6 +24,13 @@ from core.llm.chat_layers import _declare, _is_destructive_mcp, integration_tool
         "aws_terminate_instance",
         "atomic_red_team_execute",
         "atomic-red-team_atomic_red_team_execute",
+        # Kernel enforcement (ebpf-xdp): every containment tool of the slice,
+        # block through interdict, drops out of chat — only status stays.
+        "xdp_block_ip",
+        "ebpf-xdp_xdp_block_ip",
+        "ebpf-xdp_xdp_unblock_ip",
+        "ebpf-xdp_xdp_redirect_socket",
+        "ebpf-xdp_xdp_interdict_process",
     ],
 )
 def test_direct_action_tools_are_destructive(name):
@@ -44,6 +51,8 @@ def test_direct_action_tools_are_destructive(name):
         "splunk_query",
         # ``execute`` is not a destructive verb: ART is dropped by id so this stays.
         "splunk-selfhosted_splunk_execute",
+        # The kernel slice's read-only surface — chat may look, never touch.
+        "ebpf-xdp_xdp_status",
     ],
 )
 def test_read_only_tools_are_not_destructive(name):
