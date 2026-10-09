@@ -139,24 +139,3 @@ def _utcnow() -> datetime:
 
 def _parse_stamp(value: str) -> datetime:
     return datetime.strptime(value, TS_FORMAT).replace(tzinfo=UTC)
-
-
-if __name__ == "__main__":  # pragma: no cover - operator CLI
-    import argparse
-    import sys
-
-    from core.secrets import get_secret
-
-    parser = argparse.ArgumentParser(description="Mint a Warden enrollment token.")
-    parser.add_argument("--node-id", required=True)
-    parser.add_argument("--ttl-hours", type=int, default=DEFAULT_TOKEN_TTL_HOURS)
-    args = parser.parse_args()
-    signing_secret = get_secret(ENROLLMENT_SECRET_NAME)
-    if not signing_secret:
-        print(
-            f"{ENROLLMENT_SECRET_NAME} is not configured; set it before minting.",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    expiry = _utcnow() + timedelta(hours=args.ttl_hours)
-    print(mint_enrollment_token(args.node_id, secret=signing_secret, expires_at=expiry))
