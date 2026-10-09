@@ -17,9 +17,25 @@ from ipaddress import IPv4Network, IPv6Network
 from typing import Any, List, Optional, Union
 
 from core.config import Settings, get_settings
+from core.storage.origin_trust import tier_rank
 
 # The blast-radius subnet an address target is measured in, as a network.
 ContainmentSubnet = Union[IPv4Network, IPv6Network]
+
+
+def min_origin_trust_rank(tier: str) -> int:
+    """The origin floor's rank for a tier name; an unknown name fails loudly.
+
+    A typo'd ``DAEMON_MIN_ORIGIN_TRUST_FOR_AUTO_CONTAINMENT`` must not
+    silently widen the floor: the daemon refuses to start on it.
+    """
+    rank = tier_rank(tier)
+    if rank is None:
+        raise ValueError(
+            f"DAEMON_MIN_ORIGIN_TRUST_FOR_AUTO_CONTAINMENT={tier!r} names no "
+            "tier (unverified < transport < signed)"
+        )
+    return rank
 
 
 def decision_rule(field: str, value: Any, observed: Optional[float] = None) -> str:
@@ -90,6 +106,13 @@ class ResponseConfig:
     # default) is manual reset only: resuming machine-speed containment
     # after an anomaly is a promoting decision, and promoting is yours.
     breaker_auto_resume_minutes: int = 0
+    # The origin floor: the minimum tier rank (0=unverified, 1=transport,
+    # 2=signed) a motivating finding must carry before unattended containment
+    # acts on it, and the distinct-source corroboration that releases a
+    # below-floor finding. Ranks, not tier strings, so the intent diff has a
+    # number to compare; 1 names transport.
+    min_origin_trust: int = 1
+    min_corroboration_for_unverified: int = 2
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -113,6 +136,10 @@ class ResponseConfig:
             breaker_distinct_targets=s.daemon_breaker_distinct_targets,
             breaker_failure_rate=s.daemon_breaker_failure_rate,
             breaker_auto_resume_minutes=s.daemon_breaker_auto_resume_minutes,
+            min_origin_trust=min_origin_trust_rank(
+                s.daemon_min_origin_trust_for_auto_containment
+            ),
+            min_corroboration_for_unverified=s.daemon_min_corroboration_for_unverified,
             dry_run=s.daemon_dry_run,
         )
 

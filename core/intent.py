@@ -162,6 +162,18 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         LOWER_TIGHTER,
     ),
     IntentField(
+        "respond.min_origin_trust",
+        "response.min_origin_trust",
+        "daemon_min_origin_trust_for_auto_containment",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "respond.min_corroboration_for_unverified",
+        "response.min_corroboration_for_unverified",
+        "daemon_min_corroboration_for_unverified",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",

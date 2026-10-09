@@ -45,6 +45,14 @@ from core.response.config import (
     containment_subnet,
     decision_rule,
 )
+from core.response.origin import (
+    CORROBORATION_WINDOW_MINUTES,
+    FINDING_CONTEXT_KEY,
+    corroboration_probe,
+    origin_floor_decision,
+    origin_probe_from_hostname,
+    tier_name,
+)
 from core.response.protected_targets import (
     CONTAINMENT_ACTION_TYPES,
     ProtectedTarget,
@@ -55,8 +63,10 @@ from core.response.protected_targets import (
 )
 from core.storage.config_service import get_config_service
 from core.storage.connection import get_db_manager
+from core.storage.finding_corroboration import corroborating_sources
 from core.storage.models import ApprovalAction as ApprovalActionRow
 from core.storage.models import Investigation, WorkflowRun
+from core.storage.origin_trust import tier_rank
 from core.telemetry import get_meter
 from core.time import utcnow
 
@@ -463,6 +473,63 @@ class ApprovalService:
             return decision_rule("response.breaker_state", "write_failed")
         return rule
 
+    def origin_floor_hold(
+        self, target: str, parameters: Optional[Dict]
+    ) -> Optional[str]:
+        """The origin floor's verdict for a containment row, or None to allow.
+
+        The gate sees rows that carry motivating-finding context — the
+        responder stamps it at creation (``FINDING_CONTEXT_KEY``). A row
+        without context is outside this gate's sight: every creator on the
+        unattended path stamps it, agent-proposed rows are already
+        ``human_only``, and workflow rows require a person regardless.
+
+        A finding at or above the floor never pays the corroboration read —
+        that is the common case and the read is a query per below-floor row.
+        A read that failed holds the action: an unreadable check must not
+        read as a passed one.
+        """
+        context = (parameters or {}).get(FINDING_CONTEXT_KEY)
+        if not isinstance(context, dict):
+            return None
+        finding_rank = tier_rank(context.get("origin_trust"))
+        if finding_rank is not None and finding_rank >= self.config.min_origin_trust:
+            return None
+        probe = corroboration_probe(target, parameters) or (
+            origin_probe_from_hostname(parameters)
+        )
+        if probe is None:
+            # The target cannot be tied to findings at all, so nothing could
+            # corroborate it: the below-floor row waits for a person.
+            return decision_rule("response.origin_probe", "unanchored")
+        window_start = utcnow() - timedelta(minutes=CORROBORATION_WINDOW_MINUTES)
+        try:
+            db = get_db_manager()
+            with db.session_scope() as session:
+                corroboration = corroborating_sources(
+                    session,
+                    probe,
+                    window_start,
+                    exclude_finding_id=context.get("finding_id"),
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Cannot read corroboration for %s; holding for a person: %s",
+                target,
+                e,
+            )
+            return decision_rule("response.origin_corroboration", "read_failed")
+        rule = origin_floor_decision(finding_rank, corroboration, self.config)
+        if rule is not None:
+            logger.info(
+                "Containment target %s sits below the origin floor (%s; finding "
+                "tier %s) - held for a person",
+                target,
+                tier_name(self.config.min_origin_trust),
+                tier_name(finding_rank),
+            )
+        return rule
+
     # ------------------------------------------------------------------
     # CRUD — DB-backed
     # ------------------------------------------------------------------
@@ -584,6 +651,17 @@ class ApprovalService:
         if action_type.value in CONTAINMENT_ACTION_TYPES and not forced:
             breaker = self.breaker_trip_hold(target)
             forced = breaker is not None
+
+        # The origin floor is the ingest-trust governor beneath the breaker:
+        # a containment row whose motivating finding sits below the operator's
+        # minimum tier waits for a person, unless distinct data sources named
+        # the same target inside the corroboration window. A row already held
+        # for another reason does not pay the corroboration read — the
+        # outcome would not change.
+        origin = None
+        if action_type.value in CONTAINMENT_ACTION_TYPES and not forced:
+            origin = self.origin_floor_hold(target, parameters)
+            forced = origin is not None
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
@@ -595,6 +673,8 @@ class ApprovalService:
             rule = quota
         elif breaker is not None:
             rule = breaker
+        elif origin is not None:
+            rule = origin
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 

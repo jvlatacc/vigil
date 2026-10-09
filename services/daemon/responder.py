@@ -10,6 +10,7 @@ from core.response.approval_service import ActionType, ApprovalService
 from core.response.autonomous_response_service import AutonomousResponseService
 from core.response.config import response_action_decision
 from core.response.protected_targets import containment_hold, env_floor_rules
+from core.storage.origin_trust import trusted_tier
 from services.daemon.config import EscalationConfig, ResponseConfig
 
 logger = logging.getLogger(__name__)
@@ -380,6 +381,16 @@ class AutonomousResponder:
         )
 
         # Create the action
+        # The finding this row responds to, stamped for the approval gate's
+        # origin floor: the row's tier is the RECEIVER's stamp (storage
+        # normalized it at ingest), and a finding that somehow arrived
+        # unstamped reads as unverified - never as trusted.
+        finding_context = {
+            "finding_id": finding_id,
+            "origin_trust": trusted_tier(finding.get("origin_trust")),
+            "data_source": finding.get("data_source"),
+        }
+
         result = self._response_service.create_isolation_action(
             ip_address=target_ip or "unknown",
             hostname=hostname,
@@ -387,6 +398,7 @@ class AutonomousResponder:
             reason=f"Automated response to {finding_id}; {rule}",
             evidence=[finding_id],
             correlation_data=correlation_data,
+            finding_context=finding_context,
         )
 
         if result:
