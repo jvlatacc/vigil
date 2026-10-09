@@ -41,7 +41,9 @@ class FakeExecutor:
     def __init__(self) -> None:
         self.applied = 0
 
-    async def apply(self, action: Any, ttl_seconds: int) -> ActionResult:
+    async def apply(
+        self, action: Any, ttl_seconds: int, *, namespaces: tuple[str, ...] = ()
+    ) -> ActionResult:
         self.applied += 1
         return ActionResult(success=True, ref="vigil/edge/test")
 
