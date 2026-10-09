@@ -44,7 +44,7 @@ COMMENT ON COLUMN tool_call_audit.actor_username IS
 COMMENT ON COLUMN tool_call_audit.idp_subject IS
     'The upstream IdP subject (`sub`) of a federated session; NULL while no federation is configured.';
 COMMENT ON COLUMN tool_call_audit.surface IS
-    'Where the call entered: agent (/internal/tools/invoke) or mcp-inbound (/mcp).';
+    'Where the call entered: agent (/internal/tools/invoke), mcp-inbound (/mcp), mcp-client (outbound vendor dispatch), in-process (Vigil''s own tools), or vstrike (outbound VStrike calls).';
 COMMENT ON COLUMN tool_call_audit.decision IS 'allow or deny; a deny is a first-class outcome, not an error path.';
 COMMENT ON COLUMN tool_call_audit.deny_reason IS 'Why the call was denied: "permission" at the RBAC gates.';
 COMMENT ON COLUMN tool_call_audit.outcome IS 'For allowed calls: ok, or error when the tool could not answer.';
