@@ -78,6 +78,14 @@ class ActionType(Enum):
     GATEWAY_BLOCK = "gateway_block"  # Cloudflare Zero Trust Gateway DNS/HTTP rule
     ACCESS_REVOKE = "access_revoke"  # Cloudflare Zero Trust Access session revoke
     CUSTOM = "custom"
+    # Speculative containment micro-actions (fast path): reversible by
+    # construction, IP-targeted, released on a TTL. rate_limit is the only
+    # one with a real enforcement adapter in v1 — the rest record intent
+    # through the simulation adapter, and surfaces label those rows.
+    RATE_LIMIT = "rate_limit"  # transient per-source rate limit
+    TARPIT = "tarpit"  # hold the connection open, drain the attacker's budget
+    SESSION_PIN = "session_pin"  # pin a session for re-check before it acts
+    LATENCY_INJECT = "latency_inject"  # synthetic latency on suspect traffic
 
 
 class ActionStatus(Enum):
@@ -88,6 +96,13 @@ class ActionStatus(Enum):
     REJECTED = "rejected"
     EXECUTED = "executed"
     FAILED = "failed"
+    # Speculative containment lifecycle: a fast-path restriction that is live
+    # but not yet decided. speculative is the only live state; the other two
+    # are terminal, and the row's reason records who resolved it (adjudicator,
+    # human, or the TTL sweep).
+    SPECULATIVE = "speculative"
+    ROLLED_BACK = "rolled_back"
+    ESCALATED = "escalated"
 
 
 class Reversibility(Enum):
@@ -157,12 +172,21 @@ def _row_to_pending(row: ApprovalActionRow) -> PendingAction:
     )
 
 
-def _nonfailed_by_key(session, key: str) -> Optional[ApprovalActionRow]:
-    """The live row for ``key``, if any. Failed rows are excluded so they can retry."""
+def _live_by_key(session, key: str) -> Optional[ApprovalActionRow]:
+    """The live row for ``key``, if any.
+
+    Failed rows are excluded so they can retry (#827), and rolled_back rows so
+    a target can be restricted again after a rollback — the same exclusions the
+    idempotency index (seed 40) makes unique.
+    """
     return session.execute(
         select(ApprovalActionRow)
         .where(ApprovalActionRow.idempotency_key == key)
-        .where(ApprovalActionRow.status != ActionStatus.FAILED.value)
+        .where(
+            ApprovalActionRow.status.not_in(
+                (ActionStatus.FAILED.value, ActionStatus.ROLLED_BACK.value)
+            )
+        )
         .limit(1)
     ).scalar_one_or_none()
 
@@ -313,7 +337,7 @@ class ApprovalService:
             db = get_db_manager()
             with db.session_scope() as session:
                 if key:
-                    existing = _nonfailed_by_key(session, key)
+                    existing = _live_by_key(session, key)
                     if existing is not None:
                         return _row_to_pending(existing), False
                 row = ApprovalActionRow(
@@ -350,7 +374,7 @@ class ApprovalService:
                 raise
             db = get_db_manager()
             with db.session_scope() as session:
-                existing = _nonfailed_by_key(session, key)
+                existing = _live_by_key(session, key)
             if existing is None:
                 raise
             return _row_to_pending(existing), False
