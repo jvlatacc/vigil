@@ -104,8 +104,9 @@
     },
 
     "pagerduty": {
+      "_security_note": "Write tools (create_incident, manage_incidents, add_responders and 19 more) are a per-deployment opt-in: re-add --enable-write-tools to expose them. They ship off so a mutating call queues at Vigil's approval gate, the same disabled-by-default posture as atomic-red-team.",
       "command": "uvx",
-      "args": ["pagerduty-mcp==1.1.0", "--enable-write-tools"],
+      "args": ["pagerduty-mcp==1.1.0"],
       "env": {
         "PAGERDUTY_USER_API_KEY": "${PAGERDUTY_API_KEY}",
         "PAGERDUTY_API_HOST": "https://api.pagerduty.com"
