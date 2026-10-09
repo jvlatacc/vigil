@@ -195,6 +195,19 @@ services:
       # start.sh. DEV_MODE=true is the opt-in auth bypass for a developer machine.
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-}
       DEV_MODE: ${DEV_MODE:-false}
+      # OIDC federation — sign-in through the upstream IdP, brokered by the
+      # keycloak service below (--profile federation; docs/broker-setup.md).
+      # Empty issuer or client id means off: the /api/auth/oidc/* routes answer
+      # 404 and local login is untouched. The client secret never lives here —
+      # it rides OIDC_CLIENT_SECRET below (the secrets manager reads the
+      # environment as one of its fallbacks) or the console Secrets card.
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_SCOPES: ${OIDC_SCOPES:-}
+      OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_POST_LOGIN_REDIRECT: ${OIDC_POST_LOGIN_REDIRECT:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       # Chat and run projections. core/config.py defaults this to localhost:6989,
       # which was the agent layer's address while it shared the backend process.
       AGENT_URL: http://agent-serve:6989
@@ -898,6 +911,50 @@ services:
     profiles:
       - misp
 
+  # ─── Identity broker (opt-in: --profile federation) ──────────────────────
+
+  # Keycloak fronts the upstream FreeIPA directory so Vigil can sign people in
+  # with OIDC (Authorization Code + PKCE) instead of local passwords. Off by
+  # default: without --profile federation nothing here starts, and the
+  # backend's /api/auth/oidc/* routes keep answering 404. The realm, the
+  # vigil-console client, and the `groups` claim import from vigil-realm.json
+  # on first boot (--import-realm skips a realm that already exists); pointing
+  # the broker at FreeIPA and the backend at the broker is docs/broker-setup.md.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    container_name: deeptempo-keycloak
+    # start-dev is the loopback/no-TLS mode. A broker that leaves the host
+    # runs `start` with --hostname and TLS — same runbook, "Going to production".
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USER:-admin}
+      # Loud default on purpose — the same posture as the committed postgres
+      # password above: the loopback bind is the gate, and the runbook says to
+      # rotate it. Keycloak refuses to boot with an empty admin password.
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-change-me-keycloak-admin}
+      # Health on the management port (:9000) — default since Keycloak 26, made
+      # explicit here so a version bump does not silently unhealth the service.
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      # Loopback-only, like postgres/redis/pgadmin: the broker mints the
+      # sessions that become Vigil sign-ins.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+      - ./keycloak/vigil-realm.json:/opt/keycloak/data/import/vigil-realm.json:ro
+      - ./keycloak/healthcheck.sh:/healthcheck.sh:ro
+    healthcheck:
+      test: ["CMD", "bash", "/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    restart: unless-stopped
+    networks:
+      - deeptempo-network
+    profiles:
+      - federation
+
 volumes:
   postgres_data:
     driver: local
@@ -934,6 +991,8 @@ volumes:
   misp_files:
     driver: local
   misp_logs:
+    driver: local
+  keycloak_data:
     driver: local
 
 networks:
