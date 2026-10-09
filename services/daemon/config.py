@@ -68,6 +68,11 @@ class SchedulerConfig:
     cleanup_interval: int = 86400  # Daily
     cleanup_retention_days: int = 90
     approval_expiry_days: int = 7
+    # Speculative-containment lease sweep (core.response.fastpath):
+    # TTL expiry is datastore-enforced — the scan reads rows, not memory
+    # — so the sweep runs whether or not the fastpath enable switch is
+    # on: disabling stops NEW leases; it never orphans live ones.
+    fastpath_lease_sweep_interval: int = 60
 
 
 @dataclass
@@ -180,6 +185,9 @@ class DaemonConfig:
         config.scheduler.probe_interval = settings.daemon_probe_interval
         config.scheduler.cleanup_retention_days = settings.daemon_cleanup_retention_days
         config.scheduler.approval_expiry_days = settings.daemon_approval_expiry_days
+        config.scheduler.fastpath_lease_sweep_interval = (
+            settings.daemon_fastpath_lease_sweep_interval
+        )
 
         config.metrics.enabled = settings.daemon_metrics_enabled
         config.metrics.port = settings.daemon_health_port

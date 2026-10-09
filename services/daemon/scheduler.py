@@ -59,6 +59,8 @@ class TaskScheduler:
             "probes_scored": 0,
             "reports_generated": 0,
             "cleanups_run": 0,
+            "fastpath_leases_rolled_back": 0,
+            "fastpath_intents_reconciled": 0,
             "errors": 0,
         }
 
@@ -99,6 +101,20 @@ class TaskScheduler:
                     run_on_start=False,
                 )
             )
+
+        # Speculative-containment lease sweep (core.response.fastpath).
+        # Expiry is datastore-enforced — the scan reads rows, not memory —
+        # so this runs regardless of the fastpath enable switch:
+        # disabling stops NEW leases; it never orphans live ones.
+        self._tasks.append(
+            ScheduledTask(
+                name="fastpath_lease_sweep",
+                func=self._run_fastpath_lease_sweep,
+                interval=self.config.fastpath_lease_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
 
         # Hourly tick; the day-scoped finding_id makes the injection once a day.
         if self.config.probes_enabled:
@@ -404,6 +420,61 @@ class TaskScheduler:
             "cutoff_date": cutoff.isoformat(),
             "approvals_expired": expired,
             "read_log_removed": reads,
+        }
+
+    async def _run_fastpath_lease_sweep(self):
+        """Roll back expired containment leases and reconcile stuck intents.
+
+        Both drivers do their DB reads and executor calls off-thread
+        (asyncio.to_thread) with no session open across an executor call —
+        the same shape as the cleanup sweep above, and the spec's
+        priority-inversion guard: expiry fires regardless of queue depth.
+        Expiry here is datastore-enforced: the scan reads rows, not
+        memory, so a crashed or restarted daemon never leaves a lease
+        alive.
+        """
+        from core.response.fastpath.config import FastPathConfig
+        from core.response.fastpath.executors import default_registry
+        from core.response.fastpath.ledger import (
+            ContainmentLedger,
+            reconcile_stale_intents,
+            sweep_expired,
+        )
+
+        ledger = ContainmentLedger()
+        registry = default_registry()
+
+        rolled = await sweep_expired(ledger, registry)
+        self.stats["fastpath_leases_rolled_back"] += rolled["rolled_back"]
+
+        reconciled = await reconcile_stale_intents(
+            ledger,
+            registry,
+            FastPathConfig.from_settings().apply_timeout_seconds,
+        )
+        self.stats["fastpath_intents_reconciled"] += (
+            reconciled["retried_applied"] + reconciled["aborted_failed"]
+        )
+
+        if rolled["expired"] or reconciled["stale"]:
+            logger.info(
+                "Fastpath lease sweep: %d expired (%d rolled back, %d errors), "
+                "%d stale intents (%d retried, %d aborted)",
+                rolled["expired"],
+                rolled["rolled_back"],
+                rolled["errors"],
+                reconciled["stale"],
+                reconciled["retried_applied"],
+                reconciled["aborted_failed"],
+            )
+
+        return {
+            "expired_scanned": rolled["expired"],
+            "rolled_back": rolled["rolled_back"],
+            "expired_errors": rolled["errors"],
+            "stale_scanned": reconciled["stale"],
+            "retried_applied": reconciled["retried_applied"],
+            "aborted_failed": reconciled["aborted_failed"],
         }
 
     async def _run_probe_sweep(self):
