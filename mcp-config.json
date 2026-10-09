@@ -66,6 +66,21 @@
       }
     },
 
+    "_comment_native_transport": "A URL-based server may skip the mcp-remote bridge entirely: declare transport=streamable-http and url=, plus an auth block for the MCP authorization profile (OAuth 2.1: client_credentials for machine-to-machine servers, authorization_code+PKCE for user-delegated ones). Secret VALUES never appear here: client_secret_key/refresh_token_key name encrypted-secrets-store keys, and ${VAR} placeholders in the block's other fields (issuer_url, client_id, scopes, resource) resolve from the environment at load. An unresolvable secret leaves the server dormant ('awaiting credentials'), never connected unsigned. The bridged entries above stay until each vendor server migrates; tests/unit/_ratchets owns their pins.",
+
+    "azure-sentinel-native": {
+      "url": "https://sentinelmcp.microsoft.com/v1/mcp",
+      "transport": "streamable-http",
+      "auth": {
+        "type": "oauth2",
+        "grant": "client_credentials",
+        "issuer_url": "https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0",
+        "client_id": "${AZURE_SENTINEL_MCP_CLIENT_ID}",
+        "client_secret_key": "AZURE_SENTINEL_MCP_CLIENT_SECRET",
+        "resource": "https://sentinelmcp.microsoft.com"
+      }
+    },
+
     "splunk": {
       "command": "npx",
       "args": ["-y", "mcp-remote@0.1.49", "${SPLUNK_MCP_URL}"],
