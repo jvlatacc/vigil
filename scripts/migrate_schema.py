@@ -129,6 +129,17 @@ def add_findings_noise_mark(conn):
             ADD COLUMN IF NOT EXISTS noise_marked_by VARCHAR(50);
     """))
 
+# Where a finding's source-system provenance lives (for a Wazuh ingest: the
+# alert id, rule id/level, and agent identity the transform builds).
+# create_all adds the column to fresh installs; this covers existing
+# databases. Nullable, no backfill: findings stored before the column never
+# had their provenance kept for them.
+@migration("Add source_metadata column to findings")
+def add_findings_source_metadata(conn):
+    conn.execute(text("""
+        ALTER TABLE findings ADD COLUMN IF NOT EXISTS source_metadata JSONB;
+    """))
+
 @migration("Create GIN trigram index on findings.description")
 def create_findings_description_gin_index(conn):
     conn.execute(text("""
@@ -570,6 +581,60 @@ def seed_default_roles(conn):
         """), {"role_id": role_id, "name": name, "desc": description,
                "perms": permissions, "is_sys": is_system})
     logger.info("  Seeded default roles: admin, analyst, viewer")
+
+
+# ---------------------------------------------------------------------------
+# containment_actions table (speculative-containment lease ledger)
+# ---------------------------------------------------------------------------
+
+@migration("Create containment_actions lease ledger")
+def create_containment_actions(conn):
+    """The applied-effect ledger for speculative containment leases.
+
+    create_all builds the table on fresh installs; this step carries it to
+    upgraded databases, which create_all never alters. The guards mirror the
+    house pattern: IF NOT EXISTS answers the name check only after it demands
+    table ownership, so an unprivileged role would fail a no-op.
+    """
+    if not _table_exists(conn, "containment_actions"):
+        conn.execute(text("""
+            CREATE TABLE containment_actions (
+                id VARCHAR(80) PRIMARY KEY,
+                action_type VARCHAR(40) NOT NULL,
+                entity_type VARCHAR(30) NOT NULL,
+                entity_id TEXT NOT NULL,
+                status VARCHAR(16) NOT NULL DEFAULT 'pending_apply',
+                idempotency_key TEXT NOT NULL,
+                finding_id VARCHAR(50),
+                decision_rule TEXT NOT NULL,
+                observed JSONB NOT NULL DEFAULT '{}'::jsonb,
+                undo_payload JSONB,
+                is_shadow BOOLEAN NOT NULL DEFAULT FALSE,
+                applied_at TIMESTAMP,
+                expires_at TIMESTAMP,
+                ttl_seconds INTEGER,
+                rolled_back_at TIMESTAMP,
+                rollback_reason VARCHAR(30),
+                escalated_approval_action_id VARCHAR(80),
+                created_at TIMESTAMP NOT NULL DEFAULT now(),
+                updated_at TIMESTAMP NOT NULL DEFAULT now()
+            );
+        """))
+    # One ACTIVE lease (pending_apply or applied) per idempotency key; terminal
+    # states free the key so a retry after a failure is possible. Same partial
+    # index as approval_actions' retriable isolations, narrowed to the two
+    # active states.
+    if not _index_exists(conn, "uq_containment_actions_idempotency_key"):
+        conn.execute(text("""
+            CREATE UNIQUE INDEX uq_containment_actions_idempotency_key
+            ON containment_actions (idempotency_key)
+            WHERE status IN ('pending_apply', 'applied');
+        """))
+    if not _index_exists(conn, "idx_containment_actions_status_expires"):
+        conn.execute(text("""
+            CREATE INDEX idx_containment_actions_status_expires
+            ON containment_actions (status, expires_at);
+        """))
 
 
 # ---------------------------------------------------------------------------

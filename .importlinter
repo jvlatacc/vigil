@@ -67,6 +67,17 @@ source_modules =
 forbidden_modules =
     core.api
 
+[importlinter:contract:fastpath]
+name = the Fast-Path gate is deterministic: no model, no agents, no API surface, no deployables
+type = forbidden
+source_modules =
+    core.response.fastpath
+forbidden_modules =
+    services
+    core.agents
+    core.api
+    core.llm
+
 [importlinter:contract:ingestion]
 name = Federation drives Ingestion, never the reverse
 type = forbidden
@@ -103,3 +114,20 @@ forbidden_modules =
     services.api
     services.daemon
     services.worker
+    services.edge
+
+[importlinter:contract:edge]
+name = Edge imports nothing from core, tools or any other service (a sovereign node defends its segment alone)
+type = forbidden
+source_modules =
+    services.edge
+; Same rule as Medic's contract: every other deployable under services/, listed
+; by name — a forbidden contract can't say "services.* except Edge"
+; (services/edge/tests/test_isolation.py fails until a new service is added).
+forbidden_modules =
+    core
+    tools
+    services.api
+    services.daemon
+    services.worker
+    services.medic
