@@ -1,3 +1,4 @@
+import functools
 import json
 import logging
 from contextlib import contextmanager
@@ -84,6 +85,25 @@ def caller() -> str:
 
 def jdump(obj, indent=2):
     return json.dumps(obj, cls=_JsonEncoder, indent=indent)
+
+
+def _requires_cases_write(fn):
+    """A case-writing tool answers to the caller's grant, as the cases API does.
+
+    The check reads the bound principal -- the person this surface
+    authenticated -- so a credential whose owner lost ``cases.write`` cannot
+    write cases through MCP either. The four tools that funnel into the
+    registry's case writers are decorated too: one rule, checked at the door.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        refusal = tool_registry.case_write_refusal()
+        if refusal is not None:
+            return jdump(refusal)
+        return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _call(fn, **kwargs) -> str:
@@ -203,6 +223,7 @@ def get_case(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def create_case(
     title: str,
     description: str = "",
@@ -239,6 +260,7 @@ def _service_session() -> Iterator["Session"]:
 
 
 @mcp.tool()
+@_requires_cases_write
 def update_case(
     case_id: str,
     title: Optional[str] = None,
@@ -262,6 +284,7 @@ def update_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_finding_to_case(case_id: str, finding_id: str) -> str:
     """Attach a finding to a case."""
     return _call(
@@ -270,6 +293,7 @@ def add_finding_to_case(case_id: str, finding_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def remove_finding_from_case(case_id: str, finding_id: str) -> str:
     try:
         from core.cases import case_journal_service
@@ -294,6 +318,7 @@ def remove_finding_from_case(case_id: str, finding_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_activity(
     case_id: str,
     activity_type: str,
@@ -339,6 +364,7 @@ def add_case_activity(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_timeline_entry(
     case_id: str,
     event_description: str,
@@ -386,6 +412,7 @@ def add_case_timeline_entry(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_mitre_techniques(case_id: str, technique_ids: list) -> str:
     """
     Add MITRE ATT&CK technique IDs to a case to document the kill chain.
@@ -418,6 +445,7 @@ def add_case_mitre_techniques(case_id: str, technique_ids: list) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_resolution_step(
     case_id: str,
     description: str,
@@ -435,6 +463,7 @@ def add_resolution_step(
 
 
 @mcp.tool()
+@_requires_cases_write
 def bulk_add_findings_to_case(
     case_id: str, finding_ids: list, note: Optional[str] = None
 ) -> str:
@@ -494,6 +523,7 @@ def bulk_add_findings_to_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def create_case_from_killchain(
     title: str,
     finding_ids: list,
@@ -589,6 +619,7 @@ def create_case_from_killchain(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_comment(
     case_id: str,
     content: str,
@@ -660,6 +691,7 @@ def get_case_comments(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_evidence(
     case_id: str,
     evidence_type: str,
@@ -720,6 +752,7 @@ def add_case_evidence(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_ioc(
     case_id: str,
     ioc_type: str,
@@ -784,6 +817,7 @@ def add_case_ioc(
 
 
 @mcp.tool()
+@_requires_cases_write
 def bulk_add_iocs(case_id: str, iocs: list) -> str:
     """
     Bulk add multiple IOCs to a case at once.
@@ -872,6 +906,7 @@ def get_case_iocs(case_id: str, ioc_type: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_task(
     case_id: str,
     title: str,
@@ -931,6 +966,7 @@ def add_case_task(
 
 
 @mcp.tool()
+@_requires_cases_write
 def update_case_task(
     task_id: int,
     status: Optional[str] = None,
@@ -1011,6 +1047,7 @@ def get_case_tasks(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def link_related_cases(
     case_id: str,
     related_case_id: str,
@@ -1070,6 +1107,7 @@ def link_related_cases(
 
 
 @mcp.tool()
+@_requires_cases_write
 def escalate_case(
     case_id: str,
     escalated_to: str,
@@ -1135,6 +1173,7 @@ def escalate_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def close_case(
     case_id: str,
     closure_category: str,

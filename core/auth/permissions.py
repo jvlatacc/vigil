@@ -18,6 +18,7 @@ from core.storage.models import User
 from core.storage.unit_of_work import unit_of_work
 
 APPROVE_PERMISSION = "ai_decisions.approve"
+CASES_WRITE_PERMISSION = "cases.write"
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
