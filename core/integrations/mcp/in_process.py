@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, List
 
 from opentelemetry import trace
 
-from core.integrations.mcp.surface import VIGIL_SERVER
+from core.audit import tool_calls
+from core.integrations.mcp.surface import VIGIL_SERVER, current_caller
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +78,31 @@ async def call_tool(
     The timeout is kept for the same reason. A call down a pipe was bounded;
     a call to a function is not bounded by anything unless it is made so, and
     a tool that never returns would otherwise hold its caller forever.
+
+    The one answer the pipe could not give — who called — is the audit row
+    below: every call is recorded with the caller ``current_caller()`` names,
+    or "agent" when none is bound, and the write is fail-closed like every
+    audit row. A call whose row cannot land raises rather than answering as a
+    success.
     """
+    started = time.perf_counter()
+    result = await _dispatch(name, args, timeout)
+    tool_calls.record_tool_call(
+        actor_username=current_caller() or tool_calls.ACTOR_AGENT,
+        surface=tool_calls.SURFACE_IN_PROCESS,
+        server_name=VIGIL_SERVER,
+        tool_name=name,
+        args=args or {},
+        decision=tool_calls.DECISION_ALLOW,
+        outcome="error" if result.get("error") else "ok",
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        trace_id=tool_calls.current_trace_id(),
+    )
+    return result
+
+
+async def _dispatch(name: str, args: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+    """The call itself: bounded, never raising, always the pipe's shape."""
     try:
         result = await asyncio.wait_for(
             _server().call_tool(name, args or {}), timeout=timeout

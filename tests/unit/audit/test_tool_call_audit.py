@@ -14,6 +14,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+from opentelemetry import trace
 
 from core.audit import tool_calls
 from core.storage.models import ToolCallAudit
@@ -74,6 +78,32 @@ class TestArgsDigest:
 
     def test_no_arguments_digests_to_nothing(self):
         assert tool_calls.hash_args(None) == (None, None)
+
+
+class TestTheTraceId:
+    """The trace id is a correlation strength, never a condition."""
+
+    @staticmethod
+    def _span(trace_id):
+        span = MagicMock()
+        span.get_span_context.return_value = SimpleNamespace(trace_id=trace_id)
+        return span
+
+    def test_a_real_trace_is_spelled_in_hex(self, monkeypatch):
+        monkeypatch.setattr(trace, "get_current_span", lambda: self._span(0xABC))
+        assert tool_calls.current_trace_id() == format(0xABC, "032x")
+
+    def test_no_trace_is_empty_not_zero(self, monkeypatch):
+        monkeypatch.setattr(trace, "get_current_span", lambda: self._span(0))
+        assert tool_calls.current_trace_id() is None
+
+    def test_an_unreadable_context_is_telemetry_off(self, monkeypatch):
+        # An instrumented stand-in whose trace id is not an int is the same
+        # as telemetry being off: the row lands, the id stays empty.
+        monkeypatch.setattr(
+            trace, "get_current_span", lambda: self._span("not-an-int")
+        )
+        assert tool_calls.current_trace_id() is None
 
 
 class TestTheWriter:

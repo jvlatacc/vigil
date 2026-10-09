@@ -44,7 +44,10 @@ class ToolCallAudit(Base):
     actor_username: Mapped[str] = mapped_column(Text, nullable=False)
     idp_subject: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Where the call entered and what it named.
+    # Where the call entered and what it named. Enforcement rows (agent,
+    # mcp-inbound) record a permission decision; dispatch rows (mcp-client,
+    # in-process, vstrike) record what the far side received and answered.
+    # The vocabulary lives in core.audit.tool_calls.
     surface: Mapped[str] = mapped_column(Text, nullable=False)
     server_name: Mapped[str] = mapped_column(Text, nullable=False)
     tool_name: Mapped[str] = mapped_column(Text, nullable=False)

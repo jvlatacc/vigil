@@ -1,8 +1,24 @@
-"""MCP client service for connecting to MCP servers and using their tools with persistent connections."""
+"""MCP client service for connecting to MCP servers and using their tools with persistent connections.
+
+**The stdio attribution contract.** A stdio session here is persistent per
+server, not per user: ``PersistentServerSession`` holds one child process per
+server for as long as Vigil runs, and every caller's dispatch shares it. A
+per-call identity therefore cannot cross the pipe — no argument, environment
+variable, or protocol field can carry "this dispatch is for user X" into a
+child that is already running. What attributes a stdio tool call is the pair
+Vigil controls end to end: the hash-chained ``tool_call_audit`` row the
+``call_tool`` funnel writes (actor read from ``current_caller()``, or
+``"agent"`` when no person is bound), and the OTEL trace id the row shares
+with the ``mcp.call_tool`` span. Per-user bearer tokens apply to HTTP-capable
+connectors, not here; until a connector speaks HTTP, the audit row plus trace
+id is the whole attribution.
+"""
 
 import asyncio
+import json
 import logging
 import threading
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 try:
@@ -26,8 +42,10 @@ except ImportError:
             ClientSession = Any
             StdioServerParameters = Any
 
+from core.audit import tool_calls
 from core.integrations.mcp.child_env import ca_bundle_env
 from core.integrations.mcp.service import MCPService
+from core.integrations.mcp.surface import current_caller
 from core.secrets import get_secret
 
 logger = logging.getLogger(__name__)
@@ -493,10 +511,36 @@ class MCPClient:
 
         Returns:
             Tool result dictionary
-        """
-        import json as _json
-        import time as _time
 
+        Every dispatch is audited — the actor ``current_caller()`` names (or
+        "agent"), the arguments by digest, and the outcome the server gave, a
+        timeout and a refused connect included. The write is fail-closed: a
+        dispatch whose audit row cannot land raises rather than answering, so
+        this funnel never returns an unaudited result.
+        """
+        started = time.perf_counter()
+        result = await self._dispatch_tool(server_name, tool_name, arguments, timeout)
+        tool_calls.record_tool_call(
+            actor_username=current_caller() or tool_calls.ACTOR_AGENT,
+            surface=tool_calls.SURFACE_MCP_CLIENT,
+            server_name=server_name,
+            tool_name=tool_name,
+            args=arguments,
+            decision=tool_calls.DECISION_ALLOW,
+            outcome="error" if result.get("error") else "ok",
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            trace_id=tool_calls.current_trace_id(),
+        )
+        return result
+
+    async def _dispatch_tool(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        timeout: float,
+    ) -> Dict[str, Any]:
+        """The dispatch itself: session management, timeout, span, result shape."""
         if not MCP_AVAILABLE:
             return {
                 "error": "MCP SDK not available",
@@ -511,7 +555,7 @@ class MCPClient:
 
         # OTEL span for transport-level MCP call
         _mcp_span = None
-        _mcp_t0 = _time.monotonic()
+        _mcp_t0 = time.monotonic()
         try:
             from opentelemetry.trace import SpanKind
             from opentelemetry.trace import StatusCode as _SC
@@ -526,7 +570,8 @@ class MCPClient:
                     "mcp.server.name": server_name,
                     "mcp.transport": "stdio",
                     "vigil.tool.name": tool_name,
-                    "vigil.tool.input_size": len(_json.dumps(arguments, default=str)),
+                    "vigil.tool.input_size": len(json.dumps(arguments, default=str)),
+                    "vigil.actor": current_caller() or tool_calls.ACTOR_AGENT,
                 },
             )
         except Exception:
@@ -583,11 +628,11 @@ class MCPClient:
                     if is_err and _SC is not None:
                         _mcp_span.set_status(_SC.ERROR, _detail)
                     _mcp_span.set_attribute(
-                        "vigil.tool.output_size", len(_json.dumps(result, default=str))
+                        "vigil.tool.output_size", len(json.dumps(result, default=str))
                     )
                     _mcp_span.set_attribute(
                         "vigil.tool.duration_ms",
-                        round((_time.monotonic() - _mcp_t0) * 1000, 1),
+                        round((time.monotonic() - _mcp_t0) * 1000, 1),
                     )
                     _mcp_span.end()
             except Exception:

@@ -29,10 +29,24 @@ from core.storage.unit_of_work import unit_of_work
 
 logger = logging.getLogger(__name__)
 
-# Where a call entered. The writer is shared by both, which is why the
-# vocabulary is defined here rather than at either door.
+# Where a call entered. The writer is shared by all of them, which is why the
+# vocabulary is defined here rather than at any one door. The first two are
+# enforcement points — a permission decision is made there, so deny rows are
+# possible. The rest are execution points — the call is dispatched there, so
+# the row carries what the far side actually received and answered.
 SURFACE_AGENT = "agent"
 SURFACE_MCP_INBOUND = "mcp-inbound"
+
+# Outbound vendor dispatch (core/integrations/mcp/client.py): the funnel every
+# vendor MCP tool call passes through on its way down the stdio pipe.
+SURFACE_MCP_CLIENT = "mcp-client"
+
+# Vigil's own tools, called in this process (core/integrations/mcp/in_process.py).
+SURFACE_IN_PROCESS = "in-process"
+
+# Outbound VStrike REST and MCP calls (core/integrations/vstrike/client.py).
+# VStrike sees the service account; the acting Vigil user is the row's actor.
+SURFACE_VSTRIKE = "vstrike"
 
 # What the two decisions are called. Deny is a recorded outcome, not an error
 # path — the reason it happened rides in deny_reason.
@@ -100,9 +114,13 @@ def current_trace_id() -> Optional[str]:
     except Exception:  # noqa: BLE001 — no telemetry package, no trace id
         return None
     context = trace.get_current_span().get_span_context()
-    if not context.is_valid:
+    # An int trace id is the API's contract (0 when there is no trace).
+    # Anything else — an instrumented stand-in, a non-standard tracer — is
+    # telemetry Vigil cannot read, which is the same as it being off.
+    trace_id = getattr(context, "trace_id", None)
+    if not isinstance(trace_id, int) or trace_id == 0:
         return None
-    return f"{context.trace_id:032x}"
+    return f"{trace_id:032x}"
 
 
 def _field(value: Any) -> str:
