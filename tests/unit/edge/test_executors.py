@@ -17,17 +17,20 @@ from core.edge import executors
 from core.edge.executors import (
     BLOCKED,
     CLEAR,
+    DRY_RUN,
     EXECUTED,
     FAILED,
     NFT_SET,
     NFT_TABLE,
     NO_OP,
     UNKNOWN,
+    DryRunBlockIpExecutor,
     ExecutionResult,
     LocalExecutor,
     NftablesBlockIpExecutor,
     UnregisteredActionType,
     _run_nft,
+    build_default_registry,
     executor_for,
     register,
 )
@@ -408,5 +411,55 @@ class TestUnregisteredTypesStillRefused:
         registry: dict[str, LocalExecutor] = {}
         register(registry, NftablesBlockIpExecutor())
         assert executor_for(registry, "block_ip").action_type == "block_ip"
+        with pytest.raises(UnregisteredActionType):
+            executor_for(registry, "process_kill")
+
+
+class TestDryRunBlockIpExecutor:
+    def test_enforce_never_claims_enforcement(self):
+        """The fallback's honesty: a success whose status states that no
+        containment occurred — the reconcile side reads dry-run executions
+        as review items, not enforced actions."""
+        result = DryRunBlockIpExecutor().enforce(ACTION, TARGET)
+        assert result.success is True
+        assert result.status == DRY_RUN
+        assert result.end_state == CLEAR
+        assert "nothing was enforced" in result.message
+
+    def test_undo_is_equally_honest(self):
+        result = DryRunBlockIpExecutor().undo(ACTION, TARGET)
+        assert result.success is True
+        assert result.status == DRY_RUN
+        assert result.end_state == CLEAR
+
+    def test_it_satisfies_the_protocol(self):
+        registry: dict[str, LocalExecutor] = {}
+        register(registry, DryRunBlockIpExecutor())
+        assert executor_for(registry, "block_ip").name == "dryrun"
+
+
+class TestDefaultRegistry:
+    def test_nftables_selected_when_available(self):
+        registry = build_default_registry(nftables=True)
+        assert isinstance(registry["block_ip"], NftablesBlockIpExecutor)
+
+    def test_dryrun_selected_when_nftables_unavailable_or_unprivileged(self):
+        """The selection criterion: an unprivileged node falls back to the
+        DryRun executor rather than one that would fail louder later."""
+        registry = build_default_registry(nftables=False)
+        assert isinstance(registry["block_ip"], DryRunBlockIpExecutor)
+
+    def test_selection_probes_availability_when_not_told(self, monkeypatch):
+        monkeypatch.setattr(
+            NftablesBlockIpExecutor, "available", classmethod(lambda cls: (False, "no"))
+        )
+        registry = build_default_registry()
+        assert isinstance(registry["block_ip"], DryRunBlockIpExecutor)
+
+    def test_block_ip_is_the_only_registered_type(self):
+        """v1 scope: every other action type is unregistered, so the
+        registry door refuses it before any subprocess can exist."""
+        registry = build_default_registry(nftables=False)
+        assert list(registry) == ["block_ip"]
         with pytest.raises(UnregisteredActionType):
             executor_for(registry, "process_kill")

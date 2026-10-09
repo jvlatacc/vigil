@@ -49,14 +49,17 @@ from core.edge.policy import EdgeAction
 __all__ = [
     "BLOCKED",
     "CLEAR",
+    "DRY_RUN",
     "EXECUTED",
     "FAILED",
     "NO_OP",
     "UNKNOWN",
+    "DryRunBlockIpExecutor",
     "ExecutionResult",
     "LocalExecutor",
     "NftablesBlockIpExecutor",
     "UnregisteredActionType",
+    "build_default_registry",
     "executor_for",
     "register",
 ]
@@ -586,3 +589,68 @@ class NftablesBlockIpExecutor:
         """nft's first error line — its stderr is how failures explain."""
         lines = (result.stderr or "").strip().splitlines()
         return lines[0] if lines else f"exit {result.returncode} (no stderr)"
+
+
+# --- the fallback executor -----------------------------------------------------
+
+
+class DryRunBlockIpExecutor:
+    """The fallback executor: every decision journals, nothing is enforced.
+
+    Selected by ``build_default_registry`` whenever nftables is unavailable
+    or unprivileged — a warden must never go silent about what it would
+    have done, and must never pretend a block happened. Its results
+    therefore succeed (the pipeline continues and the decision is
+    journaled) with ``status="dry-run"``: the one status under which
+    "success" states, rather than implies, that no containment occurred —
+    the reconcile side reads dry-run executions as review items, not
+    enforced actions. The end state is ``clear`` because nothing was ever
+    blocked by this executor.
+    """
+
+    action_type = "block_ip"
+    name = "dryrun"
+
+    def enforce(self, action: EdgeAction, target: str) -> ExecutionResult:
+        return ExecutionResult(
+            success=True,
+            status=DRY_RUN,
+            executor=self.name,
+            end_state=CLEAR,
+            message=f"dry-run: {target} would be blocked for"
+            f" {action.ttl_minutes}m — nothing was enforced",
+        )
+
+    def undo(self, action: EdgeAction, target: str) -> ExecutionResult:
+        return ExecutionResult(
+            success=True,
+            status=DRY_RUN,
+            executor=self.name,
+            end_state=CLEAR,
+            message=f"dry-run: {target} would be unblocked — nothing was lifted",
+        )
+
+
+# --- the default registry ------------------------------------------------------
+
+
+def build_default_registry(*, nftables: bool | None = None) -> dict[str, LocalExecutor]:
+    """The node's executor allowlist: ``block_ip`` → nftables when available
+    and privileged, else the DryRun fallback.
+
+    An action type this function does not register — every type but
+    ``block_ip`` in v1 — is absent from the registry, so ``executor_for``
+    refuses it before any subprocess can exist; there is no configuration
+    that widens the set, only code that calls ``register``. Selection is a
+    startup decision made once, so the mode the health endpoint reports is
+    the mode that enforces. ``nftables`` is injectable for tests; the real
+    selection probes ``NftablesBlockIpExecutor.available``.
+    """
+    if nftables is None:
+        nftables = NftablesBlockIpExecutor.available()[0]
+    registry: dict[str, LocalExecutor] = {}
+    if nftables:
+        register(registry, NftablesBlockIpExecutor())
+    else:
+        register(registry, DryRunBlockIpExecutor())
+    return registry
