@@ -1657,6 +1657,7 @@
     "empty.to_dict.default": {
       "created_at": null,
       "email": null,
+      "external_subject": null,
       "full_name": null,
       "is_active": null,
       "is_verified": null,
@@ -1671,6 +1672,7 @@
     "populated.to_dict.default": {
       "created_at": "2024-03-14T15:09:26.535000+00:00",
       "email": "email-value",
+      "external_subject": "external_subject-value",
       "full_name": "full_name-value",
       "is_active": true,
       "is_verified": true,
