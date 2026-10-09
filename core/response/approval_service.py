@@ -77,6 +77,10 @@ class ActionType(Enum):
     WAF_BLOCK = "waf_block"  # Cloudflare WAF IP Access Rule
     GATEWAY_BLOCK = "gateway_block"  # Cloudflare Zero Trust Gateway DNS/HTTP rule
     ACCESS_REVOKE = "access_revoke"  # Cloudflare Zero Trust Access session revoke
+    # MTD: divert an attacker's flows into decoy services instead of answering
+    # from production. Reversible (unroute restores the path); enforced through
+    # a backend integration, so execution without one is an honest failure.
+    HONEY_ROUTE = "honey_route"
     CUSTOM = "custom"
 
 
