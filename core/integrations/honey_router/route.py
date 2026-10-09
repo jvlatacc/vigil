@@ -32,7 +32,7 @@ import ipaddress
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Protocol, Tuple
 
 from core.integrations._base.config import resolve
@@ -108,7 +108,11 @@ def parse_endpoint(endpoint: str) -> Tuple[str, int]:
     """
     text = endpoint.strip()
     if text.startswith("["):  # [2001:db8::1]:22
-        host, _, rest = text.partition("]")
+        end = text.find("]")
+        if end == -1:
+            raise ValueError(f"endpoint {endpoint!r} has no port")
+        host = text[1:end]
+        rest = text[end + 1 :]
         if not rest.startswith(":"):
             raise ValueError(f"endpoint {endpoint!r} has no port")
         port_text = rest[1:]
@@ -349,8 +353,13 @@ def is_route_expired(
         ttl = int(ttl_seconds)
     except (TypeError, ValueError):
         return False
+    # Naive datetimes are UTC by repo convention (Postgres timestamptz
+    # returns aware values; legacy naive columns store UTC) — normalize
+    # both sides so a naive/aware mix can never raise mid-sweep.
     if executed.tzinfo is None:
-        executed = executed.replace(tzinfo=now.tzinfo)
+        executed = executed.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     return now >= executed + timedelta(seconds=ttl)
 
 
