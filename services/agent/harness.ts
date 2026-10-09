@@ -78,6 +78,9 @@ export function harnessFor<K extends Record<string, unknown>>(
   memory: Memory = nullMemory,
   seed: Seed = FRESH,
   principal?: ToolPrincipal,
+  // A headless run binds no person, but names itself: the far side authorizes
+  // the dispatch against the initiator stamped on that run at start.
+  runId?: string,
 ): Harness<K> {
   const tools = process.env["VIGIL_TOOLS_URL"] ?? "http://localhost:6987/internal/tools/invoke";
   return {
@@ -89,7 +92,12 @@ export function harnessFor<K extends Record<string, unknown>>(
     // model's name priced a paid "llama" on a commercial host at $0.
     provider: openAiSurface(client, spec.model, limiter, spec.provider ?? "bifrost", wireModel(spec), vk, spec.effort),
     registry: registryOf(toolsFrom(spec.tools), grantsFor(kind, spec)),
-    dispatch: remoteDispatch({ url: tools, token: internalToken(), ...(principal === undefined ? {} : { principal }) }),
+    dispatch: remoteDispatch({
+      url: tools,
+      token: internalToken(),
+      ...(principal === undefined ? {} : { principal }),
+      ...(runId === undefined ? {} : { runId }),
+    }),
     budget: budgetOf(spec.budgets, unmeteredQuota, Date.now, seed, prices),
     // Wrapped rather than replaced: whatever the caller passed still answers the
     // cue-shaped recall, and the keyed read is added over the same endpoint the
@@ -109,4 +117,7 @@ export type HarnessFactory = <K extends Record<string, unknown>>(
   seed?: Seed,
   // Only chat has a person behind it; the worker and hunts pass none.
   principal?: ToolPrincipal,
+  // Chat carries the person; a run carries the run, and the initiator stamped
+  // on it at start is who its dispatch is checked against.
+  runId?: string,
 ) => Harness<K>;

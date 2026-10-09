@@ -77,6 +77,19 @@ describe("a tool that runs in the other process", () => {
     expect(hunt).not.toHaveProperty("principal");
   });
 
+  // A run that binds no person still names itself: the far side resolves who
+  // the call is for from the initiator stamped on that run at start.
+  it("sends the run id only when the dispatch serves a run", async () => {
+    const { fetch, sent } = answering({ ok: true, rows: [], rowCount: 0, capped: false, sourceSystem: "vigil" });
+    const url = "http://127.0.0.1:6987/internal/tools/invoke";
+    await remoteDispatch({ url, token: "shhh", fetch, runId: "run-9" }).invoke(TOOL, {});
+    await remoteDispatch({ url, token: "shhh", fetch }).invoke(TOOL, {});
+
+    const [run, unnamed] = await Promise.all(sent.map((request) => request.json() as Promise<Record<string, unknown>>));
+    expect(run!["run_id"]).toBe("run-9");
+    expect(unnamed).not.toHaveProperty("run_id");
+  });
+
   it("carries the shared secret and nothing else identifying", async () => {
     const { fetch, sent } = answering({ ok: true, rows: [], rowCount: 0, capped: false, sourceSystem: "vigil" });
     await dispatchTo(fetch).invoke(TOOL, {});

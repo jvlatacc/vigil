@@ -92,7 +92,7 @@ export async function streamChat(state: State, request: ChatRequest, res: Server
   // refuse: the headers are already sent, so a refusal is a frame or it is nothing.
   try {
     const spec = chatSpec(request);
-    const harness = build("chat" as RunKind, spec, state, await memoryFor(state, request.parent_run_id), FRESH, request.principal);
+    const harness = build("chat" as RunKind, spec, state, await memoryFor(state, request.parent_run_id), FRESH, request.principal, request.run_id);
     const stream = runChat(harness, { run_id: request.run_id, spec, turns: request.turns });
 
     for (;;) {
