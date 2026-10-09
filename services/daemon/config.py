@@ -37,6 +37,10 @@ class ProcessingConfig:
     enrich_backfill_max_age_hours: int = (
         168  # only backfill findings newer than this (7d)
     )
+    # Compiled-policy fast path (docs/adr/0001): decide triage from an active
+    # policy before any LLM call. Default off; the flag is an autonomy knob
+    # declared in INTENT.md (triage.jit_fast_path_enabled).
+    jit_fast_path_enabled: bool = False
 
 
 @dataclass
@@ -157,6 +161,7 @@ class DaemonConfig:
         config.processing.enrich_backfill_max_age_hours = (
             settings.daemon_enrich_backfill_max_age_hours
         )
+        config.processing.jit_fast_path_enabled = settings.jit_fast_path_enabled
 
         config.response = ResponseConfig.from_settings(settings)
 
