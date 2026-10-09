@@ -126,8 +126,10 @@ CREATE TABLE IF NOT EXISTS compiled_policy_decisions (
         CHECK (outcome IN ('applied', 'shadow_logged', 'no_match')),
     CONSTRAINT ck_compiled_policy_decisions_no_match
         CHECK ((outcome = 'no_match') = (policy_id IS NULL)),
+    -- mode/outcome pairing, three-valued safe: mode is NULL exactly when
+    -- nothing matched (no_match); every hit names its mode.
     CONSTRAINT ck_compiled_policy_decisions_mode_outcome
-        CHECK ((outcome = 'applied') IS NOT DISTINCT FROM (mode = 'active')),
+        CHECK ((mode IS NULL) = (outcome = 'no_match')),
     CONSTRAINT ck_compiled_policy_decisions_agreement_source
         CHECK (agreement_source IN ('llm', 'analyst')),
     CONSTRAINT ck_compiled_policy_decisions_agreement_pairing
