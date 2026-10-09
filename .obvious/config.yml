@@ -1,0 +1,7 @@
+# Obvious repo policy — auto-detected from GitHub repo settings (jvlatacc/vigil)
+default_branch: main
+merge:
+  method: squash        # squash / merge / rebase all enabled upstream; squash is the default
+  allow_merge_commit: true
+  allow_rebase_merge: true
+  allow_auto_merge: false
