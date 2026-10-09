@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -97,6 +98,9 @@ type BPFKernel struct {
 	mu    sync.Mutex
 	kinds map[Kind]*bpfKindState
 	caps  map[Kind]Capability
+	// closing is set at the top of Close; the sink supervisor checks it
+	// before every redial so a shutdown cannot leave it dialing forever.
+	closing atomic.Bool
 }
 
 // NewBPFKernel loads every kind's object, attaches its programs, and pins
@@ -335,62 +339,160 @@ func (k *BPFKernel) Mode(kind Kind) string {
 	return bk.mode
 }
 
-// SetSink inserts the connected sink socket at sockmap index 0 — the
-// redirect target for enrolled flows (SinkSetter).
+// SetSink installs the connected sink socket at sockmap index 0 — the
+// redirect target for enrolled flows (SinkSetter) — and hands it to a
+// supervisor that keeps it alive for the daemon's lifetime.
 func (k *BPFKernel) SetSink(conn net.Conn) error {
 	tcp, ok := conn.(*net.TCPConn)
 	if !ok {
 		return fmt.Errorf("sink must be a TCP connection to the tarpit/capture listener, got %T", conn)
 	}
-	// File() dups the fd; keep both the dup and the original connection
-	// referenced for the daemon's lifetime — the runtime finalizer closes
-	// the dup otherwise, which would silently empty sockmap slot 0.
+	k.mu.Lock()
+	bk, ok := k.kinds[KindSocketRedirect]
+	if !ok {
+		k.mu.Unlock()
+		return fmt.Errorf("%s: %w", KindSocketRedirect, errKindNotLoaded)
+	}
+	sockmap := bk.coll.Maps["sink_sockets"]
+	if sockmap == nil {
+		k.mu.Unlock()
+		return errors.New("object has no sink_sockets sockmap")
+	}
+	k.mu.Unlock()
+	if err := k.installSink(sockmap, bk, tcp); err != nil {
+		return err
+	}
+	// Echo bridge + reconnect supervisor: sk_msg redirection deposits
+	// payloads on THIS socket's receive queue — the daemon's end of the
+	// sink connection — so without a reader the bytes sit unread and the
+	// sink application never sees them. The supervisor runs the read-
+	// and-echo bridge, withdraws the redirect capability while the sink
+	// is unreachable, and redials with capped backoff until shutdown.
+	sup := &sinkSupervisor{
+		addr: conn.RemoteAddr().String(),
+		log:  k.log,
+		dial: func(addr string) (net.Conn, error) { return net.Dial("tcp", addr) },
+		install: func(c net.Conn) error {
+			return k.installSink(sockmap, bk, c)
+		},
+		degrade: func(reason string) { k.MarkDegraded(KindSocketRedirect, reason) },
+		restore: func() {
+			k.mu.Lock()
+			k.caps[KindSocketRedirect] = Capability{Supported: true}
+			k.mu.Unlock()
+		},
+		closing: func() bool { return k.closing.Load() },
+	}
+	go sup.run(tcp)
+	return nil
+}
+
+// installSink dups the connection's fd into the sockmap at slot 0 and
+// records it on the kind state. The previous sink fd — a dead
+// connection's — is closed first so a long-lived daemon cannot leak one
+// per reconnect.
+func (k *BPFKernel) installSink(sockmap *ebpf.Map, bk *bpfKindState, conn net.Conn) error {
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return fmt.Errorf("sink must be a TCP connection to the tarpit/capture listener, got %T", conn)
+	}
+	// File() dups the fd; the dup is kept referenced on the kind state for
+	// the connection's lifetime — the runtime finalizer closes it
+	// otherwise, which would silently empty sockmap slot 0.
 	file, err := tcp.File()
 	if err != nil {
 		return fmt.Errorf("sink fd: %w", err)
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	bk, ok := k.kinds[KindSocketRedirect]
-	if !ok {
-		file.Close()
-		return fmt.Errorf("%s: %w", KindSocketRedirect, errKindNotLoaded)
-	}
-	sockmap := bk.coll.Maps["sink_sockets"]
-	if sockmap == nil {
-		file.Close()
-		return errors.New("object has no sink_sockets sockmap")
-	}
 	if err := sockmap.Update(uint32(0), uint32(file.Fd()), ebpf.UpdateAny); err != nil {
 		file.Close()
 		return fmt.Errorf("inserting sink socket into sockmap: %w", err)
 	}
+	if bk.sinkFile != nil {
+		_ = bk.sinkFile.Close()
+	}
 	bk.sinkConn = conn
 	bk.sinkFile = file
-	// Echo bridge: sk_msg redirection deposits payloads on THIS socket's
-	// receive queue — the daemon's end of the sink connection — so
-	// without a reader the bytes sit unread and the sink application
-	// never sees them. Read them and write them straight back down the
-	// wire: they then travel as ordinary TCP data to the configured
-	// tarpit/capture listener. Teardown closes the connection, which
-	// ends the bridge with a read error.
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, err := conn.Read(buf)
-			if n > 0 {
-				if _, werr := conn.Write(buf[:n]); werr != nil {
-					k.log.Warn("sink bridge write failed; redirected payloads stop reaching the sink", "err", werr)
-					return
-				}
+	return nil
+}
+
+// sinkSupervisor owns the daemon's end of the sink connection: without it
+// a sink restart would leave a dead socket in sockmap slot 0 — the verdict
+// still fires and the counter still ticks, but payloads pile up on a
+// closed receive queue: hollow enforcement, the exact failure the startup
+// capability probe exists to prevent. The hooks are injected so the
+// reconnect semantics are unit-testable without a loaded collection.
+type sinkSupervisor struct {
+	addr    string
+	log     *slog.Logger
+	dial    func(addr string) (net.Conn, error)
+	install func(net.Conn) error
+	degrade func(reason string)
+	restore func()
+	closing func() bool
+}
+
+func (s *sinkSupervisor) run(initial net.Conn) {
+	conn := initial
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
+	backoff := 500 * time.Millisecond
+	for {
+		s.bridge(conn)
+		_ = conn.Close()
+		conn = nil
+		if s.closing() {
+			return
+		}
+		s.degrade("sink connection lost; redirect enforcement degraded until the sink returns")
+		for conn == nil {
+			if s.closing() {
+				return
 			}
+			time.Sleep(backoff)
+			if backoff < 5*time.Second {
+				backoff *= 2
+			}
+			next, err := s.dial(s.addr)
 			if err != nil {
-				k.log.Info("sink bridge ended", "err", err)
+				s.log.Warn("sink reconnect failed", "addr", s.addr, "err", err)
+				continue
+			}
+			if err := s.install(next); err != nil {
+				_ = next.Close()
+				s.log.Warn("sink reconnect could not install socket", "err", err)
+				continue
+			}
+			conn = next
+			backoff = 500 * time.Millisecond
+			s.restore()
+			s.log.Info("sink reconnected; redirect enforcement restored", "addr", s.addr)
+		}
+	}
+}
+
+// bridge echoes redirected payloads down the wire to the sink listener.
+// Every exit path (EOF, reset, write failure) means the connection is
+// dead or dying; the supervisor decides between reconnect and shutdown.
+func (s *sinkSupervisor) bridge(conn net.Conn) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			if _, werr := conn.Write(buf[:n]); werr != nil {
+				s.log.Warn("sink bridge write failed; redirected payloads stop reaching the sink", "err", werr)
 				return
 			}
 		}
-	}()
-	return nil
+		if err != nil {
+			s.log.Info("sink bridge ended", "err", err)
+			return
+		}
+	}
 }
 
 // MarkDegraded withdraws a primitive's capability after startup (Degrader) —
@@ -760,6 +862,9 @@ func (k *BPFKernel) refreshClock() error {
 // program on graceful shutdown; a crashed daemon leaves it attached, where
 // map expiries (not the daemon) bound its effect.
 func (k *BPFKernel) Close() error {
+	// Stop the sink supervisor before tearing the sink connection down,
+	// so it cannot redial into a freed collection.
+	k.closing.Store(true)
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	var errs []error

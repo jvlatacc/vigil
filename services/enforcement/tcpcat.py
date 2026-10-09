@@ -12,7 +12,10 @@ lock = threading.Lock()
 
 
 def handle(conn, peer):
-    conn.settimeout(5)
+    # No recv timeout: a forensic sink holds idle connections — the
+    # daemon's redirect bridge may sit quiet for minutes between
+    # redirected flows, and dropping its connection on idleness strands
+    # redirected payloads on a dead socket.
     try:
         while True:
             data = conn.recv(4096)
@@ -21,7 +24,7 @@ def handle(conn, peer):
             with lock:
                 with open(out, "ab") as fh:
                     fh.write(data)
-    except (socket.timeout, OSError):
+    except OSError:
         pass
     finally:
         conn.close()

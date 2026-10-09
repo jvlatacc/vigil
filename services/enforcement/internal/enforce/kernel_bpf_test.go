@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -411,5 +413,119 @@ func pollStateNot(t *testing.T, pid int, notWant string, d time.Duration) string
 			return state
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestSinkSupervisorReconnectsAndGates pins the sink supervisor's
+// contract against a real TCP listener (no kernel objects needed — the
+// hooks are injected): the bridge forwards bytes deposited on the
+// daemon's end of the sink connection back down the wire; a dead sink
+// withdraws the redirect capability; a returning sink is redialed with
+// backoff and restores it; shutdown stops the redial loop instead of
+// leaving a supervisor dialing into the void.
+func TestSinkSupervisorReconnectsAndGates(t *testing.T) {
+	// Grab a free port and rebind on it — the address must be stable
+	// across the supervisor's redials.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("probe listen: %v", err)
+	}
+	addr := probe.Addr().String()
+	_ = probe.Close()
+
+	var closing atomic.Uint32
+	var installs atomic.Int32
+	degraded := make(chan string, 4)
+	restored := make(chan struct{}, 4)
+
+	listen := func() net.Listener {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Fatalf("rebind %s: %v", addr, err)
+		}
+		return ln
+	}
+	accept := func(ln net.Listener) net.Conn {
+		c, err := ln.Accept()
+		if err != nil {
+			t.Fatalf("accept: %v", err)
+		}
+		return c
+	}
+	ln := listen()
+	t.Cleanup(func() { _ = ln.Close() })
+
+	sup := &sinkSupervisor{
+		addr: addr,
+		log:  discardLogger(),
+		dial: func(addr string) (net.Conn, error) { return net.Dial("tcp", addr) },
+		install: func(net.Conn) error {
+			installs.Add(1)
+			return nil
+		},
+		degrade: func(reason string) { degraded <- reason },
+		restore: func() { restored <- struct{}{} },
+		closing: func() bool { return closing.Load() == 1 },
+	}
+	client, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("initial dial: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		sup.run(client)
+		close(done)
+	}()
+
+	sink := accept(ln)
+	// Bridge data path: bytes the sink writes onto the accepted
+	// connection are exactly what a redirected payload looks like to
+	// the daemon — the bridge must echo them back down the wire.
+	payload := []byte("redirected-payload")
+	if _, err := sink.Write(payload); err != nil {
+		t.Fatalf("sink write: %v", err)
+	}
+	_ = sink.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(sink, got); err != nil {
+		t.Fatalf("bridge echo not received: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("bridge echo = %q, want %q", got, payload)
+	}
+
+	// Sink dies → the capability is withdrawn before redialing.
+	_ = ln.Close()
+	_ = sink.Close()
+	select {
+	case reason := <-degraded:
+		if reason == "" {
+			t.Errorf("degrade reason is empty")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no degrade within 2s of the sink dying")
+	}
+
+	// Sink returns → the supervisor redials and restores.
+	ln2 := listen()
+	t.Cleanup(func() { _ = ln2.Close() })
+	select {
+	case <-restored:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no restore within 3s of the sink returning")
+	}
+	if installs.Load() != 1 {
+		t.Errorf("installs = %d, want 1 (the redialed connection)", installs.Load())
+	}
+	sink2 := accept(ln2)
+
+	// Shutdown stops the loop instead of redialing forever.
+	closing.Store(1)
+	_ = ln2.Close()
+	_ = sink2.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("supervisor did not exit within 2s of shutdown")
 	}
 }
