@@ -46,6 +46,11 @@ from core.storage.models.config import (
     UserPreference,
 )
 from core.storage.models.containment import ContainmentAction
+from core.storage.models.digital_twin import (
+    TwinConnection,
+    TwinDevice,
+    TwinProcess,
+)
 from core.storage.models.episodic import (
     EpisodicDistilFailure,
     EpisodicDistilMarker,
@@ -132,6 +137,9 @@ __all__ = [
     "SketchMapping",
     "SystemConfig",
     "ThreatIndicator",
+    "TwinConnection",
+    "TwinDevice",
+    "TwinProcess",
     "User",
     "UserPreference",
     "WorkflowRun",

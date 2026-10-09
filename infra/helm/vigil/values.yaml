@@ -407,6 +407,7 @@ dbInit:
     - 15_federation.sql
     - 16_llm_budgets.sql
     - 17_loglm_setup.sql
+
     - 18_agent_decision_ids.sql
     - 19_agent_ledger.sql
     - 20_agent_directives.sql
@@ -434,6 +435,7 @@ dbInit:
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
     - 41_finding_origin_stamps.sql
+    - 42_digital_twin.sql
   resources:
     requests:
       cpu: 50m

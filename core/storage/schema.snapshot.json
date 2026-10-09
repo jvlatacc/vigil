@@ -2745,6 +2745,176 @@
       "nullable": true
     }
   },
+  "twin_connections": {
+    "attributes": {
+      "data_type": "jsonb",
+      "nullable": true
+    },
+    "connection_key": {
+      "data_type": "character varying(255)",
+      "nullable": false
+    },
+    "connection_type": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    },
+    "device_id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "direction": {
+      "data_type": "character varying(10)",
+      "nullable": true
+    },
+    "first_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "last_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "local_ip": {
+      "data_type": "character varying(45)",
+      "nullable": true
+    },
+    "local_port": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "process_id": {
+      "data_type": "uuid",
+      "nullable": true
+    },
+    "protocol": {
+      "data_type": "character varying(16)",
+      "nullable": true
+    },
+    "remote_ip": {
+      "data_type": "character varying(45)",
+      "nullable": true
+    },
+    "remote_port": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "source": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    },
+    "started_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "state": {
+      "data_type": "character varying(30)",
+      "nullable": true
+    }
+  },
+  "twin_devices": {
+    "attributes": {
+      "data_type": "jsonb",
+      "nullable": true
+    },
+    "device_key": {
+      "data_type": "character varying(255)",
+      "nullable": false
+    },
+    "device_type": {
+      "data_type": "character varying(30)",
+      "nullable": false
+    },
+    "first_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "hostname": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "ip_address": {
+      "data_type": "character varying(45)",
+      "nullable": true
+    },
+    "last_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "mac_address": {
+      "data_type": "character varying(32)",
+      "nullable": true
+    },
+    "os_info": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "serial_number": {
+      "data_type": "character varying(64)",
+      "nullable": true
+    },
+    "source": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    }
+  },
+  "twin_processes": {
+    "attributes": {
+      "data_type": "jsonb",
+      "nullable": true
+    },
+    "command": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "device_id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "first_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "last_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "name": {
+      "data_type": "character varying(255)",
+      "nullable": false
+    },
+    "pid": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "process_key": {
+      "data_type": "character varying(255)",
+      "nullable": false
+    },
+    "source": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    },
+    "started_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "user": {
+      "data_type": "character varying(100)",
+      "nullable": true
+    }
+  },
   "user_preferences": {
     "created_at": {
       "data_type": "timestamp without time zone",
