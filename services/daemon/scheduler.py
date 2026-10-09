@@ -169,6 +169,28 @@ class TaskScheduler:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Threat feed poller unavailable: {e}")
 
+        # CISA KEV refresher — keeps the bundled t=0 seed current from the
+        # official feed. Hourly tick; the refresher itself runs at most once
+        # a day (watermark in threat_feed_poller). The bundled snapshot seeds
+        # t=0, so no run_on_start fetch delays boot behind the network.
+        try:
+            from services.daemon.threat_feed_poller import (
+                KEV_TICK_INTERVAL_SECONDS,
+                kev_refresh_enabled,
+            )
+
+            self._tasks.append(
+                ScheduledTask(
+                    name="kev_refresh",
+                    func=self._run_kev_refresh,
+                    interval=KEV_TICK_INTERVAL_SECONDS,
+                    enabled=kev_refresh_enabled(),
+                    run_on_start=False,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("KEV refresher unavailable: %s", e)
+
     def set_processor_queue(self, queue: asyncio.Queue):
         """Set the processor's input queue that probe sweeps inject onto."""
         self._processor_queue = queue
@@ -527,6 +549,12 @@ class TaskScheduler:
             return
         poller = ThreatFeedPoller()
         return await poller.run_once()
+
+    async def _run_kev_refresh(self):
+        """Pull the official CISA KEV catalog into threat_indicators (daily)."""
+        from services.daemon.threat_feed_poller import run_kev_refresh_once
+
+        return await run_kev_refresh_once()
 
     async def _run_health_check(self):
         """Run system health check."""
