@@ -292,6 +292,8 @@ class DatabaseDataService:
                     cluster_id=finding_data.get("cluster_id"),
                     severity=finding_data.get("severity"),
                     status=finding_data.get("status", "new"),
+                    origin_verified=finding_data.get("origin_verified", False),
+                    origin_id=finding_data.get("origin_id"),
                 )
                 return FindingSchema.dump(finding) if finding else None
             except Exception as e:

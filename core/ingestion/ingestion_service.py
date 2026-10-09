@@ -364,6 +364,10 @@ class IngestionService:
                     cluster_id=finding_data.get("cluster_id"),
                     severity=finding_data.get("severity"),
                     status=finding_data.get("status", "new"),
+                    # Origin attestation stamp (#944): set by the webhook when
+                    # the sender's signature verified; other sources omit it.
+                    origin_verified=finding_data.get("origin_verified", False),
+                    origin_id=finding_data.get("origin_id"),
                 )
 
                 if finding:
