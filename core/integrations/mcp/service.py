@@ -12,7 +12,7 @@ from typing import Dict, List, Mapping, Optional
 from core.config import vigil_path
 from core.detections.detection_rules_service import DetectionRulesService
 from core.integrations.integration_bridge_service import IntegrationBridgeService
-from core.integrations.mcp.child_env import ca_bundle_env
+from core.integrations.mcp.child_env import default_child_env
 from core.integrations.mcp.packaged import installed_launch
 from core.secrets import get_secret
 
@@ -30,6 +30,17 @@ _ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 # Placeholders that are path sentinels, not credentials — never treat as
 # required env vars.
 _PLACEHOLDER_BLACKLIST = {"workspaceFolder", "HOME", "PYTHONPATH", "VIGIL_DIR"}
+
+
+def resolve_opt_in(name: str) -> Optional[str]:
+    """Resolve a child-env opt-in name: ambient first, then the secret store.
+
+    The ambient read is the process boundary the ENV001 ratchet allows here:
+    the name reaches a spawned child only because that child's own config
+    opted in via ``required_env_vars`` or a ``${VAR}`` reference.
+    """
+    ambient = os.environ.get(name)  # noqa: ENV001 - child env opt-in boundary
+    return ambient or get_secret(name)
 
 
 def extract_required_env_vars(
@@ -285,31 +296,34 @@ class MCPService:
                         for k, v in (server_config.get("env") or {}).items()
                         if not k.startswith("_")
                     }
-                    # Inherit the backend's environment so servers that need
-                    # runtime config not declared in mcp-config.json can connect
-                    # — notably the POSTGRES_* vars DatabaseService reads for
-                    # case/DB tools (vigil). Declared config env
-                    # entries still take precedence. Required-credential
-                    # detection scans the raw config above, not this spawn env,
-                    # so dormancy behavior is unchanged.
-                    env = os.environ.copy()  # noqa: ENV001 - MCP child env
-                    # An mcp-config.json entry may refer to ${VIGIL_DIR}; unset, it
-                    # would substitute to "" and root child paths at "/".
-                    env.setdefault("VIGIL_DIR", str(vigil_path()))
-                    # httpx ignores REQUESTS_CA_BUNDLE, so inheriting it is
-                    # not enough.
-                    env.update(ca_bundle_env())
+                    # Deny-by-default child environment: the SDK's
+                    # safe-to-inherit names plus the CA bundle, then only what
+                    # this server's own config declares or explicitly opts into
+                    # below. The backend's process environment — JWT_SECRET_KEY,
+                    # AGENT_INTERNAL_TOKEN, POSTGRES_*, integration tokens — does
+                    # not pass through: one compromised community package must
+                    # not equal full-platform compromise. Vigil's own tools run
+                    # in-process and read the DB there, so no shipped entry
+                    # needs database variables.
+                    env = {
+                        **default_child_env(),
+                        # An mcp-config.json entry may refer to ${VIGIL_DIR}; unset, it
+                        # would substitute to "" and root child paths at "/".
+                        "VIGIL_DIR": str(vigil_path()),
+                        "PYTHONPATH": project_path_str,
+                    }
+                    # Declared config env is substituted against this reduced
+                    # environment, not os.environ — unset names fall through to
+                    # the secret store, never to a wholesale env copy.
                     env.update(
                         {
                             k: self._substitute_env_vars(v, env)
                             for k, v in raw_env_strs.items()
                         }
                     )
-                    env["PYTHONPATH"] = project_path_str
 
                     # Get args and perform environment variable substitution
                     raw_args = list(server_config.get("args") or [])
-                    args = [self._substitute_env_vars(arg, env) for arg in raw_args]
 
                     # Capture declared credential placeholders *before*
                     # substitution collapses missing vars to empty strings
@@ -318,6 +332,21 @@ class MCPService:
                     required_env_vars = extract_required_env_vars(
                         raw_env_strs, raw_args
                     )
+
+                    # Explicit per-server opt-in for ambient names: a variable
+                    # the server's own config references (its declaration) is
+                    # forwarded from the backend environment or the secret
+                    # store. Anything the config never names stays out — the
+                    # deny-by-default boundary above is not a hole for
+                    # whatever else happens to be exported.
+                    for var in required_env_vars:
+                        if var in env:
+                            continue
+                        value = resolve_opt_in(var)
+                        if value:
+                            env[var] = value
+
+                    args = [self._substitute_env_vars(arg, env) for arg in raw_args]
 
                     # Launch the image's baked copy of a pinned npx/uvx entry
                     # instead of downloading it; anything not baked is as declared.
