@@ -4,11 +4,17 @@ exactly what it uses."""
 
 from __future__ import annotations
 
+import base64
 import copy
+import json
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
 from services.edge.observations.base import Observation
-from services.edge.policy.model import Bundle, parse_bundle
+from services.edge.policy.envelope import pae
+from services.edge.policy.model import BUNDLE_PAYLOAD_TYPE, Bundle, parse_bundle
 
 NODE_ID = "gw-vpc-west-01"
 
@@ -113,3 +119,45 @@ def make_observation(**overrides: Any) -> Observation:
     }
     defaults.update(overrides)
     return Observation(**defaults)
+
+
+class EdgeSigner:
+    """Test stand-in for the control-plane bundle signer: generates an
+    Ed25519 keypair and produces DSSE signatures over the PAE encoding."""
+
+    def __init__(self, keyid: str = "edge-test-key") -> None:
+        self.keyid = keyid
+        self._private = Ed25519PrivateKey.generate()
+        self.public_hex = (
+            self._private.public_key()
+            .public_bytes(Encoding.Raw, PublicFormat.Raw)
+            .hex()
+        )
+
+    def sign_payload(self, payload: bytes, payload_type: str) -> str:
+        return base64.b64encode(self._private.sign(pae(payload_type, payload))).decode()
+
+
+def trust_root_for(
+    *signers: EdgeSigner, expires_at: str | None = None
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"keys": {s.keyid: s.public_hex for s in signers}}
+    if expires_at is not None:
+        payload["expires_at"] = expires_at
+    return payload
+
+
+def sign_envelope(
+    payload: dict[str, Any],
+    signer: EdgeSigner,
+    *,
+    payload_type: str = BUNDLE_PAYLOAD_TYPE,
+) -> dict[str, Any]:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        "payloadType": payload_type,
+        "payload": base64.b64encode(raw).decode(),
+        "signatures": [
+            {"keyid": signer.keyid, "sig": signer.sign_payload(raw, payload_type)}
+        ],
+    }
