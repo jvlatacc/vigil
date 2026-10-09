@@ -26,6 +26,7 @@ from core.config import get_settings
 from core.federation.runner import FederationRunner
 from core.ingestion.dedup import RedisDedupSet
 from core.integrations._base.ids import FINDING_ID_MAX, fit_id
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 from core.time import utcnow
 from core.webhook_rejections import (
     BAD_TOKEN,
@@ -690,6 +691,10 @@ class DataPoller:
 
                         finding_id = f"webhook-{uuid.uuid4().hex[:16]}"
                         finding_data["finding_id"] = finding_id
+                    # The bearer proved the sender holds DAEMON_WEBHOOK_TOKEN
+                    # and nothing signed the payload: transport, decided here
+                    # — a payload-claimed tier is never trusted.
+                    finding_data["origin_trust"] = ORIGIN_TRANSPORT
 
                 # Untrusted payload: coerce to the canonical {technique: score}
                 # dict once here, before anything is enqueued, so a bad entry

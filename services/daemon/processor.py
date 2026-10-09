@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 from core.time import utcnow
 from services.daemon.config import ProcessingConfig, ResponseConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
@@ -506,7 +507,13 @@ class FindingProcessor:
             return self._ingestion_service
         from core.ingestion.ingestion_service import IngestionService
 
-        service = await asyncio.to_thread(IngestionService)
+        # The daemon's own pipeline: rows it relays carry the receiver's
+        # stamp (webhook/kafka feeds stamp transport), and a stamp-less row
+        # that still reaches this funnel is daemon-produced — transport,
+        # never unverified-by-accident.
+        service = await asyncio.to_thread(
+            IngestionService, default_origin_trust=ORIGIN_TRANSPORT
+        )
         if getattr(service, "use_database", True):
             self._ingestion_service = service
         return service

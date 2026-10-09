@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.storage.origin_trust import ORIGIN_TRANSPORT
+
 logger = logging.getLogger(__name__)
 
 MAX_TRACKED_JOBS = 20
@@ -165,7 +167,7 @@ def run_job(job: IngestionJob, source_path: Path) -> None:
     from core.ingestion.ingestion_service import IngestionService
 
     try:
-        service = IngestionService()
+        service = IngestionService(default_origin_trust=ORIGIN_TRANSPORT)
         job.track(service.stats)
         stats = service._ingest_file_by_format(
             source_path, job.format, data_type=job.data_type

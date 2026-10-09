@@ -48,7 +48,7 @@ def _patch_factory(monkeypatch, factory) -> None:
 async def test_service_is_built_once_across_stores(monkeypatch):
     built: List[_Service] = []
 
-    def factory():
+    def factory(*args, **kwargs):
         built.append(_Service())
         return built[-1]
 
@@ -65,7 +65,7 @@ async def test_service_is_built_once_across_stores(monkeypatch):
 @pytest.mark.asyncio
 async def test_ingest_runs_off_the_event_loop(monkeypatch):
     service = _Service()
-    _patch_factory(monkeypatch, lambda: service)
+    _patch_factory(monkeypatch, lambda *args, **kwargs: service)
     processor = _processor()
 
     await processor._store_finding({"finding_id": "f-1"})
@@ -78,7 +78,7 @@ async def test_ingest_runs_off_the_event_loop(monkeypatch):
 async def test_service_built_with_database_down_is_not_cached(monkeypatch):
     built: List[_Service] = []
 
-    def factory():
+    def factory(*args, **kwargs):
         # First build finds the database down; the second finds it back.
         built.append(_Service(use_database=bool(built)))
         return built[-1]
@@ -98,7 +98,7 @@ async def test_constructor_error_is_a_failed_store_then_rebuilt(monkeypatch):
     built: List[_Service] = []
     attempts = {"n": 0}
 
-    def factory():
+    def factory(*args, **kwargs):
         attempts["n"] += 1
         if attempts["n"] == 1:
             raise RuntimeError("database connection refused")

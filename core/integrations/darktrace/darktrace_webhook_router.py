@@ -27,6 +27,7 @@ from core.ingestion.webhook_origin import read_and_verify_webhook
 from core.integrations.darktrace.ingestion import DarktraceIngestionService
 from core.routing import Auth, RouterMeta
 from core.secrets import get_secret
+from core.storage.origin_trust import ORIGIN_SIGNED
 from core.webhook_rejections import rejection_counts
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,9 @@ def _ingest(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Unable to transform Darktrace {alert_type} payload",
         )
+    # _read_and_verify proved the sender holds the shared secret: this row
+    # is signed, the strongest tier, and the only path here runs after it.
+    finding["origin_trust"] = ORIGIN_SIGNED
     ok = service.ingestion_service.ingest_finding(finding)
     if not ok:
         raise HTTPException(

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.ingestion.ingestion_service import IngestionService
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,13 @@ class SIEMIngestionService(ABC):
     """Base class for SIEM ingestion services."""
 
     def __init__(self):
-        """Initialize the SIEM ingestion service."""
-        self.ingestion_service = IngestionService()
+        """Initialize the SIEM ingestion service.
+
+        Pull adapters authenticate with stored credentials, so every finding
+        a SIEM subclass ingests is at least ``transport``: the channel
+        authenticated the sender even though nothing signed the payload.
+        """
+        self.ingestion_service = IngestionService(default_origin_trust=ORIGIN_TRANSPORT)
         self.siem_name = "Generic SIEM"
 
     @abstractmethod

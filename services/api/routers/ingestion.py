@@ -31,6 +31,7 @@ from core.ingestion.ingestion_jobs import (
 )
 from core.ingestion.ingestion_service import IngestionService
 from core.routing import Auth, RouterMeta
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 from core.storage.s3_service import S3_LIST_ERRORS, describe_s3_error
 
 logger = logging.getLogger(__name__)
@@ -189,7 +190,9 @@ async def ingest_from_string(
             status_code=400, detail="format must be 'json', 'csv', or 'jsonl'"
         )
 
-    ingestion_service = IngestionService()
+    # Auth.REQUIRED: the operator authenticated over the API, so rows this
+    # endpoint builds are at least transport.
+    ingestion_service = IngestionService(default_origin_trust=ORIGIN_TRANSPORT)
     stats = ingestion_service.ingest_from_string(
         data, format=format, data_type=data_type
     )
@@ -362,7 +365,7 @@ def sync_s3_folder(prefix: Optional[str] = Query(None)):
 
     logger.info(f"Starting S3 folder sync with prefix='{prefix}'")
 
-    ingestion_service = IngestionService()
+    ingestion_service = IngestionService(default_origin_trust=ORIGIN_TRANSPORT)
     try:
         stats = ingestion_service.ingest_s3_folder(s3_service=s3, prefix=prefix)
     except S3_LIST_ERRORS as e:
@@ -535,7 +538,7 @@ def ingest_s3_file(request: S3FileIngestRequest):
             tmp.write(content)
             tmp_path = Path(tmp.name)
 
-        ingestion_service = IngestionService()
+        ingestion_service = IngestionService(default_origin_trust=ORIGIN_TRANSPORT)
         stats = ingestion_service._ingest_file_by_format(tmp_path, fmt)
     finally:
         if tmp_path and tmp_path.exists():

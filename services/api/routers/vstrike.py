@@ -33,6 +33,7 @@ from core.integrations.vstrike.schemas import (
 from core.routing import Auth, RouterMeta
 from core.secrets import get_secret
 from core.storage.database_data_service import DatabaseDataService
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 from services.api.errors import INTERNAL_ERROR_DETAIL
 from services.api.middleware.auth import get_current_active_user
 
@@ -230,6 +231,9 @@ def ingest_findings(
                 "severity": item.severity,
                 "description": item.description,
                 "mitre_predictions": item.mitre_predictions or {},
+                # Bearer-keyed push: the channel authenticated the sender
+                # (verify_inbound_key above), so the row is transport.
+                "origin_trust": ORIGIN_TRANSPORT,
             }
             if item.predicted_techniques is not None:
                 finding_data["predicted_techniques"] = item.predicted_techniques
