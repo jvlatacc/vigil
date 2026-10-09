@@ -351,7 +351,7 @@ def test_a_semantic_change_changes_the_hash():
 
 def test_hash_excludes_exactly_the_documented_keys():
     assert HASH_EXCLUDED_KEYS == frozenset(
-        {"content_hash", "renders", "state", "compiled_at"}
+        {"content_hash", "renders", "state", "compiled_at", "version"}
     )
 
 

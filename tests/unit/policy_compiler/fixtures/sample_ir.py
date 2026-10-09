@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.policy_compiler.compiler import ArchetypeEvidence, archetype_policy_id
 from core.policy_compiler.models import (
     PolicyIR,
     compute_content_hash,
@@ -21,8 +22,27 @@ DATA_SOURCES = ["okta.system_log", "splunk"]
 TECHNIQUES = ["T1110.003", "T1110.004"]
 ENTITY_TYPES = ["src_ip", "user_account"]
 COMPILED_AT = "2026-10-09T20:00:00Z"
-# Compiler-minted form: pol_ + 16 hex chars (see compiler.archetype_policy_id).
-POLICY_ID = "pol_9f2c1a7b3d5e4082"
+
+
+def sample_evidence() -> ArchetypeEvidence:
+    """The archetype evidence behind the sample: 15 closed cases, 14/15 consistent."""
+    return ArchetypeEvidence(
+        workflow_id=WORKFLOW_ID,
+        window_days=30,
+        data_sources=sorted(DATA_SOURCES),
+        techniques=sorted(TECHNIQUES),
+        entity_context_types=sorted(ENTITY_TYPES),
+        outcomes={"resolved": 14, "false_positive": 1},
+        consistency=0.93,
+        analyst_overrides=0,
+        observed_severity="high",
+        observed_recommended_action="investigate",
+        observed_category="credential_stuffing",
+    )
+
+
+# The compiler's own mint: one identity source for every fixture consumer.
+POLICY_ID = archetype_policy_id(sample_evidence())
 
 
 def sample_match() -> dict[str, Any]:
@@ -41,7 +61,7 @@ def sample_decision() -> dict[str, Any]:
         "recommended_action": "investigate",
         "category": "credential_stuffing",
         "reasoning": (
-            "Compiled from 15 completed runs of wf_hunt_cred_stuffing: 14/15 "
+            "Compiled from 15 closed cases of wf_hunt_cred_stuffing: 14/15 "
             "resolved consistently, no analyst overrides in the 30-day window."
         ),
         "actions_human_only": True,
