@@ -307,16 +307,25 @@ class ApprovalService:
 
         # The branch that set requires_approval is appended to the caller's
         # narrative so the row records the rule it was decided by (#917).
+        kernel_hold = (
+            action_type.value in KERNEL_ACTION_TYPES
+            and self.config.enforcement_force_manual_approval
+        )
         forced = (
             human_only
             or self.force_manual_approval
             or self._stored_force_manual_approval()
+            or kernel_hold
         )
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)
+        elif kernel_hold:
+            # The row names the posture that held it: the enforcement block's
+            # knob, not the response-wide force_manual_approval flag.
+            rule = decision_rule("enforcement.force_manual_approval", True)
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 

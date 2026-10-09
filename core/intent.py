@@ -99,6 +99,12 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         HIGHER_TIGHTER,
     ),
     IntentField(
+        "enforcement.force_manual_approval",
+        "response.enforcement_force_manual_approval",
+        "daemon_enforcement_force_approval",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",

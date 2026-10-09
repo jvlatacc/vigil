@@ -270,6 +270,11 @@ class Settings(BaseSettings):
     daemon_high_action_floor: float = 0.80
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
+    # Kernel enforcement actions (xdp_block_ip, socket_redirect,
+    # interdict_process) wait for a person: the env reader for the INTENT.md
+    # enforcement block. Setting it false relaxes the declared posture; the
+    # executor's person-decided guard still applies at execution.
+    daemon_enforcement_force_approval: bool = True
     # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
     # and validates them; nothing else reads them here. Origin enforcement is
     # ON by default: unregistered-key deployments get human approval instead

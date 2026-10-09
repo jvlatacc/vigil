@@ -49,6 +49,10 @@ class ResponseConfig:
     critical_action_floor: float = 0.70
     high_action_floor: float = 0.80
     force_manual_approval: bool = False
+    # Kernel enforcement ships human-only (the INTENT.md enforcement block);
+    # DAEMON_ENFORCEMENT_FORCE_APPROVAL relaxes the creation posture, never
+    # the person-decided execution guard.
+    enforcement_force_manual_approval: bool = True
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -62,6 +66,7 @@ class ResponseConfig:
             critical_action_floor=s.daemon_critical_action_floor,
             high_action_floor=s.daemon_high_action_floor,
             force_manual_approval=s.daemon_force_approval,
+            enforcement_force_manual_approval=s.daemon_enforcement_force_approval,
             dry_run=s.daemon_dry_run,
         )
 
