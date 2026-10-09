@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
-from core.response.config import ResponseConfig
+from core.response.config import ResponseConfig, is_recon_probe
 from core.response.protected_assets import protected_asset_hit
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,17 @@ class AutonomousResponseService:
                 reasoning.append("Lateral movement detected (T1021)")
                 indicators.append("lateral_movement")
 
+            # A scanning probe (T1046/T1595) is the deception candidate, not a
+            # containment one: a small boost that on its own stays below the
+            # review line, and an indicator the recommendation ladder reads
+            # as deceive instead of letting the finding fall into the
+            # monitor-only bands. The shared predicate is the one definition
+            # of what counts (is_recon_probe in core.response.config).
+            if is_recon_probe(mitre_predictions):
+                confidence += 0.10
+                reasoning.append("Reconnaissance scanning detected (T1046/T1595)")
+                indicators.append("recon_scanning")
+
         # Correlate CrowdStrike alerts
         if crowdstrike_alert:
             cs_alerts = crowdstrike_alert.get("alerts", [])
@@ -135,6 +146,12 @@ class AutonomousResponseService:
             return "AUTO-ISOLATE: Confidence threshold met for automatic isolation"
         elif confidence >= self.config.review_threshold:
             return "ISOLATE WITH APPROVAL: High confidence, recommend isolation with quick approval"
+        elif "recon_scanning" in indicators:
+            # The containment bands keep precedence: a scan with enough
+            # corroborating signal to reach the review line is still an
+            # isolation case. Below it, a recon-tagged finding deceives
+            # instead of landing in the monitor-only bands.
+            return "DECEIVE: Reconnaissance probe; candidate for honey-routing into a decoy environment"
         elif confidence >= self.config.monitor_threshold:
             return "MANUAL REVIEW: Moderate confidence, requires analyst review"
         else:

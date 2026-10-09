@@ -129,6 +129,7 @@ class SOCDaemon:
             self.config.processing,
             response_config=self.config.response,
             fastpath_config=self.config.fastpath,
+            mtd_config=self.config.mtd,
         )
         # The daemon owns its own copies: it is a separate process from the API, so
         # nothing on the API's app.state is reachable from here.
