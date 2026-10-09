@@ -16,7 +16,7 @@ the allowed direction).
 
 import logging
 from collections.abc import Mapping
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, ClassVar, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import (
@@ -127,6 +127,10 @@ class FindingRecord(FindingSchema):
 
     entity_context: TolerantEntityContext = None
     excluded_ips: List[str] = Field(default_factory=list)
+    # Storage-tier provenance stays out of the frozen v1 shape: redeclared as
+    # a ClassVar so the inherited field leaves this response schema, and the
+    # dumped rows revalidated here drop the key instead of returning it.
+    source_metadata: ClassVar[None] = None
 
 
 class FindingListResponse(BaseModel):
