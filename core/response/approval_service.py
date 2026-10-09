@@ -562,6 +562,48 @@ class ApprovalService:
             logger.error("DB error marking action %s failed: %s", action_id, e)
             return None
 
+    def record_reversal(
+        self,
+        action_id: str,
+        reversal: Dict,
+    ) -> Optional[PendingAction]:
+        """Record a reversal (unroute) against an executed action.
+
+        The action stays executed — it did run; the reversal is evidence
+        merged into ``execution_result`` (a whole-dict write, so the JSONB
+        change is always seen). A failed reversal is recorded with
+        ``success: False`` and no completion marker, which keeps the row
+        eligible for the TTL sweep's next pass — a route whose unroute
+        failed must not be forgotten.
+        """
+        try:
+            db = get_db_manager()
+            with db.session_scope() as session:
+                row = session.get(ApprovalActionRow, action_id)
+                if row is None:
+                    return None
+                if row.status != ActionStatus.EXECUTED.value:
+                    logger.warning(
+                        "Action %s is not executed (status: %s)",
+                        action_id,
+                        row.status,
+                    )
+                    return _row_to_pending(row)
+                result = dict(row.execution_result or {})
+                prior = result.get("reversal") or {}
+                entry = {
+                    "attempts": int(prior.get("attempts", 0)) + 1,
+                    "recorded_at": utcnow().isoformat(),
+                    **reversal,
+                }
+                result["reversal"] = entry
+                row.execution_result = result
+                session.flush()
+                return _row_to_pending(row)
+        except SQLAlchemyError as e:
+            logger.error("DB error recording reversal of action %s: %s", action_id, e)
+            return None
+
     def refuse_auto_action(
         self,
         action_id: str,
