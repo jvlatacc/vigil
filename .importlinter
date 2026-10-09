@@ -67,6 +67,17 @@ source_modules =
 forbidden_modules =
     core.api
 
+[importlinter:contract:fastpath]
+name = the Fast-Path gate is deterministic: no model, no agents, no API surface, no deployables
+type = forbidden
+source_modules =
+    core.response.fastpath
+forbidden_modules =
+    services
+    core.agents
+    core.api
+    core.llm
+
 [importlinter:contract:ingestion]
 name = Federation drives Ingestion, never the reverse
 type = forbidden
