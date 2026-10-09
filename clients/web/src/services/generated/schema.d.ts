@@ -5829,6 +5829,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/response/protected-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assets
+         * @description List protected assets, newest first (active only by default).
+         */
+        get: operations["get_api_response_protected-assets"];
+        put?: never;
+        /**
+         * Create Asset
+         * @description Declare an asset the Responder may never auto-contain against.
+         *
+         *     The row is active immediately: the in-memory index drops its cache and
+         *     the next evaluated action sees the invariant.
+         */
+        post: operations["post_api_response_protected-assets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/protected-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Asset
+         * @description Retire an asset's protection (soft delete; the row's history stays).
+         */
+        delete: operations["delete_api_response_protected-assets_asset_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -7648,6 +7695,53 @@ export interface paths {
          */
         post: operations["post_api_v1_response_breaker_reset"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/protected-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assets
+         * @description List protected assets, newest first (active only by default).
+         */
+        get: operations["get_api_v1_response_protected-assets"];
+        put?: never;
+        /**
+         * Create Asset
+         * @description Declare an asset the Responder may never auto-contain against.
+         *
+         *     The row is active immediately: the in-memory index drops its cache and
+         *     the next evaluated action sees the invariant.
+         */
+        post: operations["post_api_v1_response_protected-assets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/protected-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Asset
+         * @description Retire an asset's protection (soft delete; the row's history stays).
+         */
+        delete: operations["delete_api_v1_response_protected-assets_asset_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -10026,6 +10120,29 @@ export interface components {
              */
             workflow_id?: string | null;
         };
+        /** CreateProtectedAssetRequest */
+        CreateProtectedAssetRequest: {
+            /**
+             * Asset Class
+             * @description dns | domain_controller | gateway | dhcp | database | other.
+             */
+            asset_class: string;
+            /**
+             * Label
+             * @description Why it is protected — shown on every held action.
+             */
+            label: string;
+            /**
+             * Match Kind
+             * @description How to match the asset: 'ip', 'cidr', or 'hostname'.
+             */
+            match_kind: string;
+            /**
+             * Match Value
+             * @description The asset to protect — one address (10.0.0.53), one network in CIDR notation (10.0.0.0/24), or one exact hostname (dc.corp.example.com).
+             */
+            match_value: string;
+        };
         /**
          * CreateUserRequest
          * @description Create user request.
@@ -11614,6 +11731,44 @@ export interface components {
             /** Priority */
             priority: string;
         };
+        /** ProtectedAssetListResponse */
+        ProtectedAssetListResponse: {
+            /** Assets */
+            assets?: components["schemas"]["ProtectedAssetResponse"][];
+            /** Count */
+            count: number;
+        };
+        /**
+         * ProtectedAssetResponse
+         * @description Frozen key set of one protected-asset row (beta: shape may settle).
+         */
+        ProtectedAssetResponse: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Asset Class */
+            asset_class: string;
+            /** Asset Id */
+            asset_id: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Label */
+            label: string;
+            /** Match Kind */
+            match_kind: string;
+            /** Match Value */
+            match_value: string;
+            /** Removal Reason */
+            removal_reason?: string | null;
+            /** Removed At */
+            removed_at?: string | null;
+            /** Removed By */
+            removed_by?: string | null;
+        };
         /**
          * RecalculateCostRequest
          * @description Body for POST /analytics/recalculate-cost.
@@ -11692,6 +11847,14 @@ export interface components {
             related_case_id: string;
             /** Relationship Type */
             relationship_type: string;
+        };
+        /** RemoveProtectedAssetRequest */
+        RemoveProtectedAssetRequest: {
+            /**
+             * Reason
+             * @description Why the asset's protection is being retired.
+             */
+            reason?: string | null;
         };
         /**
          * ResolutionStepAdd
@@ -22993,6 +23156,112 @@ export interface operations {
             };
         };
     };
+    "get_api_response_protected-assets": {
+        parameters: {
+            query?: {
+                /** @description Include soft-removed rows. */
+                include_removed?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_response_protected-assets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProtectedAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_response_protected-assets_asset_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RemoveProtectedAssetRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_services: {
         parameters: {
             query?: never;
@@ -26000,6 +26269,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BreakerResetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_v1_response_protected-assets": {
+        parameters: {
+            query?: {
+                /** @description Include soft-removed rows. */
+                include_removed?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_v1_response_protected-assets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProtectedAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_v1_response_protected-assets_asset_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RemoveProtectedAssetRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
                 };
             };
             /** @description Validation Error */

@@ -359,6 +359,17 @@ class Settings(BaseSettings):
     daemon_mtd_confidence_floor: float = 0.60
     daemon_mtd_session_ttl_seconds: int = 3600
     daemon_mtd_internal_only: bool = True
+
+    # Decoy environment (services/decoy) — the workloads are gated twice: the
+    # compose `decoys` profile / Helm decoy values decide whether the process
+    # is even started, and this in-code switch decides whether a started
+    # process serves. Default off: enabling it is a human configuration act.
+    decoy_enabled: bool = False
+    # Where session events are POSTed — the daemon's webhook ingest.
+    decoy_ingest_url: str = "http://soc-daemon:8081/ingest"
+    # Maximum session length: long sessions are closed and emitted at the TTL
+    # so a held-open session cannot defer its capture indefinitely.
+    decoy_session_ttl_seconds: int = 3600
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
