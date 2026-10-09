@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -1697,6 +1698,153 @@ def get_case_metrics(
             return case_metrics_queries.mttd(session, start, end, priority)
 
     return _call(_metrics)
+# ---------------------------------------------------------------------------
+# Speculative-containment leases (core.response.fastpath)
+#
+# Two verbs only, and both are demotions: READ (lease_list) and UNDO
+# (propose_rollback — the executor's idempotent undo, then the ledger's
+# compare-and-swap close). There is deliberately no tool here that commits,
+# promotes, extends into durability, or strengthens a lease: the system can
+# only demote its own autonomy — promoting is a person's call through the
+# approvals queue (create_approval_action above). The negative test in
+# tests/unit/response/fastpath/test_adjudication.py holds that line.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def lease_list(
+    status: str = "active",
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """List speculative-containment leases (read-only).
+
+    ``status`` is ``active`` (pending_apply or applied, the default) or
+    ``all`` (every row, newest first — the recent view, terminal states
+    included: rolled_back, escalated, failed).
+
+    Undo payloads are not returned: undo tokens are daemon-internal
+    capability, and a visibility surface does not hand them out.
+    """
+    try:
+        from core.response.fastpath.adjudication import read_leases
+
+        leases = read_leases(
+            status=status,
+            limit=max(1, min(int(limit), 200)),
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except ValueError as e:
+        return jdump({"error": str(e)})
+    except Exception as e:
+        return jdump({"error": f"Lease read failed: {e}"})
+
+    return jdump(
+        {
+            "success": True,
+            "count": len(leases),
+            "leases": [
+                {
+                    "lease_id": lease.id,
+                    "action_type": lease.action_type,
+                    "entity_type": lease.entity_type,
+                    "entity_id": lease.entity_id,
+                    "status": lease.status,
+                    "decision_rule": lease.decision_rule,
+                    "observed": lease.observed,
+                    "is_shadow": lease.is_shadow,
+                    "finding_id": lease.finding_id,
+                    "created_at": lease.created_at,
+                    "expires_at": lease.expires_at,
+                }
+                for lease in leases
+            ],
+        }
+    )
+
+
+@mcp.tool()
+async def propose_rollback(lease_id: str, reason: str = "") -> str:
+    """Undo a speculative-containment lease now (an autonomy DEMOTION).
+
+    The containment effect is removed first — the executor's idempotent
+    undo — then the ledger row is closed by compare-and-swap, so a race
+    with the TTL sweeper is refused and harmless. ``reason`` is recorded on
+    the row (default: false_positive).
+
+    Rollback is the one fate an agent may execute directly because it
+    demotes the system's own autonomy. There is deliberately no counterpart
+    that commits or promotes: that door opens only through the human-gated
+    approvals queue.
+    """
+    try:
+        from core.response.fastpath.executors import default_registry
+        from core.response.fastpath.ledger import (
+            FALSE_POSITIVE,
+            ContainmentLedger,
+            rollback_lease,
+        )
+
+        lease_key = lease_id.strip()
+        if not lease_key:
+            return jdump({"error": "lease_id is required"})
+
+        ledger = ContainmentLedger()
+        registry = default_registry()
+        # The driver resolves the lease row itself; undo must ride the
+        # executor registered for THIS lease's action type.
+        lease = await asyncio.to_thread(ledger.get, lease_key)
+        if lease is None or lease.status != "applied":
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No live lease {lease_key} — unknown, or already"
+                        " resolved (rolled back, expired, or escalated)"
+                    ),
+                }
+            )
+        executor = registry.get(lease.action_type)
+        if executor is None:
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No executor registered for action type"
+                        f" {lease.action_type} — the sweeper will reconcile it"
+                    ),
+                }
+            )
+        transition = await rollback_lease(
+            ledger,
+            executor,
+            lease_key,
+            reason.strip() or FALSE_POSITIVE,
+            actor=caller(),
+        )
+        if transition is None:
+            # A concurrent adjudication or TTL sweep closed it first; its
+            # undo was idempotent, so the containment is down either way.
+            return jdump(
+                {
+                    "success": False,
+                    "error": f"Lease {lease_key} was resolved concurrently",
+                }
+            )
+        return jdump(
+            {
+                "success": True,
+                "lease_id": transition.lease_id,
+                "from_status": transition.from_status,
+                "to_status": transition.to_status,
+                "actor": caller(),
+                "message": "Containment undone; the lease row is closed.",
+            }
+        )
+    except Exception as e:
+        return jdump({"error": f"Rollback failed: {e}"})
 
 
 if __name__ == "__main__":
