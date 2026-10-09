@@ -144,6 +144,7 @@ class SOCDaemon:
                 approvals=approvals, config=self.config.response
             ),
             approvals=approvals,
+            mtd_config=self.config.mtd,
         )
         self._scheduler = TaskScheduler(self.config.scheduler)
         self._orchestrator = Orchestrator(
