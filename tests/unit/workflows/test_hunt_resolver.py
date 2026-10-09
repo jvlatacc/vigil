@@ -434,9 +434,30 @@ def test_a_compose_config_carries_no_investigate_tools():
     assert "case_records" not in ids and "get_finding" not in ids
 
 
-# The phase loses a tool the deployment lacks, and the playbook says which, so
-# the run journals a blind spot rather than carrying on as though nothing was asked.
+# A phase loses a tool the deployment lacks, and the playbook says which, so
+# the run journals a blind spot rather than carrying on as though nothing was
+# asked. The name is read-only-worded so the invoke policy does not claim it:
+# that refusal is a different reason, tested on its own.
 def test_a_phase_tool_the_deployment_lacks_is_dropped_and_recorded():
+    playbook, config_text = resolve(
+        "phase-fixture", workflows=_compose_with("get_finding", "acme_edr_lookup")
+    )
+    [phase] = yaml.safe_load(playbook)["phases"]
+    assert "get_finding" in phase["tools"] and "acme_edr_lookup" not in phase["tools"]
+    assert phase["unavailable"] == [
+        {
+            "tool": "acme_edr_lookup",
+            "reason": "no tool in this deployment answers acme_edr_lookup",
+        }
+    ]
+    ids = [t["id"] for t in yaml.safe_load(config_text)["tools"]]
+    assert "get_finding" in ids and "acme_edr_lookup" not in ids
+
+
+# The policy refuses a direct-action name before the deployment question even
+# arises: the grant can never arm a call the invoke gate would kill, and the
+# phase says why the tool is missing rather than arming a blind run.
+def test_a_phase_tool_the_policy_refuses_is_dropped_and_recorded():
     playbook, config_text = resolve(
         "phase-fixture", workflows=_compose_with("get_finding", "acme_edr_isolate")
     )
@@ -445,7 +466,10 @@ def test_a_phase_tool_the_deployment_lacks_is_dropped_and_recorded():
     assert phase["unavailable"] == [
         {
             "tool": "acme_edr_isolate",
-            "reason": "no tool in this deployment answers acme_edr_isolate",
+            "reason": (
+                "the invoke policy refuses acme_edr_isolate without a person; "
+                "queue it through create_approval_action"
+            ),
         }
     ]
     ids = [t["id"] for t in yaml.safe_load(config_text)["tools"]]

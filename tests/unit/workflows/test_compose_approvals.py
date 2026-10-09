@@ -70,7 +70,28 @@ def _config(tools: List[str], *catalogue: str):
 
 
 @pytest.mark.parametrize("execute_id", [EXECUTE_TOOL, MCP_EXECUTE_TOOL])
-def test_compose_phase_that_grants_execute_puts_it_in_approvals(execute_id):
+def test_compose_phase_that_names_execute_cannot_grant_it(execute_id, monkeypatch):
+    from core.workflows import playbook_resolver
+
+    # The invoke policy refuses the name without a person, so granting it to a
+    # phase would arm a call that dies at the gate.
+    monkeypatch.setattr(playbook_resolver, "current_overrides", lambda: ())
+    config = _config([execute_id, "analyze_coverage"], execute_id)
+    ids = [tool["id"] for tool in config["tools"]]
+    assert execute_id not in ids
+    assert "analyze_coverage" in ids
+    assert config["approvals"] == []
+
+
+@pytest.mark.parametrize("execute_id", [EXECUTE_TOOL, MCP_EXECUTE_TOOL])
+def test_compose_phase_grants_execute_when_the_operator_allowlists_it(
+    execute_id, monkeypatch
+):
+    from core.workflows import playbook_resolver
+
+    monkeypatch.setattr(
+        playbook_resolver, "current_overrides", lambda: (execute_id,)
+    )
     config = _config([execute_id, "analyze_coverage"], execute_id)
     ids = [tool["id"] for tool in config["tools"]]
     assert execute_id in ids

@@ -19,6 +19,7 @@ from core.auth import tool_principal
 from core.deps import provide_mcp_registry
 from core.integrations.mcp.registry import MCPRegistry
 from core.integrations.mcp.surface import acting_as
+from core.llm.tool_risk import current_overrides, destructive_refusal
 from core.llm.tool_schemas import CALL_INTEGRATION_TOOL
 from core.routing import Auth, RouterMeta
 
@@ -174,6 +175,49 @@ def _source_system(tool: str, registry: MCPRegistry) -> str:
     return SOURCE_SYSTEM if split is None else split[0]
 
 
+class ToolPolicyRefused(Exception):
+    """The invoke boundary refused a direct-action tool call: no person, no override.
+
+    Carries the #917 rule string so the refusal records why, the same shape an
+    approval row's reason does. ``invoke`` renders it as a ``refused`` failure —
+    a defect in the call, never a visibility gap.
+    """
+
+    def __init__(self, tool: str, rule: str) -> None:
+        super().__init__(f"{tool} refused: {rule}")
+        self.tool = tool
+        self.rule = rule
+
+    @property
+    def detail(self) -> str:
+        return (
+            f"{self.tool} is a direct-action tool and this call carries no person: "
+            "queue the action through create_approval_action, or have the operator "
+            "allow-list the tool in tool_risk_overrides."
+        )
+
+
+def _enforce_tool_risk(tool: str, body: InvokeRequest) -> None:
+    """The destructive-verb gate on the agent-run path.
+
+    Chat already refuses these names one level up (``resolve_integration_call``
+    holds its own hard exclusion); this is where a run's own call — the name
+    the model chose — is checked. Backend tools are Vigil's own and guarded
+    where they are defined, so the taxonomy applies to the MCP side of the
+    ladder only. The gate fails closed: an override setting that cannot be
+    read allow-lists nothing (``current_overrides``).
+    """
+    if tool in MANIFEST:
+        return
+    refusal = destructive_refusal(
+        tool,
+        person_bound=body.principal is not None,
+        overrides=current_overrides(),
+    )
+    if refusal is not None:
+        raise ToolPolicyRefused(tool, refusal)
+
+
 # Backend tools first, then the MCP servers. One ceiling governs both, so a tool
 # does not get a second timeout by virtue of living on the other side.
 #
@@ -184,6 +228,7 @@ async def _run(body: InvokeRequest, registry: MCPRegistry) -> Tuple[Any, bool, s
     tool, raw = body.tool, body.args
     if tool == CALL_INTEGRATION_TOOL:
         tool, raw = resolve_integration_call(registry, raw)
+    _enforce_tool_risk(tool, body)
     args = _bounded(raw, body.bounds.max_rows, tool, registry)
 
     result, handled = await asyncio.wait_for(
@@ -219,6 +264,8 @@ async def invoke(
             result, handled, source = await _run(body, registry)
     except asyncio.TimeoutError:
         return _failure("timeout", timeoutMs=body.bounds.timeout_ms)
+    except ToolPolicyRefused as exc:
+        return _failure("refused", detail=exc.detail, rule=exc.rule)
     # An MCP server that could not be reached is a gap in visibility, not a defect
     # in the call, and the hunt records the two differently.
     except MCPFailure as exc:
@@ -234,8 +281,10 @@ async def invoke(
         logger.exception("tool %s failed", body.tool)
         return _failure("backend_error", detail=str(exc))
 
-    # refused is for a name nothing implements. A tool that ran and could not
-    # answer is a backend_error: the contract keeps the two apart deliberately.
+    # refused is for a defect in the call itself: a name nothing implements,
+    # or a direct-action tool the policy will not run without a person. A tool
+    # that ran and could not answer is a backend_error: the contract keeps the
+    # two apart deliberately.
     if not handled:
         return _failure("refused", detail=f"no such tool: {body.tool}")
     errored = _errored(result)

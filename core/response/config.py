@@ -72,6 +72,10 @@ class ResponseConfig:
     containment_subnet_prefix: int = 24
     max_containment_share_per_hour: float = 0.10
     max_containment_per_subnet_hour: int = 10
+    # Operator allow-list for the invoke boundary: MCP tool names an agent run
+    # may call directly despite the destructive-verb gate (core.llm.tool_risk).
+    # A shorter list is tighter; chat is never loosened by it.
+    tool_risk_overrides: List[str] = field(default_factory=list)
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -90,6 +94,7 @@ class ResponseConfig:
             containment_subnet_prefix=s.daemon_containment_subnet_prefix,
             max_containment_share_per_hour=s.daemon_max_containment_share_per_hour,
             max_containment_per_subnet_hour=s.daemon_max_containment_per_subnet_hour,
+            tool_risk_overrides=list(s.daemon_tool_risk_overrides),
             dry_run=s.daemon_dry_run,
         )
 

@@ -121,8 +121,9 @@ def test_changes_per_agent(agents):
     assert rows["investigator"]["changes"] == "asks_first"
     # ART execute is gated, so it asks first rather than acting on its own.
     assert rows["mitre_analyst"]["changes"] == "asks_first"
-    # Ungated Cloudflare tools win over its approval tool.
-    assert rows["auto_responder"]["changes"] == "on_its_own"
+    # Direct cf_* writes are no longer granted to it (the invoke policy refuses
+    # them without a person), so its approval tool asks first.
+    assert rows["auto_responder"]["changes"] == "asks_first"
 
 
 def test_changes_for_custom_tools():

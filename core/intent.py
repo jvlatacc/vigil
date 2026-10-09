@@ -132,6 +132,12 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         LOWER_TIGHTER,
     ),
     IntentField(
+        "respond.tool_risk_overrides",
+        "response.tool_risk_overrides",
+        "daemon_tool_risk_overrides",
+        SHORTER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",

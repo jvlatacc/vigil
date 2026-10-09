@@ -53,6 +53,11 @@ respond:
   # The absolute floor on that share, so a small subnet is bounded too.
   # (DAEMON_MAX_CONTAINMENT_PER_SUBNET_HOUR)
   max_containment_per_subnet_hour: 10
+  # MCP tool names an agent run may call directly despite the destructive-verb
+  # gate (core.llm.tool_risk). A shorter list is tighter, and chat is never
+  # loosened by it. (DAEMON_TOOL_RISK_OVERRIDES; Settings UI lands with the
+  # Limits & autonomy card)
+  tool_risk_overrides: []
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

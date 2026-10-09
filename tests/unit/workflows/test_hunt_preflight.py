@@ -226,14 +226,22 @@ def test_a_compose_that_cannot_resolve_answers_with_a_note_not_an_error():
         assert EVERY_KIND_KEYS <= set(report)
 
 
-def test_art_execute_in_a_compose_asks_you():
+def test_art_execute_in_a_compose_asks_you(monkeypatch):
     from core.integrations.atomic_red_team.descriptor import EXECUTE_IDS
+    from core.workflows import playbook_resolver
 
     execute = sorted(EXECUTE_IDS)[0]
-    report = _ask(
-        _compose({"agent": "mitre_analyst", "name": "Run", "tools": [execute]})
-    )
+    phase = {"agent": "mitre_analyst", "name": "Run", "tools": [execute]}
 
+    # By default the phase cannot hold the tool at all: the invoke policy
+    # refuses it without a person, so there is no permission row to ask about.
+    monkeypatch.setattr(playbook_resolver, "current_overrides", lambda: ())
+    report = _ask(_compose(dict(phase)))
+    assert all(row["name"] != execute for row in report["permissions"])
+
+    # Allow-listed, the grant returns and the run still asks before executing.
+    monkeypatch.setattr(playbook_resolver, "current_overrides", lambda: (execute,))
+    report = _ask(_compose(dict(phase)))
     rows = {r["name"]: r["changes"] for r in report["permissions"]}
     assert rows[execute] == "asks_you"
 
