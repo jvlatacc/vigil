@@ -420,7 +420,7 @@ class FindingProcessor:
         """The deception signal service, rebuilt when the knobs change.
 
         The Settings › Deception write lands in a system_config row and
-        :meth:`DeceptionConfig.from_settings` picks it up on its short
+        :meth:`DeceptionConfig.resolved` picks it up on its short
         cache, so when the merged config differs from the cached service's
         the service is rebuilt — enable/allowlist/window changes are live
         without a daemon restart. Test doubles injected into
@@ -429,7 +429,7 @@ class FindingProcessor:
         from core.deception.config import DeceptionConfig
         from core.deception.signals import DeceptionSignalService
 
-        config = DeceptionConfig.from_settings()
+        config = DeceptionConfig.resolved()
         current = self._deception_signal_service
         if current is None or (
             isinstance(current, DeceptionSignalService) and current.config != config

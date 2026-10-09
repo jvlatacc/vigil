@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 
 
 class FakeSettings:
-    """Only the env fields DeceptionConfig.from_settings reads."""
+    """Only the env fields DeceptionConfig resolution reads."""
 
     daemon_deception_enabled = False
     daemon_deception_backend = "dry_run"
@@ -72,9 +72,7 @@ def store(monkeypatch):
 
 
 def with_stored(monkeypatch, overrides):
-    monkeypatch.setattr(
-        deception_config, "_stored_overrides", lambda: dict(overrides)
-    )
+    monkeypatch.setattr(deception_config, "_stored_overrides", lambda: dict(overrides))
 
 
 # --- Resolution order: stored row, then env ---------------------------------
@@ -85,7 +83,7 @@ def test_stored_row_wins_over_env(monkeypatch):
         monkeypatch,
         {"enabled": True, "ttl_seconds": 7200, "allowlist": "10.0.0.0/8"},
     )
-    config = DeceptionConfig.from_settings(FakeSettings())
+    config = DeceptionConfig.resolved(FakeSettings())
     assert config.enabled is True
     assert config.ttl_seconds == 7200
     assert config.allowlist == "10.0.0.0/8"
@@ -95,7 +93,7 @@ def test_stored_row_wins_over_env(monkeypatch):
 
 def test_no_stored_row_answers_env(monkeypatch):
     with_stored(monkeypatch, {})
-    config = DeceptionConfig.from_settings(FakeSettings())
+    config = DeceptionConfig.resolved(FakeSettings())
     assert config.enabled is False
     assert config.backend == "dry_run"
     assert config.ttl_seconds == 3600
@@ -106,11 +104,9 @@ def test_failed_read_answers_env(monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("no database")
 
-    monkeypatch.setattr(
-        "core.storage.config_service.get_config_service", _boom
-    )
+    monkeypatch.setattr("core.storage.config_service.get_config_service", _boom)
     assert deception_config._stored_overrides() == {}
-    config = DeceptionConfig.from_settings(FakeSettings())
+    config = DeceptionConfig.resolved(FakeSettings())
     assert config.enabled is False
     assert config.ttl_seconds == 3600
 
@@ -127,7 +123,7 @@ def test_stored_values_are_coerced(monkeypatch):
             "ttl_seconds": None,
         },
     )
-    config = DeceptionConfig.from_settings(FakeSettings())
+    config = DeceptionConfig.resolved(FakeSettings())
     assert config.enabled is True
     assert config.backend == "dry_run"  # unknown name falls back
     assert config.honey_route_floor == 0.80
@@ -136,7 +132,7 @@ def test_stored_values_are_coerced(monkeypatch):
 
 def test_invalid_stored_backend_falls_back_to_env(monkeypatch):
     with_stored(monkeypatch, {"backend": "wireguard"})
-    config = DeceptionConfig.from_settings(FakeSettings())
+    config = DeceptionConfig.resolved(FakeSettings())
     assert config.backend == "dry_run"
 
 
@@ -193,9 +189,7 @@ async def test_settings_write_refuses_unknown_backend(store):
 
     with pytest.raises(HTTPException) as excinfo:
         await deception_router.update_settings(
-            deception_router.DeceptionSettingsWrite(
-                **_write_body(backend="wireguard")
-            ),
+            deception_router.DeceptionSettingsWrite(**_write_body(backend="wireguard")),
             current_user=SimpleNamespace(user_id="user-1"),
         )
     assert excinfo.value.status_code == 422

@@ -11,7 +11,7 @@ import ipaddress
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional
 
 from core.config import Settings, get_settings
@@ -134,6 +134,40 @@ def parse_allowlist_entries(entries: str) -> tuple:
     return tuple(networks)
 
 
+def _apply_overrides(
+    config: "DeceptionConfig", stored: Dict[str, Any]
+) -> "DeceptionConfig":
+    """Overlay one stored ``deception.settings`` row onto a config.
+
+    The stored row wins per key it actually carries; env values stay the
+    fallback for keys it omits. A stored ``backend`` that is no longer
+    valid is stale and falls back to env rather than failing at the next
+    steer.
+    """
+    backend = stored.get("backend")
+    return replace(
+        config,
+        enabled=_coerce_bool(stored.get("enabled"), config.enabled),
+        backend=(
+            backend
+            if backend in VALID_BACKENDS
+            else _coerce_str(config.backend, "dry_run")
+        ),
+        honey_route_floor=_coerce_float(
+            stored.get("honey_route_floor"), config.honey_route_floor
+        ),
+        ttl_seconds=_coerce_int(stored.get("ttl_seconds"), config.ttl_seconds),
+        max_duration_seconds=_coerce_int(
+            stored.get("max_duration_seconds"), config.max_duration_seconds
+        ),
+        min_observations=_coerce_int(
+            stored.get("min_observations"), config.min_observations
+        ),
+        window_seconds=_coerce_int(stored.get("window_seconds"), config.window_seconds),
+        allowlist=_coerce_str(stored.get("allowlist"), config.allowlist),
+    )
+
+
 @dataclass
 class DeceptionConfig:
     """The honey-routing band and its safety rails, read from Settings."""
@@ -160,32 +194,39 @@ class DeceptionConfig:
 
     @classmethod
     def from_settings(cls, settings: Optional[Settings] = None) -> "DeceptionConfig":
+        """Env-only resolution: pure, no database access.
+
+        Import-safe by contract (#1456): module-level consumers — the agents
+        router builds an ``AgentManager`` at import, which builds a
+        ``ResponseConfig`` — must be able to construct this without a
+        connection attempt. The stored Settings-UI row is read by
+        :meth:`resolved`, whose call sites are request- and tick-time.
+        """
         s = settings or get_settings()
-        stored = _stored_overrides()
-        backend = stored.get("backend")
         return cls(
-            enabled=_coerce_bool(stored.get("enabled"), s.daemon_deception_enabled),
-            backend=(
-                backend
-                if backend in VALID_BACKENDS
-                else _coerce_str(s.daemon_deception_backend, "dry_run")
-            ),
-            honey_route_floor=_coerce_float(
-                stored.get("honey_route_floor"), s.daemon_honey_route_floor
-            ),
-            ttl_seconds=_coerce_int(stored.get("ttl_seconds"), s.daemon_honey_route_ttl),
-            max_duration_seconds=_coerce_int(
-                stored.get("max_duration_seconds"), s.daemon_honey_route_max_duration
-            ),
-            min_observations=_coerce_int(
-                stored.get("min_observations"), s.daemon_honey_route_min_observations
-            ),
-            window_seconds=_coerce_int(
-                stored.get("window_seconds"), s.daemon_honey_route_window
-            ),
+            enabled=s.daemon_deception_enabled,
+            backend=_coerce_str(s.daemon_deception_backend, "dry_run"),
+            honey_route_floor=s.daemon_honey_route_floor,
+            ttl_seconds=s.daemon_honey_route_ttl,
+            max_duration_seconds=s.daemon_honey_route_max_duration,
+            min_observations=s.daemon_honey_route_min_observations,
+            window_seconds=s.daemon_honey_route_window,
             kill_switch=s.daemon_deception_kill_switch,
-            allowlist=_coerce_str(stored.get("allowlist"), s.daemon_deception_allowlist),
+            allowlist=s.daemon_deception_allowlist,
         )
+
+    @classmethod
+    def resolved(cls, settings: Optional[Settings] = None) -> "DeceptionConfig":
+        """Runtime resolution: the stored Settings-UI row over env values.
+
+        Reads the ``deception.settings`` row through the short-TTL cache in
+        :func:`_stored_overrides` — a failed read answers env values, whose
+        defaults are inert. Only runtime call sites (request handlers, the
+        daemon's per-finding path, the sweep) may call this: a module-import
+        call would open a database connection, which the repo forbids
+        (#1456) and CI ratchets.
+        """
+        return _apply_overrides(cls.from_settings(settings), _stored_overrides())
 
     def allowlist_networks(self) -> tuple:
         """The configured exemptions as parsed networks."""

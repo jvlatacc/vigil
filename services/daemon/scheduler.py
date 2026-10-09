@@ -30,7 +30,7 @@ def _deception_sweep_interval() -> int:
     """Lease-sweep cadence: the TTL divided by twelve, bounded 60-300s."""
     from core.deception.config import DeceptionConfig
 
-    ttl = max(DeceptionConfig.from_settings().ttl_seconds, 1)
+    ttl = max(DeceptionConfig.resolved().ttl_seconds, 1)
     return max(60, min(300, ttl // 12))
 
 

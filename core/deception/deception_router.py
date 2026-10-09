@@ -85,7 +85,7 @@ class LeaseRelease(BaseModel):
 @router.get("/status", dependencies=[permission_gate("deception.read")])
 async def deception_status():
     """The posture summary: knobs, kill-switch state, lease counts."""
-    config = DeceptionConfig.from_settings()
+    config = DeceptionConfig.resolved()
     counts: Dict[str, int] = {}
     backend_error: Optional[str] = None
     try:
@@ -124,7 +124,7 @@ async def list_leases(status: Optional[str] = None, limit: int = 200):
     """Lease rows newest-first, optionally filtered by status."""
     if limit < 1 or limit > 500:
         raise HTTPException(status_code=422, detail="limit must be 1-500")
-    service = DeceptionLeaseService(config=DeceptionConfig.from_settings())
+    service = DeceptionLeaseService(config=DeceptionConfig.resolved())
     statuses = [status.strip()] if status and status.strip() else None
     rows = service.list_leases(statuses=statuses, limit=limit)
     return {"leases": [_lease_to_dict(row) for row in rows], "count": len(rows)}
@@ -136,7 +136,7 @@ async def list_leases(status: Optional[str] = None, limit: int = 200):
 )
 async def release_lease(lease_id: str, body: Optional[LeaseRelease] = None):
     """Operator release: unsteer now, record the rollback and the reason."""
-    service = DeceptionLeaseService(config=DeceptionConfig.from_settings())
+    service = DeceptionLeaseService(config=DeceptionConfig.resolved())
     result = await service.release(
         lease_id, (body and body.reason) or "operator_released"
     )
@@ -240,7 +240,7 @@ async def update_settings(
     if not ok:
         raise HTTPException(status_code=500, detail="failed to store the settings")
     clear_settings_cache()
-    merged = DeceptionConfig.from_settings()
+    merged = DeceptionConfig.resolved()
     return {
         "enabled": merged.enabled,
         "backend": merged.backend,
@@ -260,7 +260,7 @@ async def list_probes(source_ip: Optional[str] = None, limit: int = 200):
         raise HTTPException(status_code=422, detail="limit must be 1-500")
     from core.deception.signals import DeceptionSignalService
 
-    service = DeceptionSignalService(config=DeceptionConfig.from_settings())
+    service = DeceptionSignalService(config=DeceptionConfig.resolved())
     rows = service.list_probes(source_ip=source_ip, limit=limit)
     probes = [
         {
