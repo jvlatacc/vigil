@@ -20,6 +20,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
+from core.integrations._base.tool_errors import classified_error
 from core.integrations._base.tool_result import run_tool
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,9 @@ async def handle_call_tool(name: str, arguments: dict | None):
                     }
             return {"ip": ip, "error": "Lookup failed"}
         except Exception as e:
-            return {"ip": ip, "error": str(e)}
+            # str(e) can carry the provider URL or a proxy error body — the
+            # agent channel gets a classified string, the log keeps the detail.
+            return {"ip": ip, "error": classified_error("ip-geolocation", name, e)}
 
     if name == "geolocate_ip":
         ip = args.get("ip")
