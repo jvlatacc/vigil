@@ -276,6 +276,8 @@ export interface UserPayload {
   password: string
   full_name: string
   role_id: string
+  // Edit-only: the backend's create endpoint does not take a subject mapping.
+  external_subject?: string
 }
 
 /** What GET/PUT /users/{id}/roles answers: the union view of a user's grants. */

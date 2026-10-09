@@ -433,6 +433,7 @@ dbInit:
     - 39_case_findings_finding_index.sql
     - 40_oauth_connections.sql
     - 40_role_assignments.sql
+    - 41_external_subject.sql
   resources:
     requests:
       cpu: 50m

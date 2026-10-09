@@ -45,6 +45,17 @@ class User(Base):
         String(50), ForeignKey("roles.role_id"), nullable=False
     )
 
+    # The subject the deployment's identity provider names for this person,
+    # when it issues the tokens the MCP surface accepts
+    # (core/auth/idp_jwt.py). Set by an admin through the users API, never
+    # from a token claim: mapping a remote identity to a local account is a
+    # decision with an audit trail, not something a bearer token can do to
+    # itself. Unique and nullable — NULL is every user who signs in with a
+    # password only, and Postgres ignores NULLs in unique constraints.
+    external_subject: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

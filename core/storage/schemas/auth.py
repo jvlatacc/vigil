@@ -13,6 +13,10 @@ class UserSchema(ORMSchema):
     email: Optional[str] = None
     full_name: Optional[str] = None
     role_id: Optional[str] = None
+    # The subject an IdP names for this person, when an admin has mapped one.
+    # Not a credential and not a permission — what the user may do still reads
+    # from their roles alone.
+    external_subject: Optional[str] = None
     is_active: Optional[bool] = None
     is_verified: Optional[bool] = None
     mfa_enabled: Optional[bool] = None

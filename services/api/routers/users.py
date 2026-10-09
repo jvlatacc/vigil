@@ -49,6 +49,12 @@ class UpdateUserRequest(BaseModel):
     email: Optional[EmailStr] = None
     role_id: Optional[str] = None
     is_active: Optional[bool] = None
+    # The subject an external identity provider names for this person, and the
+    # only way an IdP token on the MCP surface becomes a Vigil account
+    # (core/auth/idp_jwt.py). An admin sets it deliberately or leaves it empty;
+    # nothing derives it from a token. None here means "leave it alone";
+    # an empty string clears the mapping.
+    external_subject: Optional[str] = None
 
 
 class ChangeUserRoleRequest(BaseModel):
@@ -315,6 +321,28 @@ def _apply_user_update(
 
     if request.is_active is not None:
         user.is_active = request.is_active
+
+    if request.external_subject is not None:
+        # A blank box clears the mapping: un-mapping an IdP subject is a
+        # deliberate act too, and the UI has one field for both directions.
+        subject = request.external_subject.strip() or None
+        if subject is not None:
+            if len(subject) > 255:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="External subject must be at most 255 characters",
+                )
+            existing = (
+                session.query(User)
+                .filter(User.external_subject == subject, User.user_id != user_id)
+                .first()
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="External subject already in use",
+                )
+        user.external_subject = subject
 
     # Flush so the read-back sees server defaults; the request's unit
     # of work commits.
