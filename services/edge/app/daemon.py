@@ -412,9 +412,12 @@ class EdgeDaemon:
         may demote autonomy, never promote it. A node that never had a
         bundle is the Tier-0 floor, not degradation."""
         bundle = self._cache.current
-        if bundle is not None and bundle.expires_at <= datetime.now(UTC):
-            if self._states.state is not OperatingState.DEGRADED:
-                self._record_state(OperatingState.DEGRADED, reason="bundle_expired")
+        if (
+            bundle is not None
+            and bundle.expires_at <= datetime.now(UTC)
+            and self._states.state is not OperatingState.DEGRADED
+        ):
+            self._record_state(OperatingState.DEGRADED, reason="bundle_expired")
 
     async def _rebuild_inputs(self) -> None:
         """Restart observation inputs against the new bundle's scope: the

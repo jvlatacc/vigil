@@ -21,7 +21,8 @@ Two facts carry the design:
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping, Protocol
+from collections.abc import Mapping
+from typing import Any, Protocol
 
 from services.edge.journal.journal import HashJournal
 from services.edge.sync.protocol import batches, event_from_record

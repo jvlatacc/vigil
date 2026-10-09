@@ -100,7 +100,7 @@ def test_enroll_failures_raise_enroll_error(tmp_path: Path) -> None:
             credential=None,
         )
 
-        async def scenario() -> None:
+        async def scenario(client: SyncClient = client) -> None:
             await client.enroll("token", {})
 
         with pytest.raises(EnrollError, match=expected):

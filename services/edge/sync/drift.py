@@ -182,7 +182,7 @@ def build_drift_report(
     )
 
 
-def _entry_payload(entry: "DriftEntry") -> dict[str, Any]:
+def _entry_payload(entry: DriftEntry) -> dict[str, Any]:
     """Wire form of one report entry — the closure record carries these."""
     return {
         "local_sequence": entry.local_sequence,
@@ -197,7 +197,7 @@ def _entry_payload(entry: "DriftEntry") -> dict[str, Any]:
     }
 
 
-def _failed_apply(entry: "DriftEntry") -> DriftEntry:
+def _failed_apply(entry: DriftEntry) -> DriftEntry:
     return DriftEntry(
         local_sequence=entry.local_sequence,
         rule_string=entry.rule_string,
