@@ -198,11 +198,19 @@ def _cached_tools() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _server_config(mcp_client, name: str) -> Dict[str, Any]:
+    # Declarations, not resolved values: the registry outlives a spawn, and a
+    # fully-substituted child environment parked here would keep every
+    # integration token alive in process memory for the registry's lifetime.
+    # What a server declared (the env names its own config requires) is the
+    # reviewable fact; the resolved values live only in the spawn path.
     service = getattr(mcp_client, "mcp_service", None)
     server = getattr(service, "servers", {}).get(name) if service else None
     if server is None:
         return {}
-    return {"command": server.command, "args": server.args, "env": server.env}
+    return {
+        "command": server.command,
+        "required_env_vars": list(getattr(server, "required_env_vars", None) or []),
+    }
 
 
 def _normalised(tool: Dict[str, Any]) -> Dict[str, Any]:
