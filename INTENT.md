@@ -35,6 +35,11 @@ respond:
   # Route every action through human approval regardless of confidence.
   # (DAEMON_FORCE_APPROVAL, or Settings -> Approvals in the UI)
   force_manual_approval: false
+  # Containment targets unattended response may never touch, whatever the
+  # confidence: kind:value entries — ip, cidr, hostname_glob, role. A longer
+  # list is tighter; rows added in Settings tighten this and never loosen it.
+  # (DAEMON_NEVER_QUARANTINE)
+  never_quarantine: []
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

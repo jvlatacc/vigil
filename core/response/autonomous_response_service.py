@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
 from core.response.config import ResponseConfig
+from core.response.protected_targets import containment_hold
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +289,11 @@ class AutonomousResponseService:
             )
             results = []
 
+            # The never-quarantine invariants, read once per tick: a protected
+            # target is never contained, even if a row reached the approved
+            # state underneath the gate. A failed read holds everything.
+            rules = self.approval_service.protected_target_rules()
+
             for action in approved_actions:
                 # Skip if already executed
                 if action.executed_at:
@@ -302,6 +308,35 @@ class AutonomousResponseService:
                     continue
 
                 params = action.parameters or {}
+
+                # Last line of defense before the world changes. A failed or
+                # unreadable read skips the row for this tick — a transient
+                # read error must not fail a decision permanently — while a
+                # matched invariant fails the row: it cannot execute while
+                # the target is protected.
+                hold = containment_hold(
+                    action.action_type, action.target, rules, params
+                )
+                if hold is not None:
+                    if rules.read_failed or rules.unparsed:
+                        logger.warning(
+                            "Action %s not executed this tick: %s",
+                            action.action_id,
+                            hold,
+                        )
+                        continue
+                    error = f"Never-quarantine invariant: {hold}"
+                    self.approval_service.mark_failed(action.action_id, error)
+                    results.append(
+                        {
+                            "action_id": action.action_id,
+                            "action_type": action.action_type,
+                            "target": action.target,
+                            "result": {"success": False, "error": error},
+                        }
+                    )
+                    continue
+
                 result: Optional[Dict] = None
 
                 if action.action_type == "isolate_host":

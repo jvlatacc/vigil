@@ -707,6 +707,12 @@ export const configApi = {
   getForceManualApproval: () => api.get('/config/force-manual-approval'),
   setForceManualApproval: (enabled: boolean) =>
     api.post('/config/force-manual-approval', { enabled }),
+
+  getProtectedTargets: () => api.get('/config/protected-targets'),
+  addProtectedTarget: (entry: { kind: string; value: string; reason: string }) =>
+    api.post('/config/protected-targets', entry),
+  removeProtectedTarget: (kind: string, value: string) =>
+    api.delete('/config/protected-targets', { params: { kind, value } }),
 }
 
 export interface PlatformDatabaseProxyConfig {

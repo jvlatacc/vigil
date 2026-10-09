@@ -9,6 +9,7 @@ from core.response.config import (
     approval_requirement,
     response_action_decision,
 )
+from core.response.protected_targets import ProtectedTargetRules
 
 pytestmark = pytest.mark.unit
 
@@ -51,6 +52,11 @@ class _Service:
 
     def mark_failed(self, action_id, error):
         self.executed.append(action_id)
+
+    def protected_target_rules(self):
+        # The executor reads the never-quarantine rules each tick; the fake
+        # declares none, so its rows decide on their own merits.
+        return ProtectedTargetRules()
 
 
 def _row(action_id, *, requires_approval, approved_by):

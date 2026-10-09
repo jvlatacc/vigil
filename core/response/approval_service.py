@@ -24,6 +24,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from core.response.config import ResponseConfig, approval_requirement, decision_rule
+from core.response.protected_targets import (
+    CONTAINMENT_ACTION_TYPES,
+    ProtectedTarget,
+    ProtectedTargetRules,
+    containment_hold,
+    current_rules,
+    rows_to_targets,
+)
 from core.storage.config_service import get_config_service
 from core.storage.connection import get_db_manager
 from core.storage.models import ApprovalAction as ApprovalActionRow
@@ -32,6 +40,16 @@ from core.telemetry import get_meter
 from core.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _active_protected_targets() -> tuple[ProtectedTarget, ...]:
+    """Active operator rows, through this module's DB seam so the tests that
+    stub get_db_manager cover the read too. Raises on a failed read."""
+    from core.storage.protected_target_repository import active_rows
+
+    with get_db_manager().session_scope() as session:
+        return rows_to_targets(active_rows(session))
+
 
 APPROVAL_CONFIG_KEY = "approval.force_manual_approval"
 
@@ -207,6 +225,24 @@ class ApprovalService:
         self.force_manual_approval = force
         logger.info("Force manual approval set to: %s", force)
 
+    def protected_target_rules(self) -> ProtectedTargetRules:
+        """The never-quarantine floor plus operator rows, fail-closed.
+
+        Read at each decision like the stored approval flag, so a row added
+        in Settings binds without a restart; a failed read holds containment
+        rather than deciding (the approval-flag fail-closed pattern).
+        """
+        try:
+            rows = _active_protected_targets()
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Cannot read the protected targets; holding containment for "
+                "a person: %s",
+                e,
+            )
+            return current_rules(self.config, read_failed=True)
+        return current_rules(self.config, rows)
+
     # ------------------------------------------------------------------
     # CRUD — DB-backed
     # ------------------------------------------------------------------
@@ -287,18 +323,34 @@ class ApprovalService:
         """
         key = idempotency_key or None
 
+        # A never-quarantine invariant is checked before anything else decides:
+        # no confidence releases a containment target the operator protected.
+        # Only containment rows are matched — observing decisions name no
+        # containment target, so they are never held and never pay the read.
+        invariant = None
+        if action_type.value in CONTAINMENT_ACTION_TYPES:
+            invariant = containment_hold(
+                action_type.value,
+                target,
+                self.protected_target_rules(),
+                parameters,
+            )
+
         # The branch that set requires_approval is appended to the caller's
         # narrative so the row records the rule it was decided by (#917).
         forced = (
             human_only
             or self.force_manual_approval
             or self._stored_force_manual_approval()
+            or invariant is not None
         )
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)
+        elif invariant is not None:
+            rule = invariant
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 

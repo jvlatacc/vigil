@@ -25,6 +25,14 @@ import type { LastTest } from './integrationHealth'
 
 export type Phase = 'loading' | 'ready' | 'error'
 
+export function errorText(err: unknown, fallback: string): string {
+  if (typeof err === 'object' && err && 'response' in err) {
+    const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+    if (typeof detail === 'string' && detail) return detail
+  }
+  return fallback
+}
+
 export interface GeneralConfig {
   auto_start_sync: boolean
   show_notifications: boolean
@@ -513,6 +521,70 @@ export function useForceManualApproval() {
   }, [])
 
   return { ...state, phase, save }
+}
+
+export interface ProtectedTargetView {
+  kind: string
+  value: string
+  origin: string
+  reason: string
+  created_by: string
+  created_at?: string | null
+  removable: boolean
+}
+
+export interface ProtectedTargets {
+  targets: ProtectedTargetView[]
+  unparsed: string[]
+}
+
+export function useProtectedTargets() {
+  const [state, setState] = useState<ProtectedTargets>({ targets: [], unparsed: [] })
+  const [phase, setPhase] = useState<Phase>('loading')
+
+  const apply = useCallback((row: Partial<ProtectedTargets>) => {
+    setState({ targets: row.targets ?? [], unparsed: row.unparsed ?? [] })
+  }, [])
+
+  const load = useCallback(() => {
+    setPhase('loading')
+    let cancelled = false
+    configApi
+      .getProtectedTargets()
+      .then(({ data }) => {
+        if (cancelled) return
+        apply(data as Partial<ProtectedTargets>)
+        setPhase('ready')
+      })
+      .catch(() => {
+        // A failed read is an error, not an empty list: showing no protections
+        // would invite removing a guard that was never read.
+        if (!cancelled) setPhase('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [apply])
+
+  useEffect(() => load(), [load])
+
+  const add = useCallback(
+    async (entry: { kind: string; value: string; reason: string }) => {
+      const { data } = await configApi.addProtectedTarget(entry)
+      apply(data as Partial<ProtectedTargets>)
+    },
+    [apply],
+  )
+
+  const remove = useCallback(
+    async (kind: string, value: string) => {
+      const { data } = await configApi.removeProtectedTarget(kind, value)
+      apply(data as Partial<ProtectedTargets>)
+    },
+    [apply],
+  )
+
+  return { ...state, phase, add, remove, reload: load }
 }
 
 export interface StorageInfo {

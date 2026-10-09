@@ -10,8 +10,8 @@ Lives in ``core/`` because ``core`` must not import ``services``;
 ``services.daemon.config`` re-exports it as part of ``DaemonConfig``.
 """
 
-from dataclasses import dataclass
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Optional
 
 from core.config import Settings, get_settings
 
@@ -49,6 +49,11 @@ class ResponseConfig:
     critical_action_floor: float = 0.70
     high_action_floor: float = 0.80
     force_manual_approval: bool = False
+    # Never-quarantine invariants: the DAEMON_NEVER_QUARANTINE entries
+    # (kind:value), parsed at each decision by core.response.protected_targets.
+    # Operator rows in the protected_targets table can tighten this and never
+    # loosen it.
+    never_quarantine: List[str] = field(default_factory=list)
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -62,6 +67,7 @@ class ResponseConfig:
             critical_action_floor=s.daemon_critical_action_floor,
             high_action_floor=s.daemon_high_action_floor,
             force_manual_approval=s.daemon_force_approval,
+            never_quarantine=list(s.daemon_never_quarantine),
             dry_run=s.daemon_dry_run,
         )
 

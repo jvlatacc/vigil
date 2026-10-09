@@ -7,6 +7,7 @@ import { InfoTip } from '../../shared/InfoTip'
 import { ScrubField } from '../../shared/ScrubField'
 import { ConfirmDialog, Field, SettingsCard, TextInput, Toggle } from '../../shared/ui'
 import {
+  errorText,
   matchesProfile,
   useForceManualApproval,
   useOrchestrator,
@@ -17,6 +18,7 @@ import {
 import type { SectionProps } from './types'
 import { fmtCost } from '../../shared/cost'
 import IntentReportCard from './IntentReportCard'
+import ProtectedTargetsCard from './ProtectedTargetsCard'
 
 // Raising any of these needs a confirm; lowering applies at once. Settings also
 // guards stale_threshold, which Setup's profile picker never changes.
@@ -51,14 +53,6 @@ const pendingCopy = (pending: PendingSave): { title: string; body: string } => {
       return _exhaustive
     }
   }
-}
-
-function errorText(err: unknown, fallback: string): string {
-  if (typeof err === 'object' && err && 'response' in err) {
-    const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
-    if (typeof detail === 'string' && detail) return detail
-  }
-  return fallback
 }
 
 const ACT_TIP =
@@ -435,6 +429,8 @@ export default function AutoInvestigateSection({ notify }: SectionProps) {
           </>
         )}
       </SettingsCard>
+
+      <ProtectedTargetsCard notify={notify} />
 
       <SettingsCard
         wide
