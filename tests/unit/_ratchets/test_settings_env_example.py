@@ -91,6 +91,9 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
     "VIGIL_DIR",
+    # Boot-time override read by start.sh for headless mode (f959365): the shell
+    # value outranks the .env default, so Settings never sees it.
+    "SKIP_FRONTEND",
 }
 
 

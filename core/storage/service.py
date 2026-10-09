@@ -151,6 +151,10 @@ class DatabaseService:
                 cluster_id=kwargs.get("cluster_id"),
                 severity=kwargs.get("severity"),
                 status=kwargs.get("status", "new"),
+                # Origin attestation stamp (#944); the webhook sets these,
+                # other sources omit them and default to unverified.
+                origin_verified=kwargs.get("origin_verified", False),
+                origin_id=kwargs.get("origin_id"),
             )
             _set_mitre_prediction_rows(finding, mitre_predictions)
             session.add(finding)
@@ -246,6 +250,8 @@ class DatabaseService:
                     cluster_id=r.get("cluster_id"),
                     severity=r.get("severity"),
                     status=r.get("status", "new"),
+                    origin_verified=r.get("origin_verified", False),
+                    origin_id=r.get("origin_id"),
                 )
                 _set_mitre_prediction_rows(finding, r.get("mitre_predictions") or {})
                 session.add(finding)

@@ -433,6 +433,7 @@ dbInit:
     - 39_case_findings_finding_index.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
+    - 41_finding_origin_stamps.sql
   resources:
     requests:
       cpu: 50m

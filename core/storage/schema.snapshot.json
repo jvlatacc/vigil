@@ -1890,6 +1890,14 @@
       "data_type": "character varying(50)",
       "nullable": true
     },
+    "origin_id": {
+      "data_type": "character varying(255)",
+      "nullable": true
+    },
+    "origin_verified": {
+      "data_type": "boolean",
+      "nullable": false
+    },
     "severity": {
       "data_type": "character varying(20)",
       "nullable": true

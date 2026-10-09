@@ -148,6 +148,22 @@ def create_findings_description_gin_index(conn):
     """))
 
 
+# Origin attestation stamps (#944). create_all adds no column to a table it
+# already finds, so databases initialized before #944 lack both, and the
+# webhook's stamp write would fail every ingest. 41_finding_origin_stamps.sql
+# builds them on Helm; this step covers a database that init SQL never
+# reached. No backfill: every pre-existing row is unverified by definition.
+@migration("Add origin stamp columns to findings")
+def add_findings_origin_stamps(conn):
+    if not _table_exists(conn, 'findings'):
+        return
+    conn.execute(text("""
+        ALTER TABLE findings
+            ADD COLUMN IF NOT EXISTS origin_verified BOOLEAN NOT NULL DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS origin_id VARCHAR(255);
+    """))
+
+
 # ---------------------------------------------------------------------------
 # llm_interaction_logs table
 # ---------------------------------------------------------------------------
