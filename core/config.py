@@ -326,6 +326,10 @@ class Settings(BaseSettings):
     cloudy_ingestion_enabled: bool = False
     cloudy_webhook_max_body_kb: int = 1024
     threat_feed_poll_interval: int = 900
+    # Daily CISA KEV refresher (services/daemon/threat_feed_poller.py): keeps
+    # the bundled t=0 seed current from the official, key-less feed. Off only
+    # when an install's egress policy forbids reaching cisa.gov.
+    vigil_threat_feed_kev_enabled: bool = True
 
     # Sandbox
     sandbox_auto_submit: bool = False
