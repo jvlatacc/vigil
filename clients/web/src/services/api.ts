@@ -222,6 +222,12 @@ export const findingsApi = {
     ),
 }
 
+export const twinApi = {
+  // the console-surface twin graph (unversioned, like the findings extras);
+  // exclusion handling is server-side and on by default
+  getGraph: () => api.get<Schema<'TwinGraphSchema'>>('/twin/graph'),
+}
+
 export interface IpExclusion {
   exclusion_id: string
   ip: string

@@ -1,0 +1,483 @@
+/* Twin screen — the network as findings see it. Token-driven like the rest
+ * of the console; the canvas is full-height (the shell's view-full mode). */
+
+.twin-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.twin-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex: 0 0 auto;
+}
+
+.twin-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 260px;
+  max-width: 380px;
+  flex: 1 1 260px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--tx-3);
+}
+
+.twin-search:focus-within {
+  border-color: var(--accent);
+}
+
+.twin-search input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--tx);
+  font-size: 13px;
+}
+
+.twin-updating {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--tx-3);
+}
+
+.twin-updating::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: twin-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes twin-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.twin-generated {
+  font-size: 11.5px;
+  color: var(--tx-faint);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+/* KPI strip ------------------------------------------------------------- */
+
+.twin-kpis {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+
+.twin-kpi {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px 22px 12px 0;
+  margin-right: 22px;
+  border-right: 1px solid var(--line-soft);
+  min-width: 130px;
+}
+
+.twin-kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+  white-space: nowrap;
+}
+
+.twin-kpi-value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
+.twin-kpi-of {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--tx-faint);
+}
+
+.twin-kpi-chart {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.twin-kpi-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--tx-2);
+  white-space: nowrap;
+}
+
+.twin-kpi-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 5px;
+}
+
+.twin-kpi-top {
+  flex: 1 1 260px;
+  min-width: 220px;
+  margin-right: 0;
+  border-right: 0;
+}
+
+.twin-kpi-top .hbars {
+  width: 100%;
+}
+
+.twin-kpi-empty {
+  font-size: 12px;
+  color: var(--tx-faint);
+}
+
+/* Stage ----------------------------------------------------------------- */
+
+.twin-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.twin-stage-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.twin-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.twin-loading {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--tx-3);
+  font-size: 13px;
+}
+
+.twin-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--crit);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--crit);
+  font-size: 12.5px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+
+.twin-no-match {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--tx-3);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.twin-no-match .btn {
+  pointer-events: auto;
+}
+
+.twin-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 11px;
+  color: var(--tx-2);
+  pointer-events: none;
+}
+
+.twin-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--accent);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.twin-legend i.twin-legend-link {
+  border-top-style: dashed;
+  border-top-color: var(--tx-3);
+}
+
+.twin-legend i.twin-legend-flow {
+  border-top-style: solid;
+}
+
+/* Nodes ----------------------------------------------------------------- */
+
+.twin-node {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border-style: solid;
+  background: var(--panel);
+  color: var(--tx);
+  font-size: 12.5px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+
+.twin-node.selected {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 2px 10px rgba(0, 0, 0, 0.18);
+}
+
+.twin-node.kind-unattributed {
+  border-style: dashed;
+  opacity: 0.9;
+}
+
+.twin-node-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--bg-3);
+  color: var(--tx-2);
+  flex: 0 0 auto;
+}
+
+.twin-node-copy {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.twin-node-kind {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+
+.twin-node-label {
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.twin-node-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.twin-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Popover --------------------------------------------------------------- */
+
+.twin-popover {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 14;
+  width: 380px;
+  max-height: calc(100% - 24px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
+}
+
+.twin-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.twin-pop-title {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.twin-pop-kind {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+  margin-right: 7px;
+}
+
+.twin-pop-close {
+  padding: 4px;
+}
+
+.twin-pop-body {
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.twin-pop-section {
+  padding: 8px 12px 4px;
+}
+
+.twin-pop-section h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--tx-3);
+}
+
+.twin-pop-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tx-faint);
+}
+
+.twin-pop-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.twin-pop-row {
+  display: grid;
+  grid-template-columns: 10px auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tx);
+  text-align: left;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.twin-pop-row:hover {
+  background: var(--bg-3);
+  border-color: var(--line);
+}
+
+.twin-pop-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.twin-pop-sev {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tx-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.twin-pop-main {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.twin-pop-meta {
+  font-size: 11px;
+  color: var(--tx-faint);
+  white-space: nowrap;
+}
