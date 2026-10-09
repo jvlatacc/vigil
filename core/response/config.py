@@ -48,6 +48,13 @@ class ResponseConfig:
     # investigated, at or above these.
     critical_action_floor: float = 0.70
     high_action_floor: float = 0.80
+    # Honey-routing (feature 5): the deception band. A transparent, TTL-
+    # reversible redirect may act below the deny bar — the system demotes
+    # its autonomy, only humans promote it — on its own dedicated floor.
+    # Existing fields above are untouched; the branch reads only these.
+    honey_route_enabled: bool = False
+    honey_route_floor: float = 0.80
+    honey_route_ttl_seconds: int = 3600
     force_manual_approval: bool = False
     dry_run: bool = False  # Log actions without executing
 
@@ -61,6 +68,9 @@ class ResponseConfig:
             monitor_threshold=s.daemon_monitor_threshold,
             critical_action_floor=s.daemon_critical_action_floor,
             high_action_floor=s.daemon_high_action_floor,
+            honey_route_enabled=s.daemon_deception_enabled,
+            honey_route_floor=s.daemon_honey_route_floor,
+            honey_route_ttl_seconds=s.daemon_honey_route_ttl,
             force_manual_approval=s.daemon_force_approval,
             dry_run=s.daemon_dry_run,
         )
@@ -71,12 +81,21 @@ def response_action_decision(
     confidence: float,
     recommended: str,
     config: ResponseConfig,
+    deception_signal: bool = False,
 ) -> Optional[tuple[str, str]]:
     """The finding-side response, or None when nothing would be acted on.
 
     Returns ``(action, rule)``. Auto-response off is a decision, not a
     precondition: a manifest that disables it reports every finding that
     would have acted as losing its action.
+
+    ``deception_signal`` (feature 5) is the deterministic recon predicate —
+    enabled ∧ recon-shaped ∧ not exempt ∧ corroborated — computed by
+    core.deception.signals. It adds a LAST band, after every existing one:
+    a corroborated recon source at or above ``honey_route_floor`` is steered
+    into decoys instead of being left unacted on; the deny-shaped bands
+    keep their priority and are byte-for-byte unchanged. It defaults to
+    False, so existing callers see identical behaviour.
     """
     if not config.auto_response_enabled or not 0.0 <= confidence <= 1.0:
         return None
@@ -95,6 +114,14 @@ def response_action_decision(
         return "investigate", decision_rule(
             "response.high_action_floor", config.high_action_floor, confidence
         )
+    if (
+        config.honey_route_enabled
+        and deception_signal
+        and confidence >= config.honey_route_floor
+    ):
+        return "honey_route", decision_rule(
+            "response.honey_route_floor", config.honey_route_floor, confidence
+        )
     return None
 
 
@@ -103,12 +130,18 @@ def approval_requirement(
     reversibility: Any,
     confidence: float,
     config: ResponseConfig,
+    action_type: Any = None,
 ) -> tuple[bool, str]:
     """Whether an approval row waits for a human, and the rule that decided it.
 
     ``reversibility`` is the enum the live path passes. Compared by ``.value``
     so this module does not import the service that calls it. An unknown
     value raises, unless force-manual already decided.
+
+    ``action_type`` (feature 5) exists for one case: a reversible
+    ``honey_route`` row auto-approves on its own lower floor — transparent
+    and TTL-reversible — where every other reversible action still needs the
+    0.90 line. None (every existing caller) changes nothing.
     """
     if force_manual_approval:
         return True, decision_rule("approval.force_manual_approval", True)
@@ -120,6 +153,13 @@ def approval_requirement(
         # inflating the number, and must not read as "above the threshold".
         if not 0.0 <= confidence <= 1.0:
             return True, decision_rule("response.confidence_range", confidence)
+        if (
+            action_type is not None
+            and getattr(action_type, "value", action_type) == "honey_route"
+        ):
+            return confidence < config.honey_route_floor, decision_rule(
+                "response.honey_route_floor", config.honey_route_floor, confidence
+            )
         return confidence < config.confidence_threshold, decision_rule(
             "response.confidence_threshold", config.confidence_threshold, confidence
         )

@@ -77,6 +77,7 @@ class ActionType(Enum):
     WAF_BLOCK = "waf_block"  # Cloudflare WAF IP Access Rule
     GATEWAY_BLOCK = "gateway_block"  # Cloudflare Zero Trust Gateway DNS/HTTP rule
     ACCESS_REVOKE = "access_revoke"  # Cloudflare Zero Trust Access session revoke
+    HONEY_ROUTE = "honey_route"  # Feature 5 — steer a recon source into decoys
     CUSTOM = "custom"
 
 
@@ -295,7 +296,7 @@ class ApprovalService:
             or self._stored_force_manual_approval()
         )
         requires_approval, rule = approval_requirement(
-            forced, reversibility, confidence, self.config
+            forced, reversibility, confidence, self.config, action_type=action_type
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)
