@@ -109,6 +109,29 @@ base_confidence: 0.5
 
         assert rule.enabled is False
 
+    def test_shipped_pack_loads(self) -> None:
+        """The rules the image ships must parse against the real loader."""
+        pack = Path(__file__).resolve().parents[3] / "data" / "cep_rules"
+        rules = load_rules(pack)
+
+        by_id = {rule.id: rule for rule in rules}
+        assert {
+            "ransomware-staging-2src",
+            "credential-access-2src",
+            "network-containment-c2",
+        } == set(by_id)
+        ransomware = by_id["ransomware-staging-2src"]
+        assert ransomware.entity_key_fields == ("host",)
+        assert ransomware.steps[0].sources == ("crowdstrike", "sentinelone")
+        assert ransomware.steps[1].techniques == ("T1486", "T1070")
+        assert ransomware.action_type == "isolate_host"
+        assert ransomware.target_field == "host"
+        assert ransomware.base_confidence == 0.82
+        # The loader pins target_field inside entity_key_fields, so every
+        # valid rule — shipped ones included — targets a keyed entity.
+        for rule in rules:
+            assert rule.target_field in rule.entity_key_fields
+
 
 class TestRejections:
     def test_single_step_rule_rejected(self, tmp_path: Path) -> None:

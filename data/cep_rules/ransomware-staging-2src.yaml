@@ -1,0 +1,25 @@
+# Ransomware staging: an EDR mass-file/shadow-copy signal corroborated by a
+# SIEM event on the same host inside the window.
+#
+# Confidence arithmetic: 0.82 base; two distinct sources add the +0.10
+# corroboration bonus -> 0.92, inside the auto band (>= 0.90). isolate_host
+# has no EDR executor wired today (the containment-path research documents
+# the stub), so a match lands as a pending-approval row for an analyst —
+# exactly the design: the sequence raises the request, the gate decides.
+#
+# SIEM steps are poll-bound (Splunk 300 s / CrowdStrike 60 s defaults): the
+# window below accounts for poll cadence and does not promise sub-second
+# containment on polled feeds.
+id: ransomware-staging-2src
+entity_key_fields: [host]
+window_seconds: 600
+steps:
+  - sources: [crowdstrike, sentinelone]
+    techniques: [T1486]
+    max_gap_seconds: 300
+  - sources: [splunk, elastic, opensearch]
+    techniques: [T1486, T1070]
+    max_gap_seconds: 300
+action_type: isolate_host
+target_field: host
+base_confidence: 0.82
