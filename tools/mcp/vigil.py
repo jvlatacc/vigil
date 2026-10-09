@@ -102,6 +102,14 @@ async def _acall(fn, **kwargs) -> str:
         return jdump({"error": str(e)})
 
 
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """An ISO-8601 parameter, or None. Raises ValueError on a bad timestamp;
+    like every tool failure, that surfaces as a JSON error, not a raise."""
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def get_data_service():
     """Return the shared DatabaseDataService (demo mode or PostgreSQL)."""
     global _data_service
@@ -146,6 +154,55 @@ def list_findings(
 def get_finding(finding_id: str) -> str:
     """Get a specific finding by ID."""
     return _call(tool_registry.get_finding, finding_id=finding_id)
+
+
+@mcp.tool()
+def update_finding(
+    finding_id: str,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    anomaly_score: Optional[float] = None,
+    cluster_id: Optional[str] = None,
+    mitre_predictions: Optional[dict] = None,
+    predicted_techniques: Optional[list] = None,
+    entity_context: Optional[dict] = None,
+    evidence_links: Optional[list] = None,
+) -> str:
+    """Update/enrich an existing finding.
+
+    Mirrors the frozen PATCH /api/v1/findings/{finding_id}: the same fields,
+    the same not-found / no-updates refusals, the same updated read-back.
+    """
+    data_service = get_data_service()
+
+    def _update():
+        if not data_service.get_finding(finding_id):
+            return {"error": "Finding not found"}
+        updates = {
+            key: value
+            for key, value in {
+                "severity": severity,
+                "status": status,
+                "anomaly_score": anomaly_score,
+                "cluster_id": cluster_id,
+                "mitre_predictions": mitre_predictions,
+                "predicted_techniques": predicted_techniques,
+                "entity_context": entity_context,
+                "evidence_links": evidence_links,
+            }.items()
+            if value is not None
+        }
+        if not updates:
+            return {"error": "No updates provided"}
+        if not data_service.update_finding(finding_id, **updates):
+            return {"error": "Failed to update finding"}
+        return {
+            "success": True,
+            "finding": data_service.get_finding(finding_id),
+            "updated_fields": list(updates.keys()),
+        }
+
+    return _call(_update)
 
 
 @mcp.tool()
@@ -1364,6 +1421,273 @@ def reject_action(
 ) -> str:
     """Reject a pending action. The actor is the caller, not an argument."""
     return _call(tool_registry.reject_action, action_id=action_id, reason=reason)
+
+
+# --- Agent runs --------------------------------------------------------------
+# The run lifecycle over MCP: start, report, steer, cancel, resume. Each tool
+# delegates to the module its HTTP twin uses (core.agents.run_start / run_status
+# / directives, core.workflows.run_control), so a run driven over either surface
+# behaves the same. The actor is always the bound caller, never an argument.
+
+@mcp.tool()
+async def start_agent_run(
+    playbook: str,
+    config: str,
+    run_kind: str = "hunt",
+    arch: str = "",
+    prompt: str = "",
+    overrides: Optional[dict] = None,
+    tenant_id: Optional[str] = None,
+) -> str:
+    """Start an agent run. Mirrors the frozen POST /api/v1/agent-runs."""
+    from core.agents import run_start
+
+    async def _start():
+        return await run_start.start_run(
+            run_kind=run_kind,
+            playbook=playbook,
+            config=config,
+            arch=arch,
+            prompt=prompt,
+            overrides=overrides,
+            tenant_id=tenant_id,
+            enqueued_by=caller(),
+        )
+
+    return await _acall(_start)
+
+
+@mcp.tool()
+def get_agent_run(run_id: str) -> str:
+    """Report an agent run's status. Mirrors the frozen GET /api/v1/agent-runs/{run_id}."""
+    from core.agents.run_status import run_status
+
+    def _get():
+        with _service_session() as session:
+            return run_status(session, run_id) or {"error": f"no such run: {run_id}"}
+
+    return _call(_get)
+
+
+@mcp.tool()
+def queue_agent_directive(
+    run_id: str,
+    kind: str,
+    text: str = "",
+    fields: Optional[dict] = None,
+) -> str:
+    """Queue a directive for a running agent.
+
+    Mirrors the frozen POST /api/v1/agent-runs/{run_id}/directives. ``kind``
+    is one of note, redirect, cancel.
+    """
+    from core.agents.directives import enqueue_directive
+
+    def _queue():
+        with _service_session() as session:
+            return enqueue_directive(
+                session,
+                run_id=run_id,
+                kind=kind,
+                body=text,
+                actor=caller(),
+                fields=fields,
+            )
+
+    return _call(_queue)
+
+
+@mcp.tool()
+async def cancel_agent_run(run_id: str, reason: str) -> str:
+    """Cancel a paused or running workflow run.
+
+    Rejects any pending approval action on the run and finalises it as
+    ``cancelled`` with the supplied reason.
+    """
+    from core.response.approval_service import ApprovalService
+    from core.workflows.run_control import cancel_run
+    from core.workflows.workflow_run_service import WorkflowRunService
+
+    async def _cancel():
+        return await cancel_run(
+            run_id,
+            reason=reason,
+            actor=caller(),
+            run_service=WorkflowRunService(),
+            approval_service=ApprovalService(),
+        )
+
+    return await _acall(_cancel)
+
+
+@mcp.tool()
+async def resume_agent_run(run_id: str) -> str:
+    """Resume a paused workflow run by deciding its pending approval."""
+    from core.response.approval_service import ApprovalService
+    from core.workflows.run_control import resume_paused_run
+    from core.workflows.workflow_run_service import WorkflowRunService
+
+    async def _resume():
+        return await resume_paused_run(
+            run_id,
+            decided_by=caller(),
+            run_service=WorkflowRunService(),
+            approval_service=ApprovalService(),
+        )
+
+    return await _acall(_resume)
+
+
+# --- Workflow catalog --------------------------------------------------------
+@mcp.tool()
+def list_workflows() -> str:
+    """List available workflows. Mirrors the frozen GET /api/v1/workflows."""
+    from core.workflows import catalog
+    from core.workflows.workflows_service import WorkflowsService
+
+    return _call(catalog.listing, service=WorkflowsService())
+
+
+@mcp.tool()
+def get_workflow(workflow_id: str) -> str:
+    """Get full details for a workflow.
+
+    Mirrors the frozen GET /api/v1/workflows/{workflow_id}.
+    """
+    from core.workflows import catalog
+    from core.workflows.workflows_service import WorkflowsService
+
+    def _get():
+        workflow = catalog.detail(WorkflowsService(), workflow_id)
+        if workflow is None:
+            return {"error": f"Workflow not found: {workflow_id}"}
+        return workflow
+
+    return _call(_get)
+
+
+# --- Case operations ---------------------------------------------------------
+@mcp.tool()
+def search_cases(
+    query_text: Optional[str] = None,
+    status: Optional[list] = None,
+    priority: Optional[list] = None,
+    assignee: Optional[list] = None,
+    tags: Optional[list] = None,
+    mitre_techniques: Optional[list] = None,
+    created_after: Optional[str] = None,
+    created_before: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> str:
+    """Advanced case search. Mirrors the frozen POST /api/v1/cases/search."""
+    from core.cases.case_search_service import CaseSearchService
+
+    def _search():
+        return CaseSearchService().search_cases(
+            query_text=query_text,
+            status=status,
+            priority=priority,
+            assignee=assignee,
+            tags=tags,
+            mitre_techniques=mitre_techniques,
+            created_after=_parse_iso(created_after),
+            created_before=_parse_iso(created_before),
+            limit=limit,
+            offset=offset,
+        )
+
+    return _call(_search)
+
+
+@mcp.tool()
+def merge_cases(case_id: str, source_case_id: str) -> str:
+    """Merge a source case into a target case.
+
+    Mirrors the frozen POST /api/v1/cases/{case_id}/merge: findings, timeline,
+    activities, IOCs, evidence, tasks and comments move; the source case is
+    closed and linked with a merged_into relationship.
+    """
+    from core.cases.case_workflow_service import CaseWorkflowService
+
+    def _merge():
+        if case_id == source_case_id:
+            return {"error": "Cannot merge a case into itself"}
+        moved_findings = CaseWorkflowService().merge_cases(
+            case_id, source_case_id, caller()
+        )
+        result_case = get_data_service().get_case(case_id)
+        return {
+            "success": True,
+            "target_case": result_case,
+            "findings_moved": moved_findings,
+            "source_case_status": "closed",
+            "message": f"Case {source_case_id} merged into {case_id}",
+        }
+
+    return _call(_merge)
+
+
+@mcp.tool()
+def export_case_iocs(case_id: str, format: str = "json") -> str:
+    """Export a case's IOCs (json, csv, or stix).
+
+    Mirrors the frozen GET /api/v1/cases/{case_id}/iocs/export.
+    """
+    from core.cases.case_ioc_service import CaseIOCService
+
+    def _export():
+        ioc_service = CaseIOCService()
+        if format == "csv":
+            return {"format": "csv", "content": ioc_service.export_iocs_csv(case_id)}
+        if format == "stix":
+            return {"format": "stix", "content": ioc_service.export_iocs_stix(case_id)}
+        return {"format": "json", "content": ioc_service.export_iocs_json(case_id)}
+
+    return _call(_export)
+
+
+# --- Case metrics ------------------------------------------------------------
+# One 0.x wrapper over the six frozen metric reads. The reads themselves are
+# the frozen surface; the wrapper adds only metric selection -- each branch is
+# the exact call its HTTP twin makes, on the shared query module.
+_METRIC_READS = ("summary", "by-priority", "by-status", "breached", "mttr", "mttd")
+
+
+@mcp.tool()
+def get_case_metrics(
+    metric: str = "summary",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    priority: Optional[str] = None,
+) -> str:
+    """Case metrics: summary, by-priority, by-status, breached, mttr, or mttd.
+
+    Dates are ISO timestamps. ``priority`` applies to mttr and mttd.
+    """
+    from core.cases.case_sla_service import CaseSLAService
+    from core.cases import case_metrics_queries
+
+    if metric not in _METRIC_READS:
+        return jdump({"error": f"metric must be one of {', '.join(_METRIC_READS)}"})
+
+    def _metrics():
+        start = _parse_iso(start_date)
+        end = _parse_iso(end_date)
+        if metric == "summary":
+            return case_metrics_queries.summary(start, end)
+        if metric == "breached":
+            return {"breached_cases": CaseSLAService().get_breached_cases()}
+        with _service_session() as session:
+            if metric == "by-priority":
+                return case_metrics_queries.by_priority(session, start, end)
+            if metric == "by-status":
+                return case_metrics_queries.by_status(session, start, end)
+            if metric == "mttr":
+                return case_metrics_queries.mttr(session, start, end, priority)
+            return case_metrics_queries.mttd(session, start, end, priority)
+
+    return _call(_metrics)
 
 
 if __name__ == "__main__":
