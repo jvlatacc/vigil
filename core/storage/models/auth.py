@@ -134,6 +134,42 @@ class Role(Base):
     __table_args__ = (Index("idx_role_name", "name"),)
 
 
+class RoleAssignment(Base):
+    """An additional role granted to a user, beyond their primary ``users.role_id``.
+
+    ``users.role_id`` stays the primary role: exactly one per user, what
+    bootstrap writes and what the users API edits today. Rows here add grants
+    on top of it. Authorization reads the union of the primary role and every
+    row here (``AuthService.check_permission``); nothing derives identity from
+    this table. The composite primary key leads with ``user_id``, so the
+    per-user lookup every permission check makes is covered by the PK index.
+    """
+
+    __tablename__ = "role_assignments"
+
+    # Deleting the person deletes their grants — an assignment cannot outlive
+    # the user it authorizes.
+    user_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True
+    )
+    # No cascade: deleting a role is a deliberate act on a row the roles
+    # surface owns; the FK will name the assignments still referencing it.
+    role_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("roles.role_id"), primary_key=True
+    )
+
+    # Who made the grant — a username, or "bootstrap" for the first admin.
+    # A permission change with no author is not auditable.
+    granted_by: Mapped[str] = mapped_column(String(50), nullable=False)
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, server_default=text("now()")
+    )
+
+    # Who holds a given role, for listings and role deletion checks. The
+    # user side is covered by the primary key.
+    __table_args__ = (Index("idx_role_assignments_role", "role_id"),)
+
+
 class McpCredential(Base):
     """A credential a program holds, to reach Vigil's MCP surface.
 

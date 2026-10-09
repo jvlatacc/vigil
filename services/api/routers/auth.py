@@ -43,7 +43,7 @@ from core.auth.token_blacklist import (
 from core.config import get_settings
 from core.platform.email_service import send_email
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
-from core.storage.models import User
+from core.storage.models import RoleAssignment, User
 from core.storage.schemas import UserSchema
 from core.time import utcnow
 from services.api.middleware.auth import get_current_active_user
@@ -261,6 +261,17 @@ def bootstrap_admin(
             status_code=status.HTTP_409_CONFLICT,
             detail="Could not create the account. Try again.",
         )
+
+    # The first admin holds role-admin as their primary role AND as an
+    # assignment row, so changing the primary later never silently demotes
+    # the one account that can still fix it.
+    session.add(
+        RoleAssignment(
+            user_id=user.user_id,
+            role_id=ADMIN_ROLE_ID,
+            granted_by="bootstrap",
+        )
+    )
 
     logger.info("First admin account created: %s", user.username)
     return UserSchema.dump(user)

@@ -20,7 +20,7 @@ from core.auth import token_blacklist
 from core.auth.auth_cookies import ACCESS_COOKIE_NAME
 from core.auth.auth_service import JWT_ALGORITHM, JWT_SECRET_KEY, AuthService
 from core.routing import request_unit_of_work
-from core.storage.models import Role, User
+from core.storage.models import Role, RoleAssignment, User
 from core.storage.models.base import Base
 from core.time import utcnow
 from services.api import main as backend_main
@@ -76,7 +76,12 @@ def client(monkeypatch, user, redis):
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
-    Base.metadata.create_all(engine, tables=[Role.__table__, User.__table__])
+    # RoleAssignment as well as Role and User: resolving a user's permissions
+    # now reads their additional assignments, so the session this fixture
+    # substitutes must know the table (create_all orders FKs itself).
+    Base.metadata.create_all(
+        engine, tables=[Role.__table__, RoleAssignment.__table__, User.__table__]
+    )
     maker = sessionmaker(bind=engine)
     with maker() as s:
         s.add(Role(role_id="r-analyst", name="analyst", description="", permissions={}))

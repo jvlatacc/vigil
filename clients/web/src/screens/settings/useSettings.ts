@@ -278,6 +278,14 @@ export interface UserPayload {
   role_id: string
 }
 
+/** What GET/PUT /users/{id}/roles answers: the union view of a user's grants. */
+export interface UserRoles {
+  user_id: string
+  primary_role_id: string
+  roles: Role[]
+  permissions: Record<string, boolean>
+}
+
 export function useUsers() {
   const [users, setUsers] = useState<User[]>([])
   const [roles, setRoles] = useState<Role[]>([])
@@ -323,8 +331,18 @@ export function useUsers() {
     (userId: string) => api.delete(`/users/${userId}`).then(() => reload()),
     [reload],
   )
+  const getUserRoles = useCallback(
+    async (userId: string): Promise<UserRoles> =>
+      (await api.get(`/users/${userId}/roles`)).data,
+    [],
+  )
+  const setUserRoles = useCallback(
+    (userId: string, roleIds: string[]) =>
+      api.put(`/users/${userId}/roles`, { role_ids: roleIds }).then(() => reload()),
+    [reload],
+  )
 
-  return { users, roles, phase, error, reload, createUser, updateUser, deleteUser }
+  return { users, roles, phase, error, reload, createUser, updateUser, deleteUser, getUserRoles, setUserRoles }
 }
 
 export interface OrchestratorConfig {

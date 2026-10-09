@@ -15,7 +15,7 @@ from core.storage.models.ai import (
     LLMInteractionLog,
     LLMProviderConfig,
 )
-from core.storage.models.auth import McpCredential, Role, User
+from core.storage.models.auth import McpCredential, Role, RoleAssignment, User
 from core.storage.models.base import Base, JSONBList, case_findings
 from core.storage.models.case import Case
 from core.storage.models.case_entities import (
@@ -122,6 +122,7 @@ __all__ = [
     "McpCredential",
     "OAuthConnection",
     "Role",
+    "RoleAssignment",
     "SLAPolicy",
     "SharedIOC",
     "SketchMapping",

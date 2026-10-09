@@ -61,6 +61,7 @@ from core.storage.models import (  # noqa: F401
     LLMProviderConfig,
     OAuthConnection,
     Role,
+    RoleAssignment,
     SharedIOC,
     SketchMapping,
     SLAPolicy,
