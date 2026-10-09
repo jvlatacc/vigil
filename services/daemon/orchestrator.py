@@ -1773,6 +1773,16 @@ class Orchestrator:
                 created_by=ORCHESTRATOR_ACTOR,
                 # The 0.8 is a constant, and the proposal is the agent's.
                 human_only=True,
+                # Per-attacker dedupe (feature 5): a run's honey_route
+                # proposal must reuse the row the daemon or the propose tool
+                # minted for the same source — honey_route:<ip> is unique
+                # among non-failed rows. Other action types keep this path's
+                # one-row-per-review behaviour.
+                idempotency_key=(
+                    f"{ActionType.HONEY_ROUTE.value}:{action.get('target', 'unknown')}"
+                    if action_type == ActionType.HONEY_ROUTE
+                    else None
+                ),
             )
             logger.info(f"Created approval action for {inv_id}: {action_str}")
         except Exception as e:
