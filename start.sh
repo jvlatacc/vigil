@@ -253,6 +253,25 @@ export BIND_HOST="${BIND_HOST:-127.0.0.1}"
 # Auth is on unless .env opts into DEV_MODE; the backend needs a signing secret.
 ensure_jwt_secret || exit 1
 
+# Headless pre-flight: warn loudly, never abort — daemon-only deployments are
+# legitimate. Runs after load_env so .env values are what gets judged.
+if [ "${VIGIL_HEADLESS:-0}" -eq 1 ]; then
+    if [ -z "${AGENT_INTERNAL_TOKEN:-}" ]; then
+        echo "WARNING: headless: AGENT_INTERNAL_TOKEN is empty — workflow runs cannot" >&2
+        echo "         start: every /internal call answers 503 and nothing drains the" >&2
+        echo "         agent-runs queue. Generate one with:" >&2
+        echo "           python3 -c \"import secrets; print(secrets.token_urlsafe(48))\"" >&2
+    fi
+    case "$(echo "${VIGIL_MCP_ENABLED:-}" | tr '[:upper:]' '[:lower:]')" in
+        true|1|yes|on) ;;
+        *)
+            echo "WARNING: headless: VIGIL_MCP_ENABLED is not true — the /mcp endpoint is" >&2
+            echo "         disabled and MCP clients have no surface to connect to." >&2
+            echo "         Set VIGIL_MCP_ENABLED=true in .env." >&2
+            ;;
+    esac
+fi
+
 # `bifrost` only resolves inside the compose network. Rewrite before starting
 # services: bringing Ollama up syncs its catalog into Bifrost, and that runs
 # here on the host.
@@ -289,14 +308,27 @@ print_ready() {
     echo "=========================================="
     echo "Vigil SOC v$VERSION - Ready"
     echo "=========================================="
-    echo "Backend:  http://localhost:6987"
-    echo "Frontend: http://localhost:6988"
-    echo "Docs:     http://localhost:6987/docs"
-    echo ""
-    if [ "${DEV_MODE:-}" = "true" ]; then
-        echo "DEV_MODE active - auth bypassed (session auth, vstrike inbound)"
+    if [ "${VIGIL_HEADLESS:-0}" -eq 1 ]; then
+        echo "Headless: no frontend, no browser auto-open"
+        echo "Backend:  http://localhost:6987"
+        echo "MCP:      http://localhost:6987/mcp"
+        echo "Docs:     http://localhost:6987/docs"
+        echo ""
+        echo "First run: mint an MCP credential without a browser:"
+        echo "  VIGIL_BOOTSTRAP_ADMIN_PASSWORD='<password>' ./scripts/headless_onboard.py"
+        if [ "${DEV_MODE:-}" = "true" ]; then
+            echo "DEV_MODE active - auth bypassed (session auth, vstrike inbound)"
+        fi
     else
-        echo "First run: create your admin account at http://localhost:6988"
+        echo "Backend:  http://localhost:6987"
+        echo "Frontend: http://localhost:6988"
+        echo "Docs:     http://localhost:6987/docs"
+        echo ""
+        if [ "${DEV_MODE:-}" = "true" ]; then
+            echo "DEV_MODE active - auth bypassed (session auth, vstrike inbound)"
+        else
+            echo "First run: create your admin account at http://localhost:6988"
+        fi
     fi
     echo "=========================================="
 }
