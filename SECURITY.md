@@ -298,6 +298,40 @@ decision to make deliberately, and each is enforced in code, not convention:
   same disabled-by-default posture as `atomic-red-team`. Keep it off unless
   a deployment needs it.
 
+### Supply-chain pins and verified publishers (October 2026)
+
+Every runtime-fetched MCP server in `mcp-config.json` pins an exact artifact,
+and `tests/unit/_ratchets/test_mcp_runtime_pins.py` enforces it: exact npm/PyPI
+versions, Docker image digests, and — since the E8/E9 hardening — a full
+40-hex commit SHA for every git ref and for local `uv --directory` clones.
+Tags are rejected as pins because they are server-side mutable.
+
+Publishers were verified against the registries in October 2026:
+
+- **Official:** `falcon-mcp` (CrowdStrike), `google-secops-mcp` / `gti-mcp` /
+  `scc-mcp` (Google SecOps Team, `google/mcp-security`),
+  `awslabs.well-architected-security-mcp-server` (AWS Labs), and
+  `pagerduty-mcp` (built from PagerDuty's own `PagerDuty/pagerduty-mcp-server`
+  — its `pyproject.toml` is PyPI's `pagerduty-mcp`; the similarly named PyPI
+  package `pagerduty-mcp-server` is an unrelated community project, do not
+  swap them).
+- **Community, named maintainers:** `security-detections-mcp` (`mhaggis`),
+  `@pebbletek/cribl-mcp` (`aby@pebbletek.ai`, `pebbletek/cribl-mcp`).
+- **Community, pseudonymous:** `@burtthecoder/mcp-virustotal` and
+  `@burtthecoder/mcp-shodan` (maintainer `burtmacklin`, code under the
+  `w0h1v` GitHub account). The exact-version pins are the control; re-verify
+  before moving one.
+- **Third-party vendor, not Okta itself:** `mcp/okta-mcp-fctr` is Fctr's
+  (`fctr.io`) Okta MCP server, listed in Docker's MCP Catalog with source
+  `fctr-id/okta-mcp-server`. It is not an Okta-published image; the digest
+  pin is the control.
+
+`mcp-remote` stays on `0.1.49`: past the `0.1.16` fix for CVE-2025-6514, and
+past the `0.1.39` remediation level reported for the 2026 SSRF/transport
+advisories (CVE-2026-51994…52001, whose upstream version metadata is
+incomplete). Jumping minor lines (0.8.x, 0.14.x) is a separate decision; the
+durable fix is retiring `mcp-remote` for an in-process streamable-HTTP client.
+
 ---
 
 ## Security in Development
