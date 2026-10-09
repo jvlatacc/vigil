@@ -33,6 +33,7 @@ FROZEN_TOOLS = frozenset(
     {
         "list_findings",
         "get_finding",
+        "update_finding",
         "list_cases",
         "get_case",
         "create_case",
@@ -44,10 +45,18 @@ FROZEN_TOOLS = frozenset(
         "add_case_ioc",
         "bulk_add_iocs",
         "get_case_iocs",
+        "search_cases",
+        "merge_cases",
+        "export_case_iocs",
         "list_approval_actions",
         "get_approval_action",
         "approve_action",
         "reject_action",
+        "start_agent_run",
+        "get_agent_run",
+        "queue_agent_directive",
+        "list_workflows",
+        "get_workflow",
     }
 )
 
