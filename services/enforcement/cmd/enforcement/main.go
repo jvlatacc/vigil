@@ -55,9 +55,11 @@ func main() {
 	if objectsDir == "" {
 		objectsDir = "bpf"
 	}
+	cgroupPath := os.Getenv("VIGIL_ENFORCEMENT_CGROUP")
 
-	kernel, kernelFaked, closer := newKernel(log, iface, objectsDir)
+	kernel, kernelFaked, closer := newKernel(log, iface, objectsDir, cgroupPath)
 	defer closer()
+	wireSink(log, kernel, os.Getenv("VIGIL_ENFORCEMENT_SINK"))
 	enf := enforce.NewEnforcer(kernel, defaultTTL(log))
 	srv, err := api.New(token, enf, kernelFaked)
 	if err != nil {
@@ -99,13 +101,13 @@ func main() {
 // for enforcement; an empty label means a real loader. A loader that cannot
 // reach the kernel at all (no bpffs) is fatal — faking it silently would
 // serve an enforcement API that enforces nothing.
-func newKernel(log *slog.Logger, iface, objectsDir string) (enforce.Kernel, string, func()) {
+func newKernel(log *slog.Logger, iface, objectsDir, cgroupPath string) (enforce.Kernel, string, func()) {
 	switch os.Getenv("VIGIL_ENFORCEMENT_KERNEL") {
 	case "fake", "faked":
 		log.Warn("using faked kernel — kernel enforcement is NOT active (VIGIL_ENFORCEMENT_KERNEL=fake)", "interface", iface)
 		return enforce.NewFakeKernel(iface), "faked", func() {}
 	default:
-		k, err := enforce.NewBPFKernel(enforce.BPFConfig{Interface: iface, ObjectsDir: objectsDir}, log)
+		k, err := enforce.NewBPFKernel(enforce.BPFConfig{Interface: iface, ObjectsDir: objectsDir, CgroupPath: cgroupPath}, log)
 		if err != nil {
 			log.Error("kernel loader unavailable — refusing to serve an enforcement API without a kernel",
 				"err", err,
@@ -114,6 +116,44 @@ func newKernel(log *slog.Logger, iface, objectsDir string) (enforce.Kernel, stri
 		}
 		return k, "", func() { _ = k.Close() }
 	}
+}
+
+// wireSink connects the redirect primitive to its sink (a tarpit or
+// capture listener). The redirect primitive is only enforceable with a live
+// sink — an entry in the map with nowhere to steer is a hollow success — so
+// a missing or undialable sink degrades the primitive rather than letting
+// the engine report enforcement that steers nothing.
+func wireSink(log *slog.Logger, kernel enforce.Kernel, sinkAddr string) {
+	degrader, canDegrade := kernel.(enforce.Degrader)
+	setter, canSet := kernel.(enforce.SinkSetter)
+	if sinkAddr == "" {
+		if canDegrade {
+			degrader.MarkDegraded(enforce.KindSocketRedirect, "no sink configured (set VIGIL_ENFORCEMENT_SINK)")
+			log.Warn("socket redirect degraded — no sink configured", "env", "VIGIL_ENFORCEMENT_SINK")
+		}
+		return
+	}
+	if !canSet {
+		log.Warn("kernel does not support sink steering; socket redirect stays degraded", "sink", sinkAddr)
+		return
+	}
+	conn, err := net.DialTimeout("tcp", sinkAddr, 5*time.Second)
+	if err != nil {
+		if canDegrade {
+			degrader.MarkDegraded(enforce.KindSocketRedirect, "sink unreachable: "+err.Error())
+		}
+		log.Warn("socket redirect degraded — sink dial failed", "sink", sinkAddr, "err", err)
+		return
+	}
+	if err := setter.SetSink(conn); err != nil {
+		_ = conn.Close()
+		if canDegrade {
+			degrader.MarkDegraded(enforce.KindSocketRedirect, "sink setup failed: "+err.Error())
+		}
+		log.Warn("socket redirect degraded — sink setup failed", "sink", sinkAddr, "err", err)
+		return
+	}
+	log.Info("redirect sink connected", "sink", sinkAddr)
 }
 
 // loaderName renders the startup-log label; the healthz label stays empty

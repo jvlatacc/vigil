@@ -2,6 +2,7 @@ package enforce
 
 import (
 	"fmt"
+	"net"
 	"sync"
 )
 
@@ -31,6 +32,7 @@ type FakeKernel struct {
 	entries  map[Kind]map[string][]byte
 	counters map[Kind]map[string]uint64
 	calls    map[Kind]*counts
+	sinkConn net.Conn
 }
 
 type counts struct {
@@ -172,6 +174,32 @@ func (f *FakeKernel) Stats(kind Kind) (Stats, error) {
 		cs[k] = v
 	}
 	return Stats{Counters: cs, Occupancy: len(f.entries[kind])}, nil
+}
+
+// SetSink records the sink connection — the faked kernel never steers, but
+// the executor-visible behaviour (no error) must match the real loader.
+func (f *FakeKernel) SetSink(conn net.Conn) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.Caps[KindSocketRedirect]; ok && !f.Caps[KindSocketRedirect].Supported {
+		return fmt.Errorf("%s: primitive not loaded", KindSocketRedirect)
+	}
+	f.sinkConn = conn
+	return nil
+}
+
+// SinkConn returns the recorded sink connection (test assertions).
+func (f *FakeKernel) SinkConn() net.Conn {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sinkConn
+}
+
+// MarkDegraded withdraws a primitive's capability after startup (Degrader).
+func (f *FakeKernel) MarkDegraded(kind Kind, reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Caps[kind] = Capability{Supported: false, Reason: reason}
 }
 
 func (f *FakeKernel) attachPoint(kind Kind) string {

@@ -4,6 +4,8 @@
 // only place kernel-specific behaviour lives.
 package enforce
 
+import "net"
+
 // Kind names an enforcement primitive. v1 keeps API kinds and kernel
 // primitives 1:1 — one BPF program per kind.
 type Kind string
@@ -90,4 +92,23 @@ type Kernel interface {
 	Capability(kind Kind) Capability
 	// Stats reads the kind's counters and map occupancy.
 	Stats(kind Kind) (Stats, error)
+}
+
+// SinkSetter is the optional kernel capability of steering a redirect
+// primitive's flows into a live sink socket. main.go checks for it after
+// construction and dials the configured sink; a kernel without it never
+// promises redirection.
+type SinkSetter interface {
+	// SetSink inserts the connected sink socket (a tarpit or capture
+	// listener) into the redirect primitive's sockmap. The kernel holds the
+	// connection for its lifetime.
+	SetSink(conn net.Conn) error
+}
+
+// Degrader is the optional kernel capability of marking a primitive degraded
+// after startup — for example when the sink dial fails: the entry was in the
+// map (MapUpdate succeeded) but no sink socket exists to steer into, so the
+// primitive must stop reporting itself as enforceable.
+type Degrader interface {
+	MarkDegraded(kind Kind, reason string)
 }

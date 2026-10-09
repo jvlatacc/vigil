@@ -44,6 +44,9 @@ type BPFConfig struct {
 	Interface string
 	// ObjectsDir holds the compiled CO-RE objects (build-bpf.sh output).
 	ObjectsDir string
+	// CgroupPath is a cgroupv2 directory for the redirect primitive's
+	// sockops enrollment hook; empty means the cgroup root.
+	CgroupPath string
 }
 
 type bpfKindState struct {
@@ -55,6 +58,12 @@ type bpfKindState struct {
 	counterMap  *ebpf.Map
 	counterName string
 	link        link.Link
+	// extraLinks are secondary attach points per kind (the redirect kind
+	// attaches its sockops enrollment hook to a cgroup alongside the sk_msg
+	// verdict on the sockmap).
+	extraLinks  []link.Link
+	sinkConn    net.Conn
+	sinkFile    *os.File
 	attachPoint string
 	// mode is the enforcement mechanism in use: "bpf", or a degraded
 	// mechanism (the process-interdict signal fallback). Reported via
@@ -74,6 +83,7 @@ type bpfKindState struct {
 type BPFKernel struct {
 	iface      string
 	objectsDir string
+	cgroupPath string
 	log        *slog.Logger
 
 	mu    sync.Mutex
@@ -92,9 +102,13 @@ func NewBPFKernel(cfg BPFConfig, log *slog.Logger) (*BPFKernel, error) {
 	k := &BPFKernel{
 		iface:      cfg.Interface,
 		objectsDir: cfg.ObjectsDir,
+		cgroupPath: cfg.CgroupPath,
 		log:        log,
 		kinds:      make(map[Kind]*bpfKindState, len(AllKinds)),
 		caps:       make(map[Kind]Capability, len(AllKinds)),
+	}
+	if k.cgroupPath == "" {
+		k.cgroupPath = "/sys/fs/cgroup"
 	}
 	// One shared BTF cache across the three collection loads amortises
 	// kernel BTF decoding.
@@ -190,6 +204,8 @@ func (k *BPFKernel) attachKind(kind Kind, bk *bpfKindState) error {
 	switch kind {
 	case KindXDPDrop:
 		return k.attachXDP(bk)
+	case KindSocketRedirect:
+		return k.attachSKMsg(bk)
 	default:
 		return fmt.Errorf("no attach implementation for kind %s (its object ships with a later primitive)", kind)
 	}
@@ -225,6 +241,89 @@ func (k *BPFKernel) Attach(kind Kind) (string, error) {
 		return "", err
 	}
 	return bk.attachPoint, nil
+}
+
+// attachSKMsg attaches the redirect object's two programs: the sk_msg
+// verdict to the sockmap (messages on enrolled sockets) and the sockops
+// enrollment hook to a cgroup (sockets established toward enforced
+// targets). The verdict attach is a raw attach — the kernel keeps no link
+// for it; Close detaches best-effort via RawDetachProgram.
+func (k *BPFKernel) attachSKMsg(bk *bpfKindState) error {
+	prog := bk.coll.Programs["vigil_sk_msg_redirect"]
+	if prog == nil {
+		return errors.New("object has no vigil_sk_msg_redirect program")
+	}
+	enroll := bk.coll.Programs["vigil_sock_enroll"]
+	if enroll == nil {
+		return errors.New("object has no vigil_sock_enroll program")
+	}
+	sockmap := bk.coll.Maps["sink_sockets"]
+	if sockmap == nil {
+		return errors.New("object has no sink_sockets sockmap")
+	}
+	if err := link.RawAttachProgram(link.RawAttachProgramOptions{
+		Target:  sockmap.FD(),
+		Program: prog,
+		Attach:  ebpf.AttachSkMsgVerdict,
+	}); err != nil {
+		return fmt.Errorf("sk_msg verdict attach: %w", err)
+	}
+	cg, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    k.cgroupPath,
+		Program: enroll,
+		Attach:  ebpf.AttachCGroupSockOps,
+	})
+	if err != nil {
+		return fmt.Errorf("sockops enroll attach on %s: %w", k.cgroupPath, err)
+	}
+	bk.extraLinks = append(bk.extraLinks, cg)
+	bk.attachPoint = k.iface + "/sockmap"
+	return nil
+}
+
+// SetSink inserts the connected sink socket at sockmap index 0 — the
+// redirect target for enrolled flows (SinkSetter).
+func (k *BPFKernel) SetSink(conn net.Conn) error {
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		return fmt.Errorf("sink must be a TCP connection to the tarpit/capture listener, got %T", conn)
+	}
+	// File() dups the fd; keep both the dup and the original connection
+	// referenced for the daemon's lifetime — the runtime finalizer closes
+	// the dup otherwise, which would silently empty sockmap slot 0.
+	file, err := tcp.File()
+	if err != nil {
+		return fmt.Errorf("sink fd: %w", err)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	bk, ok := k.kinds[KindSocketRedirect]
+	if !ok {
+		file.Close()
+		return fmt.Errorf("%s: %w", KindSocketRedirect, errKindNotLoaded)
+	}
+	sockmap := bk.coll.Maps["sink_sockets"]
+	if sockmap == nil {
+		file.Close()
+		return errors.New("object has no sink_sockets sockmap")
+	}
+	if err := sockmap.Update(uint32(0), uint32(file.Fd()), ebpf.UpdateAny); err != nil {
+		file.Close()
+		return fmt.Errorf("inserting sink socket into sockmap: %w", err)
+	}
+	bk.sinkConn = conn
+	bk.sinkFile = file
+	return nil
+}
+
+// MarkDegraded withdraws a primitive's capability after startup (Degrader) —
+// for example when the redirect sink proves unreachable: an entry in the map
+// with nowhere to steer is not enforcement, and the engine must refuse the
+// dispatch rather than report a hollow success.
+func (k *BPFKernel) MarkDegraded(kind Kind, reason string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.caps[kind] = Capability{Supported: false, Reason: reason}
 }
 
 func (k *BPFKernel) MapUpdate(kind Kind, key, value []byte) (string, int, error) {
@@ -383,6 +482,31 @@ func (k *BPFKernel) Close() error {
 		if bk.link != nil {
 			if err := bk.link.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("%s: closing link: %w", kind, err))
+			}
+		}
+		for _, l := range bk.extraLinks {
+			if err := l.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("%s: closing link: %w", kind, err))
+			}
+		}
+		if kind == KindSocketRedirect {
+			// The sk_msg verdict attach is not a link; detach best-effort.
+			if sockmap := bk.coll.Maps["sink_sockets"]; sockmap != nil {
+				if err := link.RawDetachProgram(link.RawDetachProgramOptions{
+					Target: sockmap.FD(), Attach: ebpf.AttachSkMsgVerdict,
+				}); err != nil {
+					errs = append(errs, fmt.Errorf("%s: detaching sk_msg verdict: %w", kind, err))
+				}
+			}
+			if bk.sinkFile != nil {
+				if err := bk.sinkFile.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("%s: closing sink fd: %w", kind, err))
+				}
+			}
+			if bk.sinkConn != nil {
+				if err := bk.sinkConn.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("%s: closing sink connection: %w", kind, err))
+				}
 			}
 		}
 		// Collection.Close frees the map/program fds; it returns nothing.
