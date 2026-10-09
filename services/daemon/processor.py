@@ -4,12 +4,20 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.response.fastpath.config import FastPathConfig
+from core.response.fastpath.policy import TriageSignal, evaluate_fast_path
 from core.time import utcnow
+
+if TYPE_CHECKING:
+    # Type-only: the runtime import stays inside the lazy build so a disabled
+    # fast path imports none of the enforcement stack.
+    from core.response.fastpath.speculative_service import SpeculativeActionService
+
 from services.daemon.config import ProcessingConfig, ResponseConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
 from services.daemon.probes import PROBE_DATA_SOURCE
@@ -67,11 +75,18 @@ class FindingProcessor:
         self,
         config: ProcessingConfig,
         response_config: Optional[ResponseConfig] = None,
+        fast_path_config: Optional[FastPathConfig] = None,
     ):
         self.config = config
         # The queue-for-response line is the band's review threshold, so the
         # processor reads the same ResponseConfig the responder does (#916).
         self.response_config = response_config or ResponseConfig.from_settings()
+        # The fast path is operator opt-in (its config reads FAST_PATH_* env
+        # directly); with the default it is inert and nothing below is built.
+        # Its service — ledger rows + enforcement dispatch — is built on the
+        # first enabled decision, so a disabled config constructs nothing.
+        self.fast_path_config = fast_path_config or FastPathConfig()
+        self._fast_path_service: Optional[SpeculativeActionService] = None
         # Bounded so a stalled processor holds producers back (put blocks)
         # instead of piling findings up in memory.
         self.input_queue: asyncio.Queue = asyncio.Queue(maxsize=INPUT_QUEUE_MAXSIZE)
@@ -107,6 +122,8 @@ class FindingProcessor:
             "queued_for_investigation": 0,
             "sanitization_flagged": 0,
             "store_dropped": 0,
+            "fast_path_fired": 0,
+            "fast_path_errors": 0,
         }
 
     def _sanitize_finding(self, finding: Dict[str, Any], source: Optional[str]) -> None:
@@ -327,6 +344,14 @@ class FindingProcessor:
             logger.info(
                 f"Stored finding {finding_id} (severity: {finding.get('severity')})"
             )
+
+            # T0 — the fast path's pre-triage tier, wired at the earliest seam:
+            # the finding is stored, nothing is enqueued, no model call has
+            # run. Source-native signals only, and a double opt-in (the master
+            # switch and pre_triage_enabled both on) — with the defaults this
+            # returns immediately and nothing is built. Never a gate: the
+            # enrichment and the response evaluation below run unchanged.
+            await self._run_fast_path(finding, triage=None)
 
             # Triage/enrich in the background so this worker takes the next
             # finding instead of blocking on the LLM. Blocks here when the
@@ -993,6 +1018,21 @@ REASONING: [Brief explanation]
         recommended_action = finding.get("recommended_action", "").lower()
         confidence = finding.get("triage_confidence", 0.5)
 
+        # T1 — the fast path's default tier, at Gate 1 on the triage result: a
+        # pass dispatches a speculative restriction inline (ledger row + adapter
+        # I/O, no queue hop, no poller, no model call) before anything below is
+        # enqueued, so the slow path's brief is born after its ledger row
+        # exists. An addition, never a gate: the response queue and the intake
+        # trigger run unchanged whether or not the fast path fired.
+        await self._run_fast_path(
+            finding,
+            triage=TriageSignal(
+                severity=severity,
+                confidence=confidence,
+                recommended_action=recommended_action,
+            ),
+        )
+
         # Queue for response if high severity or action recommended
         should_respond = (
             severity in ["critical", "high"]
@@ -1035,3 +1075,64 @@ REASONING: [Brief explanation]
                 logger.info(
                     f"Finding {finding.get('finding_id')} queued for autonomous investigation"
                 )
+
+    async def _run_fast_path(
+        self, finding: Dict[str, Any], triage: Optional[TriageSignal]
+    ) -> None:
+        """Evaluate the fast-path policy and dispatch a decision, inline.
+
+        Both tiers come through here: T1 from Gate 1 with the triage result,
+        T0 from the pre-triage seam with ``triage=None``. The fast path is an
+        addition at the processor's deterministic gates, never a gate on them —
+        every failure is caught and logged, and the slow path runs exactly as
+        if this method did not exist. Dispatch (ledger row + adapter I/O) is
+        synchronous, so it leaves the event loop via ``to_thread``; nothing
+        between the policy's yes and the adapter's apply hops a queue, waits
+        on a poller, or calls a model.
+
+        The live speculative population is not counted here: the policy's
+        per-target guard reads a mapping the caller would have to query, and
+        the speculative service re-checks the cap authoritatively at insert
+        time (and dedupes against a live row), so passing None never stacks a
+        second restriction.
+        """
+        if not self.fast_path_config.enabled:
+            return
+        # A known-answer probe exists to exercise the triage path (#923); it
+        # must never earn a restriction from either tier.
+        if finding.get("data_source") == PROBE_DATA_SOURCE:
+            return
+        try:
+            decision = evaluate_fast_path(finding, triage, self.fast_path_config)
+            if decision is None:
+                return
+            if self._fast_path_service is None:
+                # Imported here so a disabled config imports none of the
+                # enforcement stack (the policy and config above are light).
+                from core.response.fastpath.speculative_service import (
+                    SpeculativeActionService,
+                )
+
+                self._fast_path_service = SpeculativeActionService(
+                    config=self.fast_path_config
+                )
+            outcome = await asyncio.to_thread(
+                self._fast_path_service.create_speculative_action, decision
+            )
+            if outcome is not None and outcome.inserted:
+                self.stats["fast_path_fired"] += 1
+                logger.info(
+                    "fast path dispatched speculative %s on %s for finding %s "
+                    "(rule: %s)",
+                    decision.action_type,
+                    decision.target,
+                    finding.get("finding_id"),
+                    decision.rule,
+                )
+        except Exception:  # noqa: BLE001 — the fast path must never fail the finding
+            self.stats["fast_path_errors"] += 1
+            logger.exception(
+                "fast path dispatch failed for finding %s; the slow path is "
+                "unaffected",
+                finding.get("finding_id"),
+            )
