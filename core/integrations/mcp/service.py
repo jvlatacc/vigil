@@ -7,7 +7,7 @@ import platform
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from core.config import vigil_path
 from core.detections.detection_rules_service import DetectionRulesService
@@ -71,6 +71,7 @@ class MCPServer:
         cwd: str,
         env: Dict[str, str],
         required_env_vars: Optional[List[str]] = None,
+        auth: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.command = command
@@ -80,6 +81,15 @@ class MCPServer:
         # Credential placeholders declared in mcp-config.json for this
         # server. Read by mcp_client.connect_to_server at connect time.
         self.required_env_vars: List[str] = list(required_env_vars or [])
+        # The raw ``auth`` block, if the entry declares one -- read by the
+        # connection-state machine and the token-provider registry. Never
+        # substituted for ${VAR} placeholders: secret *values* stay in the
+        # secrets store, and the block carries keys, not secrets. Anything
+        # shaped unlike an object is dropped here; the state machine reports
+        # a server whose block does not parse, not one that silently has none.
+        self.auth: Optional[Dict[str, Any]] = (
+            dict(auth) if isinstance(auth, dict) and auth else None
+        )
 
 
 class MCPService:
@@ -331,6 +341,7 @@ class MCPService:
                             "cwd": cwd,
                             "env": env,
                             "required_env_vars": required_env_vars,
+                            "auth": server_config.get("auth"),
                         }
                     )
 

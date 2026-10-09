@@ -5125,6 +5125,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mcp/oauth/{server_name}/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete Oauth Consent
+         * @description Finish the consent flow: the UI posts the code and state the IdP
+         *     redirected with, Vigil exchanges the code for the refresh token, and
+         *     the connection reports connected.
+         */
+        post: operations["post_api_mcp_oauth_server_name_callback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mcp/oauth/{server_name}/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Oauth Consent
+         * @description Begin the one interactive consent an authorization-code server needs.
+         *
+         *     Returns the authorization URL (PKCE S256, RFC 8707 resource bound) and
+         *     the state the callback must echo. The default redirect URI is this
+         *     API's own callback route; pass one when the UI handles the redirect.
+         */
+        post: operations["post_api_mcp_oauth_server_name_consent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/mcp/servers": {
         parameters: {
             query?: never;
@@ -5212,6 +5258,13 @@ export interface paths {
          *     connected. With no MCP client, every server is disconnected: the catalog
          *     has no session state of its own. Dormant reconnect stays on
          *     ``GET /connections/status``.
+         *
+         *     A server whose config declares an ``auth`` block also carries
+         *     ``connection_state`` -- one of disabled / dormant / needs_consent /
+         *     connected / error -- plus ``oauth`` metadata (grant, issuer, client id,
+         *     scopes, RFC 8707 resource, expiry) and a ``last_error`` naming a safe
+         *     reason when one exists. The five states describe the OAuth connection;
+         *     plain stdio servers keep the session ``status`` alone.
          */
         get: operations["get_api_mcp_servers_status"];
         put?: never;
@@ -11156,6 +11209,18 @@ export interface components {
             noise_marked_by?: string | null;
             /** Status */
             status: string;
+        };
+        /** OAuthConsentCallback */
+        OAuthConsentCallback: {
+            /** Code */
+            code: string;
+            /** State */
+            state: string;
+        };
+        /** OAuthConsentStart */
+        OAuthConsentStart: {
+            /** Redirect Uri */
+            redirect_uri?: string | null;
         };
         /**
          * OrchestratorConfigResponse
@@ -21699,6 +21764,80 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_mcp_oauth_server_name_callback: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthConsentCallback"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_mcp_oauth_server_name_consent: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OAuthConsentStart"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
