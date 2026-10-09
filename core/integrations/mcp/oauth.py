@@ -669,6 +669,13 @@ class TokenProviderRegistry:
 _registry: Optional[TokenProviderRegistry] = None
 
 
+# Deliberate process-wide singleton. The registry is a cross-request,
+# server-keyed token cache — one provider per configured MCP server, with
+# serialized refresh — so per-caller instances would re-authenticate every
+# request and race refreshes. Secrets never live here: providers read
+# credentials from the encrypted secrets store; the registry holds only live
+# tokens. The DI refactor is deferred mid-wave — threading an instance through
+# every transport call site would ripple into open PR #67.
 def token_providers() -> TokenProviderRegistry:
     """Process-wide registry; the transport resolves tokens through here."""
     global _registry

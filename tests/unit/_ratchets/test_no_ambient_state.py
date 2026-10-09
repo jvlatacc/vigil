@@ -63,6 +63,11 @@ LAZY_SINGLETON_ALLOWED = {
     # Module-private and already injectable: every caller may pass its own
     # ``data_service``, and this only defers the connection for those that don't.
     ("core/findings/enrichment/service.py", "_default_data_service"),
+    # Process-scoped resource, the get_job_registry class: the registry owns
+    # live OAuth token state per server key — cached grants and serialized
+    # refresh against rotated refresh tokens — so one instance per process is
+    # the point, not an accident. Secrets stay in the encrypted secrets store.
+    ("core/integrations/mcp/oauth.py", "token_providers"),
 }
 
 
