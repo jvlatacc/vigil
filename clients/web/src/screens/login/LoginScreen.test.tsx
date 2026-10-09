@@ -6,6 +6,9 @@ import LoginScreen from './LoginScreen'
 
 const login = vi.fn()
 const navigate = vi.fn()
+const oidcProbe = vi.hoisted(() => vi.fn())
+const startOidc = vi.hoisted(() => vi.fn())
+const bootstrapStatus = vi.hoisted(() => vi.fn())
 
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ login }),
@@ -19,9 +22,12 @@ vi.mock('../../services/api', () => ({
   },
   // unmocked, this throws inside the mount effect and fails every test here
   bootstrapApi: {
-    status: () => Promise.resolve({ data: { required: false } }),
+    status: bootstrapStatus,
     create: () => Promise.resolve({ data: {} }),
   },
+  // federated sign-in probe; each test pins its answer in beforeEach
+  oidcSignInAvailability: oidcProbe,
+  startOidcSignIn: startOidc,
 }))
 
 vi.mock('react-router-dom', async () => {
@@ -42,6 +48,12 @@ function renderLogin() {
 beforeEach(() => {
   login.mockReset()
   navigate.mockReset()
+  oidcProbe.mockReset()
+  // federation off by default, so the credential-form tests stay about form
+  oidcProbe.mockResolvedValue('off')
+  startOidc.mockReset()
+  bootstrapStatus.mockReset()
+  bootstrapStatus.mockResolvedValue({ data: { required: false } })
 })
 
 describe('LoginScreen', () => {
@@ -112,5 +124,42 @@ describe('LoginScreen', () => {
     fireEvent.click(screen.getByRole('button', { name: /switch to light mode/i }))
     await waitFor(() => expect(root.getAttribute('data-theme')).toBe('light'))
     expect(root).toHaveClass('vg-light')
+  })
+
+  describe('federated sign-in', () => {
+    it('offers FreeIPA sign-in above the local form when the backend reports it on, and keeps the local fallback', async () => {
+      oidcProbe.mockResolvedValue('on')
+      renderLogin()
+      const oidcButton = await screen.findByRole('button', { name: /sign in with freeipa/i })
+      expect(oidcButton).toBeInTheDocument()
+      // the local form stays as the fallback below it
+      expect(screen.getByLabelText('Username or email')).toBeInTheDocument()
+      expect(screen.getByRole('separator')).toBeInTheDocument()
+      fireEvent.click(oidcButton)
+      expect(startOidc).toHaveBeenCalledTimes(1)
+    })
+
+    it('shows only the local form while federation is off', async () => {
+      oidcProbe.mockResolvedValue('off')
+      renderLogin()
+      await waitFor(() => expect(oidcProbe).toHaveBeenCalledTimes(1))
+      expect(screen.queryByRole('button', { name: /sign in with freeipa/i })).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Username or email')).toBeInTheDocument()
+    })
+
+    it('shows only the local form when the backend cannot be reached', async () => {
+      oidcProbe.mockResolvedValue('unknown')
+      renderLogin()
+      await waitFor(() => expect(oidcProbe).toHaveBeenCalledTimes(1))
+      expect(screen.queryByRole('button', { name: /sign in with freeipa/i })).not.toBeInTheDocument()
+    })
+
+    it('hides the federated door during first-account creation', async () => {
+      oidcProbe.mockResolvedValue('on')
+      bootstrapStatus.mockResolvedValue({ data: { required: true } })
+      renderLogin()
+      expect(await screen.findByRole('heading', { name: 'Create your account' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /sign in with freeipa/i })).not.toBeInTheDocument()
+    })
   })
 })

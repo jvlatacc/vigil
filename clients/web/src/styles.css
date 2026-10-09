@@ -7576,6 +7576,37 @@
    height: 17px;
 }
 
+/* Federated sign-in: the primary door, styled secondary to keep the local
+   form visually primary as the fallback. */
+.auth .btn-signin.oidc {
+   color: var(--tx);
+   background: transparent;
+   border-color: var(--line);
+}
+
+.auth .btn-signin.oidc:hover:not(:disabled) {
+   color: var(--accent);
+   background: transparent;
+   border-color: var(--accent);
+}
+
+.auth .auth-or {
+   display: flex;
+   align-items: center;
+   gap: 10px;
+   margin: 14px 0;
+   color: var(--tx-3);
+   font-size: 12px;
+}
+
+.auth .auth-or::before,
+.auth .auth-or::after {
+   content: "";
+   flex: 1;
+   height: 1px;
+   background: var(--line);
+}
+
 .auth .spin {
    width: 18px;
    height: 18px;
@@ -7675,6 +7706,17 @@
    font-size: 13px;
    line-height: 1.5;
    color: var(--tx-2);
+}
+
+/* The unmapped session: same centered state, steady mark (no pulse), and a
+   wider column since the explanation runs two sentences. */
+.soc-unmapped {
+   max-width: min(480px, calc(100vw - 48px));
+   text-align: center;
+}
+
+.soc-unmapped-mark {
+   animation: none;
 }
 
 @keyframes soc-loader-pulse {

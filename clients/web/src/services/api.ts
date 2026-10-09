@@ -1499,4 +1499,42 @@ export const bootstrapApi = {
   create: (payload: BootstrapPayload) => api.post('/auth/bootstrap', payload),
 }
 
+// Directory-group → role mapping admin. The backend gates every route on
+// users.write — reads included — so the section hides itself without it.
+export const roleMappingsApi = {
+  getAll: () => api.get('/role-group-mappings/'),
+  create: (data: { role_id: string; idp_group: string; priority?: number }) =>
+    api.post('/role-group-mappings/', data),
+  update: (id: number, data: { role_id?: string; idp_group?: string; priority?: number }) =>
+    api.put(`/role-group-mappings/${id}`, data),
+  remove: (id: number) => api.delete(`/role-group-mappings/${id}`),
+}
+
+export type OidcAvailability = 'on' | 'off' | 'unknown'
+
+/**
+ * Whether the backend offers federated sign-in. The backend answers 404 while
+ * OIDC federation is off and 302s to the IdP when it is on; redirect:'manual'
+ * turns that 302 into an opaque response, so the probe never follows it to the
+ * IdP. A network failure reads as 'unknown' — the login screen fails closed to
+ * the local form, the same way its bootstrap probe does.
+ */
+export async function oidcSignInAvailability(): Promise<OidcAvailability> {
+  try {
+    const res = await fetch(`${basePath}/api/auth/oidc/login`, {
+      redirect: 'manual',
+      credentials: 'omit',
+    })
+    return res.status === 404 ? 'off' : 'on'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/** Hand the browser to the backend's authorize redirect (full navigation, so
+ * the 302 chain to the IdP runs with cookies the backend sets on the way back). */
+export function startOidcSignIn(): void {
+  window.location.assign(`${basePath}/api/auth/oidc/login`)
+}
+
 export default api

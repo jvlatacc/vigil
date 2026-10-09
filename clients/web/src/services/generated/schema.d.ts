@@ -10925,6 +10925,8 @@ export interface components {
             bounds: components["schemas"]["Bounds"];
             /** Principal */
             principal?: string | null;
+            /** Run Id */
+            run_id?: string | null;
             /** Tool */
             tool: string;
         };
