@@ -1669,6 +1669,46 @@
         "title": "CaseUpdate",
         "type": "object"
       },
+      "ChainGapResponse": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "resend_from": {
+            "title": "Resend From",
+            "type": "integer"
+          },
+          "server_head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Head"
+          },
+          "server_last_seq": {
+            "title": "Server Last Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reason",
+          "detail",
+          "server_last_seq",
+          "server_head",
+          "resend_from"
+        ],
+        "title": "ChainGapResponse",
+        "type": "object"
+      },
       "ClosureCategory": {
         "description": "What closing the Case determined.\n\n``UNSPECIFIED`` is the one that is not a determination. It exists because\nthe console closes a Case by setting its status and asks for no category,\nand the alternative to recording that plainly is either dropping the close\nfrom memory or picking a determination on the analyst's behalf. Recorded, it\nreads as what it is \u2014 closed, no reason stated \u2014 and becomes an inconclusive\nVerdict rather than a claim nobody made.",
         "enum": [
@@ -1827,6 +1867,183 @@
           "created_at"
         ],
         "title": "DirectiveResponse",
+        "type": "object"
+      },
+      "EdgeNodeResponse": {
+        "properties": {
+          "enrolled_at": {
+            "format": "date-time",
+            "title": "Enrolled At",
+            "type": "string"
+          },
+          "enrolled_by": {
+            "title": "Enrolled By",
+            "type": "string"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "revocation_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revocation Reason"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked By"
+          },
+          "segment_labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Segment Labels",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "segment_labels",
+          "status",
+          "last_seen",
+          "enrolled_at",
+          "enrolled_by",
+          "revoked_at",
+          "revoked_by",
+          "revocation_reason"
+        ],
+        "title": "EdgeNodeResponse",
+        "type": "object"
+      },
+      "EdgeNodesResponse": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "count",
+          "nodes"
+        ],
+        "title": "EdgeNodesResponse",
+        "type": "object"
+      },
+      "EdgePolicyResponse": {
+        "properties": {
+          "envelope": {
+            "additionalProperties": true,
+            "title": "Envelope",
+            "type": "object"
+          },
+          "not_after": {
+            "format": "date-time",
+            "title": "Not After",
+            "type": "string"
+          },
+          "not_before": {
+            "format": "date-time",
+            "title": "Not Before",
+            "type": "string"
+          },
+          "payload_hash": {
+            "title": "Payload Hash",
+            "type": "string"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_version",
+          "envelope",
+          "payload_hash",
+          "not_before",
+          "not_after"
+        ],
+        "title": "EdgePolicyResponse",
+        "type": "object"
+      },
+      "EnrollRequest": {
+        "properties": {
+          "segment_labels": {
+            "items": {
+              "maxLength": 100,
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Segment Labels",
+            "type": "array"
+          }
+        },
+        "title": "EnrollRequest",
+        "type": "object"
+      },
+      "EnrollResponse": {
+        "properties": {
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "token"
+        ],
+        "title": "EnrollResponse",
         "type": "object"
       },
       "EntityContext": {
@@ -2402,6 +2619,191 @@
         "title": "IOCBulkAdd",
         "type": "object"
       },
+      "JournalExecutionModel": {
+        "properties": {
+          "at": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At"
+          },
+          "executor": {
+            "maxLength": 100,
+            "title": "Executor",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "executed",
+              "failed",
+              "dry_run"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "executor"
+        ],
+        "title": "JournalExecutionModel",
+        "type": "object"
+      },
+      "JournalPush": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_head": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Chain Head",
+            "type": "string"
+          },
+          "node_id": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "policy_version": {
+            "minimum": 1.0,
+            "title": "Policy Version",
+            "type": "integer"
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/JournalRecord"
+            },
+            "minItems": 1,
+            "title": "Records",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "policy_version",
+          "chain_head",
+          "records"
+        ],
+        "title": "JournalPush",
+        "type": "object"
+      },
+      "JournalRecord": {
+        "additionalProperties": false,
+        "description": "One decision in a Warden journal. The field set is frozen \u2014 it is\nexactly what ``core.edge.journal.record_hash`` covers \u2014 so extras are\nrefused and both sides hash the same content.",
+        "properties": {
+          "action_type": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Action Type",
+            "type": "string"
+          },
+          "decision_rule": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Decision Rule",
+            "type": "string"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/JournalExecutionModel"
+          },
+          "idempotency_key": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "mode": {
+            "maxLength": 32,
+            "title": "Mode",
+            "type": "string"
+          },
+          "prev_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Prev Hash",
+            "type": "string"
+          },
+          "seq": {
+            "minimum": 1.0,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Target",
+            "type": "string"
+          },
+          "ts": {
+            "maxLength": 32,
+            "title": "Ts",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "ts",
+          "mode",
+          "idempotency_key",
+          "action_type",
+          "target",
+          "decision_rule",
+          "execution",
+          "prev_hash"
+        ],
+        "title": "JournalRecord",
+        "type": "object"
+      },
+      "JournalResponse": {
+        "properties": {
+          "accepted_through": {
+            "title": "Accepted Through",
+            "type": "integer"
+          },
+          "duplicate_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Duplicate Ids",
+            "type": "array"
+          },
+          "merged_count": {
+            "title": "Merged Count",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Receipt Id"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/RecordRejectionModel"
+            },
+            "title": "Rejected",
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted_through",
+          "duplicate_ids",
+          "rejected",
+          "receipt_id",
+          "merged_count"
+        ],
+        "title": "JournalResponse",
+        "type": "object"
+      },
       "MergeRequest": {
         "description": "Merge another case into this one.",
         "properties": {
@@ -2860,6 +3262,29 @@
         "title": "PriorityBreakdownRow",
         "type": "object"
       },
+      "RecordRejectionModel": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "code",
+          "detail"
+        ],
+        "title": "RecordRejectionModel",
+        "type": "object"
+      },
       "RejectRequest": {
         "properties": {
           "reason": {
@@ -2884,6 +3309,18 @@
           "reason"
         ],
         "title": "RejectRequest",
+        "type": "object"
+      },
+      "RevokeRequest": {
+        "properties": {
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "RevokeRequest",
         "type": "object"
       },
       "RunListItem": {
@@ -5923,6 +6360,300 @@
         "summary": "Merge Cases",
         "tags": [
           "cases"
+        ]
+      }
+    },
+    "/api/v1/edge/enroll": {
+      "post": {
+        "operationId": "post_api_v1_edge_enroll",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enroll",
+        "tags": [
+          "edge"
+        ]
+      }
+    },
+    "/api/v1/edge/journal": {
+      "post": {
+        "operationId": "post_api_v1_edge_journal",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalPush"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChainGapResponse"
+                }
+              }
+            },
+            "description": "Chain gap or mismatch"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Journal",
+        "tags": [
+          "edge"
+        ]
+      }
+    },
+    "/api/v1/edge/nodes": {
+      "get": {
+        "operationId": "get_api_v1_edge_nodes",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeNodesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Nodes",
+        "tags": [
+          "edge"
+        ]
+      }
+    },
+    "/api/v1/edge/nodes/{node_id}/revoke": {
+      "post": {
+        "operationId": "post_api_v1_edge_nodes_node_id_revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeNodeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Node",
+        "tags": [
+          "edge"
+        ]
+      }
+    },
+    "/api/v1/edge/policy": {
+      "get": {
+        "operationId": "get_api_v1_edge_policy",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgePolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Current Policy",
+        "tags": [
+          "edge"
         ]
       }
     },
