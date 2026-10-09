@@ -272,6 +272,11 @@ class Settings(BaseSettings):
     daemon_dry_run: bool = False
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
+    # Never-quarantine invariants: containment targets unattended response may
+    # never touch, whatever the confidence. Entries are kind:value — see
+    # core.response.protected_targets. The environment is the floor: operator
+    # rows added through Settings may tighten it and never loosen it.
+    daemon_never_quarantine: Annotated[List[str], NoDecode] = []
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
     daemon_slack_enabled: Optional[bool] = None
@@ -343,6 +348,7 @@ class Settings(BaseSettings):
     @field_validator(
         "extension_connector_allowlist",
         "daemon_escalate_severities",
+        "daemon_never_quarantine",
         "kafka_topics",
         mode="before",
     )

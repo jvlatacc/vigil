@@ -31,6 +31,9 @@ DEFAULT_INTENT_FILE = REPO_ROOT / "INTENT.md"
 HIGHER_TIGHTER = "higher_tighter"  # confidence thresholds, force_manual_approval
 LOWER_TIGHTER = "lower_tighter"  # budgets, auto_* / enabled booleans
 SHORTER_TIGHTER = "shorter_tighter"  # severity lists
+LONGER_TIGHTER = (
+    "longer_tighter"  # never-quarantine lists: more protected targets, less autonomy
+)
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,12 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         "response.force_manual_approval",
         "daemon_force_approval",
         HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "respond.never_quarantine",
+        "response.never_quarantine",
+        "daemon_never_quarantine",
+        LONGER_TIGHTER,
     ),
     IntentField(
         "escalate.severities",
