@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.policy_compiler.evaluator import PolicyEvaluation
+from core.policy_compiler.fast_path import FastPathOutcome, PolicyFastPath
+from core.policy_compiler.models import PolicyMode
 from core.time import utcnow
 from services.daemon.config import ProcessingConfig, ResponseConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
@@ -107,7 +110,15 @@ class FindingProcessor:
             "queued_for_investigation": 0,
             "sanitization_flagged": 0,
             "store_dropped": 0,
+            "policy_fast_path_hits": 0,
+            "policy_fast_path_shadow_hits": 0,
+            "policy_fast_path_errors": 0,
         }
+
+        # Compiled-policy fast path (docs/adr/0001): built once, used only
+        # when the flag is on. It holds no DB connection — the store opens
+        # sessions per call.
+        self._policy_fast_path = PolicyFastPath()
 
     def _sanitize_finding(self, finding: Dict[str, Any], source: Optional[str]) -> None:
         """Issue #87: scan finding text for prompt-injection patterns before
@@ -364,8 +375,27 @@ class FindingProcessor:
         evaluation always runs on whatever severity we have."""
         finding_id = finding.get("finding_id", "unknown")
 
+        # Compiled-policy fast path (docs/adr/0001): before any LLM work, the
+        # evaluating policies get a deterministic look at the pre-LLM fields.
+        # Every evaluation — hit or miss, shadow or active — is recorded. An
+        # ACTIVE hit applies the policy's triage below and skips the LLM
+        # entirely; a shadow hit or a miss falls through to the LLM path
+        # unchanged. There is no second response pipeline: the single
+        # _evaluate_for_response at the end sees whatever triage decided.
+        outcome = await self._run_policy_fast_path(finding)
+        evaluation = outcome.evaluation if outcome is not None else None
+
         want_llm = self.config.auto_triage_enabled or self.config.auto_enrich_enabled
-        if want_llm and time.monotonic() >= self._enrich_paused_until:
+        if evaluation is not None and evaluation.mode is PolicyMode.ACTIVE:
+            # The policy's decision IS the triage: the same finding keys the
+            # LLM path writes (plus the provenance naming the policy),
+            # persisted the same way. No LLM call, no breaker interaction —
+            # nothing failed here to pause.
+            finding = self._apply_compiled_triage(finding, evaluation)
+            self.stats["triaged"] += 1
+            self.stats["policy_fast_path_hits"] += 1
+            await self._update_finding(finding)
+        elif want_llm and time.monotonic() >= self._enrich_paused_until:
             async with self._semaphore:
                 try:
                     triaged_ok = True
@@ -400,6 +430,17 @@ class FindingProcessor:
                     logger.error(f"Background enrichment failed for {finding_id}: {e}")
                     self.stats["errors"] += 1
 
+        if (
+            outcome is not None
+            and evaluation is not None
+            and evaluation.mode is PolicyMode.SHADOW
+        ):
+            self.stats["policy_fast_path_shadow_hits"] += 1
+            # A shadow decision was logged, not applied — the LLM (if it ran)
+            # is the actual. Comparing the two feeds the drift counters that
+            # can auto-suspend the policy; it writes no triage keys.
+            await self._record_shadow_outcome(finding, outcome)
+
         # A known-answer probe stops here (#923): it exists to exercise the
         # triage path and must never reach the responder or the orchestrator,
         # whatever triage did or failed to do above.
@@ -427,6 +468,77 @@ class FindingProcessor:
                 _ENRICH_BREAKER_COOLDOWN,
                 finding_id,
             )
+
+    async def _run_policy_fast_path(
+        self, finding: Dict[str, Any]
+    ) -> Optional[FastPathOutcome]:
+        """Evaluate compiled policies before any LLM call (docs/adr/0001).
+
+        Returns the outcome — matched evaluation (shadow or active) or a miss
+        — with its decision row recorded, or None when the flag is off or the
+        fast path failed. A failure never stops triage: it is logged, counted,
+        and the finding falls through to the LLM path. Fail closed — an
+        evaluation whose decision row could not be recorded is an unlogged
+        decision, and the audit rule forbids acting on one — so a record
+        failure costs the fast path the hit, not the audit trail.
+        """
+        if not self.config.jit_fast_path_enabled:
+            return None
+        try:
+            return await asyncio.to_thread(
+                self._policy_fast_path.evaluate_and_record, finding
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Policy fast path evaluation failed for %s; falling through to "
+                "LLM triage: %s",
+                finding.get("finding_id"),
+                e,
+            )
+            self.stats["policy_fast_path_errors"] += 1
+            return None
+
+    async def _record_shadow_outcome(
+        self, finding: Dict[str, Any], outcome: FastPathOutcome
+    ) -> None:
+        """Compare a shadow hit's logged decision with the eventual LLM triage.
+
+        Bookkeeping only — a failure here must not fail the triage that
+        already ran; the row stays unbackfilled and the drift counter blind
+        to this one comparison.
+        """
+        actual = (finding.get("ai_triage") or {}).get("result")
+        if not isinstance(actual, dict) or not actual:
+            return  # no LLM triage landed (off, paused, or failed) — nothing to compare
+        try:
+            await asyncio.to_thread(
+                self._policy_fast_path.record_llm_outcome, outcome, actual
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "Shadow agreement backfill failed for %s: %s",
+                finding.get("finding_id"),
+                e,
+            )
+            self.stats["policy_fast_path_errors"] += 1
+
+    def _apply_compiled_triage(
+        self, finding: Dict[str, Any], evaluation: PolicyEvaluation
+    ) -> Dict[str, Any]:
+        """Apply a compiled policy's decision — the LLM triage key set, plus
+        provenance.
+
+        Byte-identical to what ``_apply_triage_result`` writes for a fully
+        parsed reply: severity / triage_confidence / category /
+        recommended_action / triage_reasoning on the finding, the ai_triage
+        block on top. The provenance block additionally names the policy that
+        decided — the audit answer to "which artifact trusted this".
+        """
+        finding.update(evaluation.as_finding_fields())
+        # A success supersedes any earlier recorded failure, as on the LLM path.
+        finding.pop("ai_triage_error", None)
+        finding["ai_triage"] = evaluation.as_ai_triage_block(utcnow().isoformat())
+        return finding
 
     async def _backfill_loop(self, shutdown_event: asyncio.Event):
         """Periodically triage findings that were stored but never enriched
@@ -560,14 +672,21 @@ class FindingProcessor:
             # Build triage prompt
             prompt = self._build_triage_prompt(finding)
 
-            # Get AI assessment with timeout
+            # Get AI assessment with timeout. The wait is the model time —
+            # recorded on the result block (duration_ms) so the LLM path's
+            # latency has a baseline the fast path's evaluation_us is
+            # comparable against (docs/adr/0001).
+            started_ns = time.perf_counter_ns()
             response, error = await asyncio.wait_for(
                 self._get_ai_triage(prompt), timeout=self.config.triage_timeout
             )
+            triage_ms = (time.perf_counter_ns() - started_ns) // 1_000_000
 
             if response:
                 # Parse and apply AI assessment
-                finding = self._apply_triage_result(finding, response)
+                finding = self._apply_triage_result(
+                    finding, response, llm_duration_ms=triage_ms
+                )
                 self.stats["triaged"] += 1
             else:
                 finding["ai_triage_error"] = error or "empty LLM response"
@@ -722,7 +841,10 @@ REASONING: [Brief explanation]
         return str(result), None
 
     def _apply_triage_result(
-        self, finding: Dict[str, Any], response: str
+        self,
+        finding: Dict[str, Any],
+        response: str,
+        llm_duration_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Apply AI triage result to finding."""
         triage_result = {}
@@ -772,10 +894,16 @@ REASONING: [Brief explanation]
 
         # Add triage metadata; a success supersedes any earlier recorded failure.
         finding.pop("ai_triage_error", None)
-        finding["ai_triage"] = {
+        triage_meta: Dict[str, Any] = {
             "timestamp": utcnow().isoformat(),
             "result": triage_result,
         }
+        if llm_duration_ms is not None:
+            # Model time for this triage (docs/adr/0001) — the LLM side of
+            # the latency comparison the console KPI draws against the fast
+            # path's evaluation_us.
+            triage_meta["duration_ms"] = llm_duration_ms
+        finding["ai_triage"] = triage_meta
 
         return finding
 

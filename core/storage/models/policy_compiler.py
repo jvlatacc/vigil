@@ -177,7 +177,7 @@ class CompiledPolicyDecision(Base):
             name="ck_compiled_policy_decisions_no_match",
         ),
         CheckConstraint(
-            "(outcome = 'applied') IS NOT DISTINCT FROM (mode = 'active')",
+            "(mode IS NULL) = (outcome = 'no_match')",
             name="ck_compiled_policy_decisions_mode_outcome",
         ),
         CheckConstraint(
