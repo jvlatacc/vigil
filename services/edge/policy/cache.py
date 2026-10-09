@@ -119,6 +119,17 @@ class BundleCache:
             )
             return CacheState(current=None, previous=None)
 
+        if state.get("revoked_at") is not None:
+            # Revocation beats allowance — including across a restart: a
+            # rebooted node must not resurrect its persisted bundle and
+            # resume acting. Only a freshly pulled verified bundle
+            # (new credential, new state file) restores autonomy.
+            logger.error(
+                "node revoked at %s — persisted bundles refused, running Tier 0",
+                state["revoked_at"],
+            )
+            return CacheState(current=None, previous=None)
+
         entries = [
             ("current", state.get("current")),
             ("previous", state.get("previous")),
@@ -189,6 +200,22 @@ class BundleCache:
         if self._current is None:
             return AutonomyTier.TIER_0
         return self._current.effective_tier(now)
+
+    def revoke(self, *, now: datetime) -> None:
+        """Kill the active bundles for a revoked node — now and after any
+        restart (the state file marks the revocation). A revoked node's
+        credential is dead server-side, so no pull can re-arm it; the only
+        path back is fresh enrollment and a new verified bundle."""
+        self._current = None
+        self._previous = None
+        self._envelope_path = None
+        self._previous_envelope_path = None
+        state_path = self.data_dir / _STATE_FILE
+        state = {"revoked_at": now.isoformat()}
+        tmp = state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, sort_keys=True))
+        os.replace(tmp, state_path)
+        logger.warning("node revoked: bundle autonomy withdrawn (Tier 0)")
 
     # -- persistence -----------------------------------------------------
 

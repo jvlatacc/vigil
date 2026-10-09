@@ -433,6 +433,7 @@ dbInit:
     - 39_case_findings_finding_index.sql
     - 40_edge_nodes.sql
     - 41_edge_bundles.sql
+    - 42_edge_node_watermark.sql
   resources:
     requests:
       cpu: 50m

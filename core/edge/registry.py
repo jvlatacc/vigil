@@ -161,9 +161,13 @@ def record_heartbeat(
     bundle_version: Optional[int] = None,
     autonomy_tier: Optional[str] = None,
     lease_state: Optional[str] = None,
+    acked_upto: Optional[int] = None,
 ) -> dict:
-    """Refresh liveness and the sync cursor; report what the node should
-    adopt next (drift signal: the current bundle version, when it differs)."""
+    """Refresh liveness and the sync cursors; report what the node should
+    adopt next (drift signal: the current bundle version, when it differs)
+    and the node's reconciliation watermark: the highest local_sequence
+    durably imported here, so a node that lost an ack replay-closes the
+    gap when the events it already uploaded return as duplicates."""
     from core.storage.connection import get_db_manager
 
     node = _validate_node_id(node_id)
@@ -177,6 +181,8 @@ def record_heartbeat(
         row.last_boot_id = boot_id or row.last_boot_id
         if bundle_version is not None:
             row.last_bundle_version = bundle_version
+        if acked_upto is not None:
+            row.last_acked_seq = acked_upto
         current = _latest_version_for_scope(session, dict(row.segment_scope))
         return {
             "ok": True,
@@ -184,6 +190,7 @@ def record_heartbeat(
             "autonomy_tier": autonomy_tier,
             "lease_state": lease_state,
             "current_bundle_version": current,
+            "commit_watermark": row.commit_watermark,
             "last_seen": row.last_seen.isoformat(),
         }
 

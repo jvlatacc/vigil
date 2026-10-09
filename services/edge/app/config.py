@@ -21,6 +21,7 @@ NODE_ID_VAR = "VIGIL_EDGE_NODE_ID"
 MODE_VAR = "VIGIL_EDGE_MODE"
 CONTROL_URL_VAR = "VIGIL_EDGE_CONTROL_URL"
 ENROLLMENT_TOKEN_VAR = "VIGIL_EDGE_ENROLLMENT_TOKEN"
+SEGMENT_SCOPE_VAR = "VIGIL_EDGE_SEGMENT_SCOPE"
 CREDENTIAL_FILE_VAR = "VIGIL_EDGE_CREDENTIAL_FILE"
 DATA_DIR_VAR = "VIGIL_EDGE_DATA_DIR"
 TRUST_STORE_VAR = "VIGIL_EDGE_TRUST_STORE"
@@ -38,8 +39,18 @@ REAPER_INTERVAL_VAR = "VIGIL_EDGE_REAPER_INTERVAL_SECONDS"
 
 DEFAULT_K8S_TOKEN_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 DEFAULT_K8S_CA_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+SYNC_INTERVAL_VAR = "VIGIL_EDGE_SYNC_INTERVAL_SECONDS"
+SYNC_BATCH_VAR = "VIGIL_EDGE_SYNC_BATCH_SIZE"
+SYNC_TIMEOUT_VAR = "VIGIL_EDGE_SYNC_TIMEOUT_SECONDS"
 
 DEFAULT_JOURNAL_MAX_BYTES = 64 * 1024 * 1024
+DEFAULT_SYNC_INTERVAL_SECONDS = 30.0
+DEFAULT_SYNC_BATCH_SIZE = 250
+DEFAULT_SYNC_TIMEOUT_SECONDS = 10.0
+#: Wire contract: the control plane's batch bound (core.edge.events
+#: MAX_EVENTS_PER_BATCH). Restated here because services.edge cannot import
+#: core — the two constants are pinned equal by test_protocol.py.
+WIRE_MAX_EVENTS_PER_BATCH = 500
 
 MODES = ("gateway", "cluster")
 
@@ -69,6 +80,7 @@ class EdgeConfig:
     mode: str = "gateway"
     control_url: str = "https://vigil.internal"
     enrollment_token: str = ""
+    segment_scope: dict[str, str] = field(default_factory=dict)
     credential_file: Path = Path("/var/lib/vigil-edge/credential")
     data_dir: Path = Path("/var/lib/vigil-edge")
     trust_store: Path = Path("/etc/vigil-edge/trust-root.dsse.json")
@@ -86,6 +98,9 @@ class EdgeConfig:
     k8s_token_file: Path = DEFAULT_K8S_TOKEN_FILE
     k8s_ca_file: Path = DEFAULT_K8S_CA_FILE
     reaper_interval_seconds: int = 60
+    sync_interval_seconds: float = DEFAULT_SYNC_INTERVAL_SECONDS
+    sync_batch_size: int = DEFAULT_SYNC_BATCH_SIZE
+    sync_timeout_seconds: float = DEFAULT_SYNC_TIMEOUT_SECONDS
     edge_version: str = __version__
 
     @classmethod
@@ -131,6 +146,64 @@ class EdgeConfig:
             port = (env.get("KUBERNETES_SERVICE_PORT_HTTPS") or "443").strip()
             if host:
                 k8s_api_url = f"https://{host}:{port}"
+
+        raw_scope = (env.get(SEGMENT_SCOPE_VAR) or "").strip()
+        parsed_scope: dict[str, str] = {}
+        if raw_scope:
+            try:
+                scope_json = json.loads(raw_scope)
+            except ValueError as exc:
+                raise ConfigError(f"{SEGMENT_SCOPE_VAR} is not JSON: {exc}") from exc
+            if not isinstance(scope_json, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in scope_json.items()
+            ):
+                raise ConfigError(
+                    f"{SEGMENT_SCOPE_VAR} must be a JSON object of string -> string"
+                )
+            parsed_scope = dict(scope_json)
+
+        raw_interval = (env.get(SYNC_INTERVAL_VAR) or "").strip()
+        sync_interval_seconds = DEFAULT_SYNC_INTERVAL_SECONDS
+        if raw_interval:
+            try:
+                sync_interval_seconds = float(raw_interval)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{SYNC_INTERVAL_VAR} must be a number of seconds, got {raw_interval!r}"
+                ) from exc
+            if sync_interval_seconds <= 0:
+                raise ConfigError(
+                    f"{SYNC_INTERVAL_VAR} must be positive, got {sync_interval_seconds}"
+                )
+
+        raw_batch = (env.get(SYNC_BATCH_VAR) or "").strip()
+        sync_batch_size = DEFAULT_SYNC_BATCH_SIZE
+        if raw_batch:
+            try:
+                sync_batch_size = int(raw_batch)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{SYNC_BATCH_VAR} must be an integer, got {raw_batch!r}"
+                ) from exc
+            if not 1 <= sync_batch_size <= WIRE_MAX_EVENTS_PER_BATCH:
+                raise ConfigError(
+                    f"{SYNC_BATCH_VAR} must be 1-{WIRE_MAX_EVENTS_PER_BATCH}, "
+                    f"got {sync_batch_size}"
+                )
+
+        raw_timeout = (env.get(SYNC_TIMEOUT_VAR) or "").strip()
+        sync_timeout_seconds = DEFAULT_SYNC_TIMEOUT_SECONDS
+        if raw_timeout:
+            try:
+                sync_timeout_seconds = float(raw_timeout)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{SYNC_TIMEOUT_VAR} must be a number of seconds, got {raw_timeout!r}"
+                ) from exc
+            if sync_timeout_seconds <= 0:
+                raise ConfigError(
+                    f"{SYNC_TIMEOUT_VAR} must be positive, got {sync_timeout_seconds}"
+                )
 
         raw_journal_max = (env.get(JOURNAL_MAX_BYTES_VAR) or "").strip()
         journal_max_bytes = DEFAULT_JOURNAL_MAX_BYTES
@@ -185,6 +258,10 @@ class EdgeConfig:
             k8s_token_file=Path(env.get(K8S_TOKEN_FILE_VAR) or DEFAULT_K8S_TOKEN_FILE),
             k8s_ca_file=Path(env.get(K8S_CA_FILE_VAR) or DEFAULT_K8S_CA_FILE),
             reaper_interval_seconds=reaper_interval,
+            segment_scope=parsed_scope,
+            sync_interval_seconds=sync_interval_seconds,
+            sync_batch_size=sync_batch_size,
+            sync_timeout_seconds=sync_timeout_seconds,
         )
 
     def validate(self) -> list[str]:
