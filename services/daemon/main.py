@@ -61,6 +61,9 @@ class SOCDaemon:
         self._mcp_client = None
         # CepTap — present only when CEP is enabled (see _init_components)
         self._cep_tap = None
+        # Correlation state and its snapshot loop — same condition.
+        self._cep_graph = None
+        self._cep_snapshots = None
 
         logger.info("SOC Daemon initialized")
 
@@ -150,6 +153,8 @@ class SOCDaemon:
         # correlation.
         cep_config = CepConfig.from_env()
         if cep_config.enabled:
+            from core.cep.graph import EntityGraph
+            from core.cep.snapshot import PostgresSnapshotStore, SnapshotManager
             from core.cep.tap import CepTap, FindingTeeQueue
 
             self._cep_tap = CepTap(queue_max=cep_config.queue_max)
@@ -157,6 +162,34 @@ class SOCDaemon:
                 tap=self._cep_tap,
                 maxsize=self._processor.input_queue.maxsize,
             )
+
+            # The engine's correlation state and its restart recovery
+            # (spec ACs 3 and 6). The engine itself lands in a sibling PR;
+            # its hooks plug into SnapshotManager as they arrive.
+            self._cep_graph = EntityGraph(
+                max_nodes=cep_config.graph_max_nodes,
+                max_edges=cep_config.graph_max_edges,
+            )
+            self._cep_snapshots = SnapshotManager(
+                graph=self._cep_graph,
+                store=PostgresSnapshotStore(),
+                interval_s=cep_config.snapshot_interval_s,
+            )
+            gap_s = await asyncio.to_thread(self._cep_snapshots.restore)
+            if gap_s is None:
+                logger.info("CEP state: fresh start")
+            else:
+                # The dedup-fallback honesty convention: state the bound,
+                # never promise zero loss.
+                logger.info(
+                    "CEP state: restored with gap — the snapshot predates "
+                    "this boot by %.0fs, and findings observed in that "
+                    "window are absent from correlation state. Loss is "
+                    "bounded by CEP_SNAPSHOT_INTERVAL_S (default %ds), "
+                    "never zero.",
+                    gap_s,
+                    cep_config.snapshot_interval_s,
+                )
             logger.info("CEP tap installed (queue_max=%d)", cep_config.queue_max)
 
         # Connect components via queues
@@ -228,6 +261,9 @@ class SOCDaemon:
                 self._metrics_server.health_port,
                 self._metrics_server.metrics_port,
             )
+
+        if self._cep_snapshots:
+            start("cep-snapshot", self._cep_snapshots, "CEP snapshot loop")
 
         logger.info("SOC Daemon fully operational")
 
