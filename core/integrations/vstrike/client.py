@@ -16,6 +16,12 @@ Two auth modes are supported:
 
 Either mode (or both) is sufficient to construct the service. The
 `has_api_credentials` and `has_ui_credentials` properties let callers branch.
+
+Attribution: VStrike sees the service account — it has no per-user
+delegation — so the acting Vigil user is recorded here instead: every REST
+and MCP call this client makes writes one `tool_call_audit` row (surface
+"vstrike") naming the caller `current_caller()` binds, or "agent". The JWT
+is unchanged.
 """
 
 from __future__ import annotations
@@ -28,7 +34,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from core.audit import tool_calls
 from core.integrations._base.tls import tls_verify
+from core.integrations.mcp.surface import current_caller
 from core.secrets import get_secret
 
 logger = logging.getLogger(__name__)
@@ -55,6 +63,10 @@ _FOLLOW_REDIRECTS = True
 # https://vstrike.net — VStrike replies with `text/event-stream`.
 MCP_RPC_PATH = "/mcp"
 
+# Where VStrike calls are audited. server_name on the audit row: VStrike is
+# the system being called, not an MCP server in the registry.
+AUDIT_SERVER = "vstrike"
+
 # Default JWT lifetime if VStrike doesn't tell us; refresh slightly before.
 _JWT_DEFAULT_TTL_SECONDS = 50 * 60
 
@@ -65,6 +77,34 @@ _jwt_lock = threading.Lock()
 # Per-credential lock so concurrent requests for the same account
 # don't race _mcp_login() and end up with different JWTs.
 _jwt_login_locks: Dict[Tuple[str, str], threading.Lock] = {}
+
+
+def _audit_call(
+    actor: str,
+    tool_name: str,
+    args: Optional[Dict[str, Any]],
+    started: float,
+    outcome: str,
+) -> None:
+    """The one audit row an outbound VStrike call earns.
+
+    The service-account JWT is what VStrike sees upstream — it has no
+    per-user delegation to accept — so the acting Vigil user lives here: the
+    row records who was behind the call, the caller ``current_caller()``
+    names (or "agent"), beside the outcome. Fail-closed like every audit
+    row: a call whose row cannot land raises rather than answering.
+    """
+    tool_calls.record_tool_call(
+        actor_username=actor,
+        surface=tool_calls.SURFACE_VSTRIKE,
+        server_name=AUDIT_SERVER,
+        tool_name=tool_name,
+        args=args,
+        decision=tool_calls.DECISION_ALLOW,
+        outcome=outcome,
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        trace_id=tool_calls.current_trace_id(),
+    )
 
 
 class VStrikeToolNotImplemented(RuntimeError):
@@ -245,9 +285,33 @@ class VStrikeService:
 
         Used by every legacy ``/api/v1/*`` topology helper. The JWT is the
         same one we use for MCP tool calls — VStrike accepts it anywhere.
+
+        Audited as surface "vstrike" with the acting Vigil user (from
+        ``current_caller()``) beside the unchanged service JWT; a network
+        error earns its row before the exception re-raises.
         """
-        url = f"{self.base_url}{path}"
         params = kwargs.pop("params", None)
+        actor = current_caller() or tool_calls.ACTOR_AGENT
+        started = time.perf_counter()
+        try:
+            resp = self._get_once(path, params, **kwargs)
+        except Exception:
+            _audit_call(actor, f"GET {path}", params, started, "error")
+            raise
+        _audit_call(
+            actor,
+            f"GET {path}",
+            params,
+            started,
+            "ok" if resp.status_code < 400 else "error",
+        )
+        return resp
+
+    def _get_once(
+        self, path: str, params: Optional[Dict[str, Any]], **kwargs
+    ) -> httpx.Response:
+        """The request itself: JWT auth, one-shot 401 retry."""
+        url = f"{self.base_url}{path}"
 
         def _do(jwt: str) -> httpx.Response:
             return httpx.get(
@@ -436,7 +500,23 @@ class VStrikeService:
 
         Retries once on HTTP 401 by re-logging-in (the cached JWT may have
         expired sooner than our default TTL).
+
+        Audited like the REST path: one row naming the acting Vigil user, the
+        tool, the arguments by digest, and the outcome — the failures this
+        raises for are recorded before the exception re-raises.
         """
+        actor = current_caller() or tool_calls.ACTOR_AGENT
+        started = time.perf_counter()
+        try:
+            result = self._dispatch_mcp_tool(tool_name, arguments)
+        except Exception:
+            _audit_call(actor, tool_name, arguments, started, "error")
+            raise
+        _audit_call(actor, tool_name, arguments, started, "ok")
+        return result
+
+    def _dispatch_mcp_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Any:
+        """The JSON-RPC call itself: transport, 401 retry, SSE parsing."""
         url = f"{self.base_url}{MCP_RPC_PATH}"
         payload = {
             "jsonrpc": "2.0",
