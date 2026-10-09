@@ -10,7 +10,9 @@ The scratch database holds only containment_actions, built from the model, so
 the real columns and the real partial index are exercised.
 """
 
+import importlib.util
 import os
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -21,6 +23,8 @@ from core.storage.models import ContainmentAction
 from core.time import utcnow
 
 pytestmark = [pytest.mark.integration, pytest.mark.database]
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 SCRATCH_DB = "vigil_test_containment_ledger"
 
@@ -162,3 +166,101 @@ def test_a_different_key_is_never_blocked(ledger_db):
         )
         session.commit()
 
+
+# The upgrade path. create_all covers fresh installs; the migration step is
+# what carries the ledger to databases that predate it, so it is exercised
+# here directly — scripts/ is not a package, so it loads by path.
+
+
+def _load_migrate_schema():
+    path = REPO_ROOT / "scripts" / "migrate_schema.py"
+    spec = importlib.util.spec_from_file_location("vigil_migrate_schema", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def empty_db():
+    reason = _requires_local_postgres()
+    if reason:
+        pytest.skip(reason)
+
+    admin = _admin_engine()
+    with admin.connect() as c:
+        c.execute(text(f"DROP DATABASE IF EXISTS {SCRATCH_DB} WITH (FORCE)"))
+        c.execute(text(f"CREATE DATABASE {SCRATCH_DB}"))
+
+    scratch = create_engine(SCRATCH_URL)
+    yield scratch
+
+    scratch.dispose()
+    with admin.connect() as c:
+        c.execute(text(f"DROP DATABASE IF EXISTS {SCRATCH_DB} WITH (FORCE)"))
+    admin.dispose()
+
+
+def _run_ledger_step(engine):
+    migrate_schema = _load_migrate_schema()
+    with engine.connect() as conn:
+        migrate_schema.create_containment_actions(conn)
+        conn.commit()
+    return migrate_schema
+
+
+def _column_names(engine) -> set[str]:
+    with engine.connect() as c:
+        rows = c.exec_driver_sql(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'containment_actions'"
+        )
+    return {name for (name,) in rows}
+
+
+def _index_definitions(engine) -> dict[str, str]:
+    with engine.connect() as c:
+        rows = c.exec_driver_sql(
+            "SELECT indexname, indexdef FROM pg_indexes "
+            "WHERE tablename = 'containment_actions'"
+        )
+    return {name: definition for name, definition in rows}
+
+
+def test_migration_step_creates_the_ledger(empty_db):
+    _run_ledger_step(empty_db)
+
+    from_model = {c.name for c in ContainmentAction.__table__.columns}
+    assert _column_names(empty_db) == from_model, (
+        "The migration's CREATE TABLE and the model disagree — the upgrade "
+        "path and the fresh-install path would build different tables."
+    )
+    indexes = _index_definitions(empty_db)
+    assert "uq_containment_actions_idempotency_key" in indexes
+    assert "idx_containment_actions_status_expires" in indexes
+
+
+def test_migration_step_rerun_is_idempotent(empty_db):
+    _run_ledger_step(empty_db)
+    columns_first = _column_names(empty_db)
+    indexes_first = _index_definitions(empty_db)
+
+    _run_ledger_step(empty_db)  # must not raise
+
+    assert _column_names(empty_db) == columns_first
+    assert _index_definitions(empty_db) == indexes_first
+
+
+def test_migration_built_table_enforces_the_unique_key(empty_db):
+    _run_ledger_step(empty_db)
+
+    insert = text(
+        "INSERT INTO containment_actions "
+        "(id, action_type, entity_type, entity_id, status, idempotency_key, "
+        "decision_rule) VALUES (:id, 'fp_rate_limit', 'ip', '203.0.113.7', "
+        "'pending_apply', 'fp_rate_limit:ip:203.0.113.7', 'test rule')"
+    )
+    with empty_db.connect() as c:
+        c.execute(insert, {"id": "lease-one"})
+        c.commit()  # 2.0-style connections roll back on exit without this
+        with pytest.raises(IntegrityError):
+            c.execute(insert, {"id": "lease-two"})
