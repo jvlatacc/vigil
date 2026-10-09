@@ -5,7 +5,10 @@ from typing import Dict, List
 from core.config import DEFAULT_REDIS_URL, get_settings
 from core.ingestion.kafka_config import KafkaConfig  # re-exported for DaemonConfig
 from core.intent import INTENT_FIELDS
-from core.response.config import ResponseConfig  # re-exported for DaemonConfig
+from core.response.config import (  # re-exported for DaemonConfig
+    MtdConfig,
+    ResponseConfig,
+)
 from core.response.fastpath import FastPathConfig  # re-exported for DaemonConfig
 from core.secrets import get_secret
 from core.telemetry import configure_logging
@@ -112,6 +115,7 @@ class DaemonConfig:
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     response: ResponseConfig = field(default_factory=ResponseConfig)
     fastpath: FastPathConfig = field(default_factory=FastPathConfig)
+    mtd: MtdConfig = field(default_factory=MtdConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -162,6 +166,7 @@ class DaemonConfig:
 
         config.response = ResponseConfig.from_settings(settings)
         config.fastpath = FastPathConfig.from_settings(settings)
+        config.mtd = MtdConfig.from_settings(settings)
 
         config.escalation.enabled = settings.daemon_escalation_enabled
         config.escalation.slack_enabled = (

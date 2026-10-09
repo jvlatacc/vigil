@@ -733,6 +733,12 @@ config:
   DAEMON_HIGH_ACTION_FLOOR: "0.80"
   DAEMON_FORCE_APPROVAL: "false"
   DAEMON_DRY_RUN: "false"
+  # Honey-routing (the deceive band): default off — enabling it is a human
+  # configuration act, and the floor is its own band, not the response one.
+  DAEMON_MTD_ENABLED: "false"
+  DAEMON_MTD_CONFIDENCE_FLOOR: "0.60"
+  DAEMON_MTD_SESSION_TTL_SECONDS: "3600"
+  DAEMON_MTD_INTERNAL_ONLY: "true"
   DAEMON_ESCALATION_ENABLED: "true"
   DAEMON_ESCALATE_SEVERITIES: "critical,high"
   DAEMON_SLACK_ENABLED: "true"
