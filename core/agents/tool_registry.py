@@ -543,7 +543,9 @@ def propose_honey_route(
     if not ip or ip == "unknown":
         return {"error": "propose_honey_route needs a source IP; none was given"}
 
-    if not DeceptionConfig.from_settings().enabled:
+    # Runtime resolution: the Settings › Deception row (stored) over env —
+    # a Settings-UI enable must reach agent proposals without a redeploy.
+    if not DeceptionConfig.resolved().enabled:
         return {
             "error": "honey-routing is disabled (daemon_deception_enabled); "
             "enable the deception posture before proposing it"
