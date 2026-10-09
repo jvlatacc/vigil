@@ -48,6 +48,12 @@ class Finding(Base):
     # Evidence links
     evidence_links: Mapped[Optional[List[dict]]] = mapped_column(JSONB, nullable=True)
 
+    # Provenance from the source system: for a Wazuh ingest, the alert id,
+    # rule id/level, and agent identity the transform builds. Named
+    # source_metadata because Base.__init__ refuses a `metadata` kwarg (it
+    # would shadow Base.metadata), the same escape as notification_metadata.
+    source_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
     # Metadata
     timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     data_source: Mapped[str] = mapped_column(String(50), nullable=False)
