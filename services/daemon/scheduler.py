@@ -61,6 +61,8 @@ class TaskScheduler:
             "cleanups_run": 0,
             "fastpath_leases_rolled_back": 0,
             "fastpath_intents_reconciled": 0,
+            "fastpath_shadow_rows_closed": 0,
+            "mtd_routes_unrouted": 0,
             "errors": 0,
         }
 
@@ -111,6 +113,20 @@ class TaskScheduler:
                 name="fastpath_lease_sweep",
                 func=self._run_fastpath_lease_sweep,
                 interval=self.config.fastpath_lease_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # Honey-route TTL sweep (core.integrations.honey_router), the same
+        # datastore-enforcement logic: releasing executed routes must run
+        # whether or not the MTD enable switch is on — disabling stops NEW
+        # routes; it never strands an attacker pinned to a decoy.
+        self._tasks.append(
+            ScheduledTask(
+                name="mtd_route_sweep",
+                func=self._run_mtd_route_sweep,
+                interval=self.config.mtd_route_sweep_interval,
                 enabled=True,
                 run_on_start=False,
             )
@@ -167,6 +183,28 @@ class TaskScheduler:
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Threat feed poller unavailable: {e}")
+
+        # CISA KEV refresher — keeps the bundled t=0 seed current from the
+        # official feed. Hourly tick; the refresher itself runs at most once
+        # a day (watermark in threat_feed_poller). The bundled snapshot seeds
+        # t=0, so no run_on_start fetch delays boot behind the network.
+        try:
+            from services.daemon.threat_feed_poller import (
+                KEV_TICK_INTERVAL_SECONDS,
+                kev_refresh_enabled,
+            )
+
+            self._tasks.append(
+                ScheduledTask(
+                    name="kev_refresh",
+                    func=self._run_kev_refresh,
+                    interval=KEV_TICK_INTERVAL_SECONDS,
+                    enabled=kev_refresh_enabled(),
+                    run_on_start=False,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("KEV refresher unavailable: %s", e)
 
     def set_processor_queue(self, queue: asyncio.Queue):
         """Set the processor's input queue that probe sweeps inject onto."""
@@ -433,6 +471,7 @@ class TaskScheduler:
         memory, so a crashed or restarted daemon never leaves a lease
         alive.
         """
+        from core.response.fastpath.adjudication import close_expired_shadow_rows
         from core.response.fastpath.config import FastPathConfig
         from core.response.fastpath.executors import default_registry
         from core.response.fastpath.ledger import (
@@ -456,16 +495,25 @@ class TaskScheduler:
             reconciled["retried_applied"] + reconciled["aborted_failed"]
         )
 
-        if rolled["expired"] or reconciled["stale"]:
+        # Shadow rows never apply, so the expiry scan above never sees
+        # them; closing expired ones here (off-thread, same cadence) frees
+        # their idempotency keys before they pin an entity's next live
+        # lease (deferred from PR-3 to this slice).
+        shadow_closed = await asyncio.to_thread(close_expired_shadow_rows)
+        self.stats["fastpath_shadow_rows_closed"] += shadow_closed
+
+        if rolled["expired"] or reconciled["stale"] or shadow_closed:
             logger.info(
                 "Fastpath lease sweep: %d expired (%d rolled back, %d errors), "
-                "%d stale intents (%d retried, %d aborted)",
+                "%d stale intents (%d retried, %d aborted), "
+                "%d shadow rows closed",
                 rolled["expired"],
                 rolled["rolled_back"],
                 rolled["errors"],
                 reconciled["stale"],
                 reconciled["retried_applied"],
                 reconciled["aborted_failed"],
+                shadow_closed,
             )
 
         return {
@@ -475,7 +523,34 @@ class TaskScheduler:
             "stale_scanned": reconciled["stale"],
             "retried_applied": reconciled["retried_applied"],
             "aborted_failed": reconciled["aborted_failed"],
+            "shadow_rows_closed": shadow_closed,
         }
+
+    async def _run_mtd_route_sweep(self):
+        """Release honey-routes whose session TTL expired.
+
+        Delegates to core.integrations.honey_router.sweep_expired_routes,
+        which runs the scan and the unroute calls off-thread with no
+        session open across an executor call — the fastpath sweep's
+        priority-inversion guard, again. Runs regardless of the MTD
+        enable switch: disabling stops NEW routes; it never strands an
+        attacker pinned to a decoy.
+        """
+        from core.integrations.honey_router.route import sweep_expired_routes
+
+        result = await sweep_expired_routes()
+        self.stats["mtd_routes_unrouted"] += result["unrouted"]
+        if result["expired"] or result["failed"]:
+            logger.info(
+                "MTD route sweep: %d expired (%d unrouted, %d failed, "
+                "%d retried next tick), scanned %d",
+                result["expired"],
+                result["unrouted"],
+                result["failed"],
+                result["expired"] - result["unrouted"] - result["failed"],
+                result["scanned"],
+            )
+        return result
 
     async def _run_probe_sweep(self):
         """Score the probes past their hour (#924), then queue today's (#923)."""
@@ -515,6 +590,12 @@ class TaskScheduler:
             return
         poller = ThreatFeedPoller()
         return await poller.run_once()
+
+    async def _run_kev_refresh(self):
+        """Pull the official CISA KEV catalog into threat_indicators (daily)."""
+        from services.daemon.threat_feed_poller import run_kev_refresh_once
+
+        return await run_kev_refresh_once()
 
     async def _run_health_check(self):
         """Run system health check."""

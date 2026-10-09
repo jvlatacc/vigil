@@ -185,8 +185,13 @@ _INTERNAL_NETWORKS = (
 )
 
 
-def _is_internal(dest_ip: str) -> bool:
-    """Whether dest_ip names a host on one of ours; unparseable is not."""
+def is_internal_destination(dest_ip: str) -> bool:
+    """Whether dest_ip names a host on one of ours; unparseable is not.
+
+    Public because the daemon path reads it too: the responder picks the
+    internal destination a probe aimed at before the decision runs, and
+    the decision re-verifies with this same answer.
+    """
     try:
         addr = ipaddress.ip_address(dest_ip)
     except ValueError:
@@ -194,6 +199,27 @@ def _is_internal(dest_ip: str) -> bool:
     return any(
         addr.version == net.version and addr in net for net in _INTERNAL_NETWORKS
     )
+
+
+# The technique tags the MTD band reads as scanning: T1046 (Network Service
+# Scanning) and T1595 (Active Scanning), matched by prefix so sub-techniques
+# count. One definition serves every MTD reader — the correlator scores a
+# finding carrying them, the processor queues one, and the responder reads
+# them as the deceive verb — so the three can never disagree about what a
+# recon probe is.
+RECON_TECHNIQUES = ("T1046", "T1595")
+
+
+def is_recon_probe(mitre_predictions: Any) -> bool:
+    """Whether the finding's technique tags name a scanning technique."""
+    if not mitre_predictions:
+        return False
+    tags = (
+        mitre_predictions.keys()
+        if isinstance(mitre_predictions, dict)
+        else mitre_predictions
+    )
+    return any(str(tag).upper().startswith(RECON_TECHNIQUES) for tag in tags)
 
 
 def mtd_route_decision(
@@ -218,7 +244,7 @@ def mtd_route_decision(
     if not config.enabled:
         return None, decision_rule("mtd.enabled", False)
     if dest_ip is None or (
-        config.internal_destinations_only and not _is_internal(dest_ip)
+        config.internal_destinations_only and not is_internal_destination(dest_ip)
     ):
         return None, decision_rule("mtd.dest_not_internal", dest_ip)
     if is_excluded:

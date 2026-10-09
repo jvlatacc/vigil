@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from contextlib import contextmanager
@@ -1417,19 +1418,62 @@ def get_approval_action(action_id: str) -> str:
     return _call(tool_registry.get_approval_action, action_id=action_id)
 
 
+# A decision on a run-bound action does what the /api/v1 approvals router does
+# (core/api/v1/approvals_router.py): record and commit it, then ask the agent
+# layer to pick the parked run back up (core.workflows.run_resume.resume_run)
+# instead of leaving it for the parked-run sweeper. Best-effort by contract --
+# the decision is already recorded and stands whatever the wakeup does, so a
+# failed or unavailable enqueue is reported as "skipped: <reason>", never
+# raised, and the sweeper stays as the fallback.
+async def _decide_and_resume(decide, verb, action_id):
+    from core.workflows.run_resume import resume_run
+
+    result = decide()
+    if not isinstance(result, dict) or "error" in result:
+        # Nothing was decided (unknown action, no principal, no right); the
+        # registry's error shape already says which.
+        return result
+    run_id = result.get("workflow_run_id")
+    if not run_id:
+        result["run_resume"] = "skipped: action is not bound to a workflow run"
+        return result
+    try:
+        resume = await resume_run(
+            run_id, action_id, result.get("approved_by") or caller()
+        )
+    except Exception as exc:  # noqa: BLE001 -- the decision must not fail on the wakeup
+        logger.error("resume after %s of %s failed: %s", verb, action_id, exc)
+        resume = {"success": False, "error": str(exc)}
+    if resume.get("success"):
+        result["run_resume"] = "enqueued"
+    else:
+        result["run_resume"] = f"skipped: {resume.get('error') or 'resume failed'}"
+    return result  # serialized by _acall, like every other tool body
+
+
 @mcp.tool()
-def approve_action(action_id: str) -> str:
+async def approve_action(action_id: str) -> str:
     """Approve a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.approve_action, action_id=action_id)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.approve_action(action_id=action_id),
+        verb="approve",
+        action_id=action_id,
+    )
 
 
 @mcp.tool()
-def reject_action(
+async def reject_action(
     action_id: str,
     reason: str,
 ) -> str:
     """Reject a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.reject_action, action_id=action_id, reason=reason)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.reject_action(action_id=action_id, reason=reason),
+        verb="reject",
+        action_id=action_id,
+    )
 
 
 # --- Agent runs --------------------------------------------------------------
@@ -1697,6 +1741,153 @@ def get_case_metrics(
             return case_metrics_queries.mttd(session, start, end, priority)
 
     return _call(_metrics)
+# ---------------------------------------------------------------------------
+# Speculative-containment leases (core.response.fastpath)
+#
+# Two verbs only, and both are demotions: READ (lease_list) and UNDO
+# (propose_rollback — the executor's idempotent undo, then the ledger's
+# compare-and-swap close). There is deliberately no tool here that commits,
+# promotes, extends into durability, or strengthens a lease: the system can
+# only demote its own autonomy — promoting is a person's call through the
+# approvals queue (create_approval_action above). The negative test in
+# tests/unit/response/fastpath/test_adjudication.py holds that line.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def lease_list(
+    status: str = "active",
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """List speculative-containment leases (read-only).
+
+    ``status`` is ``active`` (pending_apply or applied, the default) or
+    ``all`` (every row, newest first — the recent view, terminal states
+    included: rolled_back, escalated, failed).
+
+    Undo payloads are not returned: undo tokens are daemon-internal
+    capability, and a visibility surface does not hand them out.
+    """
+    try:
+        from core.response.fastpath.adjudication import read_leases
+
+        leases = read_leases(
+            status=status,
+            limit=max(1, min(int(limit), 200)),
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except ValueError as e:
+        return jdump({"error": str(e)})
+    except Exception as e:
+        return jdump({"error": f"Lease read failed: {e}"})
+
+    return jdump(
+        {
+            "success": True,
+            "count": len(leases),
+            "leases": [
+                {
+                    "lease_id": lease.id,
+                    "action_type": lease.action_type,
+                    "entity_type": lease.entity_type,
+                    "entity_id": lease.entity_id,
+                    "status": lease.status,
+                    "decision_rule": lease.decision_rule,
+                    "observed": lease.observed,
+                    "is_shadow": lease.is_shadow,
+                    "finding_id": lease.finding_id,
+                    "created_at": lease.created_at,
+                    "expires_at": lease.expires_at,
+                }
+                for lease in leases
+            ],
+        }
+    )
+
+
+@mcp.tool()
+async def propose_rollback(lease_id: str, reason: str = "") -> str:
+    """Undo a speculative-containment lease now (an autonomy DEMOTION).
+
+    The containment effect is removed first — the executor's idempotent
+    undo — then the ledger row is closed by compare-and-swap, so a race
+    with the TTL sweeper is refused and harmless. ``reason`` is recorded on
+    the row (default: false_positive).
+
+    Rollback is the one fate an agent may execute directly because it
+    demotes the system's own autonomy. There is deliberately no counterpart
+    that commits or promotes: that door opens only through the human-gated
+    approvals queue.
+    """
+    try:
+        from core.response.fastpath.executors import default_registry
+        from core.response.fastpath.ledger import (
+            FALSE_POSITIVE,
+            ContainmentLedger,
+            rollback_lease,
+        )
+
+        lease_key = lease_id.strip()
+        if not lease_key:
+            return jdump({"error": "lease_id is required"})
+
+        ledger = ContainmentLedger()
+        registry = default_registry()
+        # The driver resolves the lease row itself; undo must ride the
+        # executor registered for THIS lease's action type.
+        lease = await asyncio.to_thread(ledger.get, lease_key)
+        if lease is None or lease.status != "applied":
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No live lease {lease_key} — unknown, or already"
+                        " resolved (rolled back, expired, or escalated)"
+                    ),
+                }
+            )
+        executor = registry.get(lease.action_type)
+        if executor is None:
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No executor registered for action type"
+                        f" {lease.action_type} — the sweeper will reconcile it"
+                    ),
+                }
+            )
+        transition = await rollback_lease(
+            ledger,
+            executor,
+            lease_key,
+            reason.strip() or FALSE_POSITIVE,
+            actor=caller(),
+        )
+        if transition is None:
+            # A concurrent adjudication or TTL sweep closed it first; its
+            # undo was idempotent, so the containment is down either way.
+            return jdump(
+                {
+                    "success": False,
+                    "error": f"Lease {lease_key} was resolved concurrently",
+                }
+            )
+        return jdump(
+            {
+                "success": True,
+                "lease_id": transition.lease_id,
+                "from_status": transition.from_status,
+                "to_status": transition.to_status,
+                "actor": caller(),
+                "message": "Containment undone; the lease row is closed.",
+            }
+        )
+    except Exception as e:
+        return jdump({"error": f"Rollback failed: {e}"})
 
 
 if __name__ == "__main__":

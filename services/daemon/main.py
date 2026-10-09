@@ -126,7 +126,10 @@ class SOCDaemon:
         self._poller = DataPoller(self.config.polling)
         self._kafka_ingestor = KafkaIngestor(self.config.kafka)
         self._processor = FindingProcessor(
-            self.config.processing, response_config=self.config.response
+            self.config.processing,
+            response_config=self.config.response,
+            fastpath_config=self.config.fastpath,
+            mtd_config=self.config.mtd,
         )
         # The daemon owns its own copies: it is a separate process from the API, so
         # nothing on the API's app.state is reachable from here.
@@ -141,6 +144,7 @@ class SOCDaemon:
                 approvals=approvals, config=self.config.response
             ),
             approvals=approvals,
+            mtd_config=self.config.mtd,
         )
         self._scheduler = TaskScheduler(self.config.scheduler)
         self._orchestrator = Orchestrator(

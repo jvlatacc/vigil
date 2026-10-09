@@ -270,6 +270,8 @@ ENTITY_KEY_TYPES: Tuple[str, ...] = (
     "aws_key",
     "user",
     "process",
+    # CISA KEV seed: a known-exploited CVE is context like any other IOC.
+    "cve",
 )
 
 # How many subjects one Verdict may name. ADR 0016 puts a Hypothesis at
