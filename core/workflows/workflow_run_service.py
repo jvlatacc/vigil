@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from core.storage.connection import get_db_manager
-from core.storage.models import WorkflowRun, WorkflowRunPhase
+from core.storage.models import User, WorkflowRun, WorkflowRunPhase
 from core.storage.schemas import WorkflowRunPhaseSchema, WorkflowRunSchema
 from core.telemetry import get_meter
 from core.time import utcnow
@@ -272,6 +272,32 @@ class WorkflowRunService:
             )
             row = session.execute(stmt).scalars().first()
             return WorkflowRunSchema.dump_summary(row) if row else None
+
+    def initiator(self, run_id: str) -> Optional[str]:
+        """The run's stamped initiator, when that names an active user.
+
+        System starters -- the orchestrator, a handoff's join key, the bridge's
+        "api" -- name no user of this instance, and None is the honest answer:
+        those runs act as the system, and there is nobody to authorize against.
+        """
+        try:
+            db = get_db_manager()
+            with db.session_scope() as session:
+                row = session.get(WorkflowRun, run_id)
+                if row is None or not row.triggered_by:
+                    return None
+                user = (
+                    session.query(User)
+                    .filter(
+                        User.username == row.triggered_by,
+                        User.is_active.is_(True),
+                    )
+                    .one_or_none()
+                )
+                return user.username if user else None
+        except SQLAlchemyError as e:
+            logger.warning("Error resolving the initiator of run %s: %s", run_id, e)
+            return None
 
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get one run with the full ``result_summary`` attached."""

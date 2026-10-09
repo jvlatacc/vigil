@@ -427,6 +427,7 @@ async def execute_workflow(
     workflow_id: str,
     request: WorkflowExecuteRequest,
     service: WorkflowsService = Depends(provide_workflows),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Execute a workflow (custom or file-based).
@@ -452,12 +453,12 @@ async def execute_workflow(
             ),
         )
 
-    # Pass the caller as triggered_by so the workflow_runs row has a
-    # useful audit marker. "api" is a safe default when auth isn't
-    # surfacing a concrete user identity here (DEV_MODE / system
-    # triggers). Daemon invocations can override by calling the
-    # service layer directly.
-    result = await service.execute_workflow(workflow_id, parameters, triggered_by="api")
+    # The caller is the run's initiator, stamped on the row: an audit marker,
+    # and the person dispatch checks a run's tool calls against. Daemon
+    # invocations that mean no person call the service layer directly.
+    result = await service.execute_workflow(
+        workflow_id, parameters, triggered_by=current_user.username
+    )
 
     if not result.get("success"):
         error = result.get("error", "Unknown error during workflow execution")

@@ -517,15 +517,42 @@ class ToolDenied(Exception):
         )
 
 
-def ensure_dispatch_permission(tool_name: str, permission: str) -> None:
-    """Refuse the dispatch unless the bound caller holds ``permission``.
+def run_initiator(run_id: str) -> Optional[str]:
+    """The person a headless run acts as: the username stamped at start.
 
-    No principal -- a headless hunt -- passes unchecked: there is nobody bound
-    to check against, and runs stamping their initiator is a later change of
-    this refactor. The check rides the same engine the routes do, so DEV_MODE
-    grants it exactly as it grants everything else; no new bypass category.
+    Read off the run row rather than carried by the caller: the agent layer
+    holds no person credential and cannot name one, so the server's own record
+    of who started the run is the only name a headless dispatch can be checked
+    against. ``None`` -- no such run, a system start, an unreadable row -- has
+    no person behind it, and the dispatch passes as it always has.
+    """
+    from core.workflows.workflow_run_service import WorkflowRunService
+
+    try:
+        return WorkflowRunService().initiator(run_id)
+    except Exception as e:  # noqa: BLE001 - a run row that cannot be read names nobody
+        logger.warning("Could not resolve the initiator of run %s: %s", run_id, e)
+        return None
+
+
+def ensure_dispatch_permission(
+    tool_name: str, permission: str, *, run_id: Optional[str] = None
+) -> None:
+    """Refuse the dispatch unless the caller holds ``permission``.
+
+    The caller is the person bound to the call -- a chat turn's principal, a
+    /mcp user. A headless run binds nobody but names itself: given its
+    ``run_id``, the initiator stamped on the run at start is who the dispatch
+    is checked against. A run that names no person -- the orchestrator's
+    schedules, an unnamed start -- passes unchecked, exactly as an unbound
+    call always has; the check rides the same engine the routes do, so
+    DEV_MODE grants it as it grants everything else.
     """
     caller = current_caller()
+    if caller is None and run_id is not None:
+        caller = run_initiator(run_id)
+        if caller is None:
+            return
     if caller is None:
         return
     if not username_has_permission(caller, permission):
@@ -589,6 +616,7 @@ async def execute_backend_tool(
     tool_name: str,
     tool_input: Optional[Args],
     registry: Optional["MCPRegistry"] = None,
+    run_id: Optional[str] = None,
 ) -> Tuple[Any, bool]:
     args = dict(tool_input or {})
 
@@ -597,7 +625,7 @@ async def execute_backend_tool(
     # will fall through to execute_mcp_tool is never refused here by a
     # permission that does not apply to it -- that path is gated mcp.use there.
     if tool_name in MANIFEST:
-        ensure_dispatch_permission(tool_name, TOOLS_INVOKE_PERMISSION)
+        ensure_dispatch_permission(tool_name, TOOLS_INVOKE_PERMISSION, run_id=run_id)
 
     if tool_name == FIND_INTEGRATION_TOOLS and registry is not None:
         from core.agents.integration_tools import find_integration_tools

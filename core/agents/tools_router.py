@@ -50,6 +50,10 @@ class InvokeRequest(BaseModel):
     # An API-signed token for the session's user (core/auth/tool_principal.py) and
     # ToolPrincipal in contracts/tool.ts. Absent means no person: tools record "agent".
     principal: Optional[str] = None
+    # The run the caller serves, when it is one: the id, not a name, so what the
+    # call may do is read off the initiator stamped on that run at start. Optional
+    # and additive -- a caller that names no run is authorized as before.
+    run_id: Optional[str] = None
 
 
 def _failure(kind: str, **detail: Any) -> Dict[str, Any]:
@@ -187,12 +191,14 @@ async def _run(body: InvokeRequest, registry: MCPRegistry) -> Tuple[Any, bool, s
     args = _bounded(raw, body.bounds.max_rows, tool, registry)
 
     result, handled = await asyncio.wait_for(
-        execute_backend_tool(tool, args, registry=registry), timeout=seconds
+        execute_backend_tool(tool, args, registry=registry, run_id=body.run_id),
+        timeout=seconds,
     )
     if handled:
         return result, True, SOURCE_SYSTEM
     result, handled = await asyncio.wait_for(
-        execute_mcp_tool(tool, args, seconds, registry), timeout=seconds
+        execute_mcp_tool(tool, args, seconds, registry, run_id=body.run_id),
+        timeout=seconds,
     )
     return result, handled, _source_system(tool, registry)
 

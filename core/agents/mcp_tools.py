@@ -103,7 +103,11 @@ def _text_of(result: Dict[str, Any]) -> str:
 # the name, which is the caller's cue to report it as the defect it is -- a tool
 # nothing implements is not a gap in visibility.
 async def execute_mcp_tool(
-    tool_name: str, args: Dict[str, Any], timeout_s: float, registry: "MCPRegistry"
+    tool_name: str,
+    args: Dict[str, Any],
+    timeout_s: float,
+    registry: "MCPRegistry",
+    run_id: Optional[str] = None,
 ) -> Tuple[Any, bool]:
     servers = registry.get_active_servers()
     if not servers:
@@ -126,7 +130,7 @@ async def execute_mcp_tool(
     from core.agents.tool_registry import ensure_dispatch_permission
     from core.auth.permissions import MCP_USE_PERMISSION
 
-    ensure_dispatch_permission(tool_name, MCP_USE_PERMISSION)
+    ensure_dispatch_permission(tool_name, MCP_USE_PERMISSION, run_id=run_id)
 
     from core.integrations.mcp.surface import VIGIL_SERVER
 

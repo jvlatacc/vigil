@@ -6,6 +6,9 @@ export interface RemoteOptions {
   token: string;
   // Sent with every call when present; left off the body entirely when not.
   principal?: ToolPrincipal;
+  // The run this dispatch serves, when the caller is one: the far side resolves
+  // who the call is for from the initiator stamped on that run at start.
+  runId?: string;
   fetch?: typeof globalThis.fetch;
 }
 
@@ -89,6 +92,7 @@ export function remoteDispatch(options: RemoteOptions): ToolDispatch {
               args,
               bounds: { max_rows: tool.bounds.maxRows, timeout_ms: tool.bounds.timeoutMs },
               ...(options.principal === undefined ? {} : { principal: options.principal }),
+              ...(options.runId === undefined ? {} : { run_id: options.runId }),
             }),
             signal: held.signal,
           });
