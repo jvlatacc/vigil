@@ -351,6 +351,16 @@
         "_setup_note": "Cloudflare WAF, Zero Trust Gateway, and Access response actions plus read-only IP/domain threat lookups. Configure api_token (and optional account_id, zone_id) in Settings → Integrations. Tools are no-ops until the integration is enabled.",
         "_note": "Cloudforce One threat-intel feeds are ingested separately by daemon/threat_feed_poller.py and enrich findings via daemon/processor.py — no MCP tool surface required for v1."
       }
+    },
+
+    "decoy_controller": {
+      "command": "python3",
+      "args": ["core/integrations/decoy_controller/tool.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "_setup_note": "Decoy steering for the honey-routing posture (MTD feature 5): steer a suspicious source into the decoy farm on a TTL lease, unsteer, reconcile, and the emergency drain. Point base_url at the decoy-controller service (services/decoy_controller/) and set its api_token in Settings → Integrations. Tools are no-ops until the integration is enabled.",
+        "_note": "Steering is transparent and reversible: no deny signal reaches the source. The shipped Vigil backend is dry_run; selecting the controller backend requires this integration."
+      }
     }
   }
 }
