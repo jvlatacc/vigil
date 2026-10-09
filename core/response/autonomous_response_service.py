@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
 from core.response.config import ResponseConfig
+from core.response.protected_assets import protected_asset_hit
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,15 @@ class AutonomousResponseService:
             ip_address if ip_address and ip_address != "unknown" else f"host:{hostname}"
         )
 
+        # Never-quarantine invariant (#944): an operator-declared asset waits
+        # for a person at any confidence or severity. Checked before the
+        # approval gate here, and re-checked in execute_approved_actions
+        # before anything dispatches. A hit does not drop the action: it
+        # forces human approval and renders the invariant's rationale as the
+        # deciding rule.
+        protected = protected_asset_hit(ip_address, hostname)
+        gate_rule = None if protected is None else protected.rule()
+
         try:
             action, inserted = self.approval_service._put_action(
                 action_type=ActionType.ISOLATE_HOST,
@@ -184,6 +194,7 @@ class AutonomousResponseService:
                 created_by=AgentId.AUTO_RESPONDER.value,
                 parameters={"hostname": hostname, "correlation": correlation_data},
                 idempotency_key=f"{ActionType.ISOLATE_HOST.value}:{target_key}",
+                gate_rule=gate_rule,
             )
 
             if not inserted:
@@ -278,6 +289,14 @@ class AutonomousResponseService:
         """
         Execute all approved actions that haven't been executed yet.
 
+        Re-checks the never-quarantine invariant (#944) before dispatching:
+        the create path and this path are different transactions, and an
+        auto-approval released at creation time is not a decision that
+        survives a protected asset declared in between. A person-approved
+        row proceeds — the deliberate emergency valve; an auto-approved row
+        against a protected asset is refused and recorded, never executed
+        and never dropped silently.
+
         Returns:
             List of execution results
         """
@@ -292,6 +311,31 @@ class AutonomousResponseService:
                 # Skip if already executed
                 if action.executed_at:
                     continue
+
+                params = action.parameters or {}
+
+                # Never-quarantine invariant re-check (#944), ahead of the
+                # person-decided guard: a row whose status says "approved"
+                # but names no approver was released by a confidence figure,
+                # and a confidence figure cannot discharge the invariant.
+                # Refused and recorded — never executed, never dropped
+                # silently. A row a person decided (approved_by set)
+                # proceeds; that is the deliberate emergency valve.
+                if not action.approved_by:
+                    protected = protected_asset_hit(
+                        action.target, params.get("hostname")
+                    )
+                    if protected is not None:
+                        logger.warning(
+                            "Action %s targets protected asset %s; refusing execution",
+                            action.action_id,
+                            protected.rule(),
+                        )
+                        self.approval_service.refuse_auto_action(
+                            action.action_id, protected.rule()
+                        )
+                        continue
+
                 # Released by a confidence figure and no person: whoever
                 # supplied that figure also chose the outcome.
                 if not action.requires_approval and not action.approved_by:
@@ -301,7 +345,6 @@ class AutonomousResponseService:
                     )
                     continue
 
-                params = action.parameters or {}
                 result: Optional[Dict] = None
 
                 if action.action_type == "isolate_host":

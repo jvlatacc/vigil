@@ -228,6 +228,7 @@ class ApprovalService:
         idempotency_key: Optional[str] = None,
         human_only: bool = False,
         annotate_rule: bool = True,
+        gate_rule: Optional[str] = None,
     ) -> PendingAction:
         """Create a new pending action.
 
@@ -238,10 +239,13 @@ class ApprovalService:
         Irreversible actions always require approval. ``human_only`` holds the
         row for a person whatever ``confidence`` says: for callers whose
         confidence is their own claim (an agent, a model's reading of alert
-        text) and so cannot be what releases the action. A second call with
-        the same ``idempotency_key`` returns the existing non-failed row.
-        ``annotate_rule=False`` keeps the deciding rule off ``reason`` for rows
-        whose reason is read by an analyst and no confidence was ever compared.
+        text) and so cannot be what releases the action. ``gate_rule`` is a
+        guard invariant's rendered rationale (#944): the row waits for a
+        person and records the gate, not the confidence, as the deciding
+        rule. A second call with the same ``idempotency_key`` returns the
+        existing non-failed row. ``annotate_rule=False`` keeps the deciding
+        rule off ``reason`` for rows whose reason is read by an analyst and
+        no confidence was ever compared.
         """
         action, _inserted = self._put_action(
             action_type=action_type,
@@ -259,6 +263,7 @@ class ApprovalService:
             idempotency_key=idempotency_key,
             human_only=human_only,
             annotate_rule=annotate_rule,
+            gate_rule=gate_rule,
         )
         return action
 
@@ -279,6 +284,7 @@ class ApprovalService:
         idempotency_key: Optional[str] = None,
         human_only: bool = False,
         annotate_rule: bool = True,
+        gate_rule: Optional[str] = None,
     ) -> tuple[PendingAction, bool]:
         """Insert an approval row, or return the existing non-failed one.
 
@@ -299,6 +305,12 @@ class ApprovalService:
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)
+        if gate_rule is not None:
+            # A guard invariant outranks any confidence comparison (#944):
+            # the row waits for a person and records the gate's rule, not the
+            # confidence's, as the reason it did.
+            requires_approval = True
+            rule = gate_rule
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 
@@ -544,6 +556,40 @@ class ApprovalService:
                 return _row_to_pending(row)
         except SQLAlchemyError as e:
             logger.error("DB error marking action %s failed: %s", action_id, e)
+            return None
+
+    def refuse_auto_action(
+        self,
+        action_id: str,
+        reason: str,
+    ) -> Optional[PendingAction]:
+        """Refuse an auto-approved action at execution time (#944).
+
+        The never-quarantine invariant re-check in the executor releases an
+        action only when a person decided it; this records the refusal when
+        it does not. ``reject_action`` is deliberately pending-only — this is
+        the executor's own path for a row auto-approval released and the
+        invariant then held.
+        """
+        try:
+            db = get_db_manager()
+            with db.session_scope() as session:
+                row = session.get(ApprovalActionRow, action_id)
+                if row is None:
+                    return None
+                if row.status != ActionStatus.APPROVED.value:
+                    logger.warning(
+                        "Action %s is not approved (status: %s)",
+                        action_id,
+                        row.status,
+                    )
+                    return _row_to_pending(row)
+                row.status = ActionStatus.REJECTED.value
+                row.rejection_reason = reason
+                session.flush()
+                return _row_to_pending(row)
+        except SQLAlchemyError as e:
+            logger.error("DB error recording refusal of action %s: %s", action_id, e)
             return None
 
     def get_stats(self) -> Dict:
