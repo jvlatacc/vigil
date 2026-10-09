@@ -27,7 +27,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +37,12 @@ GENESIS_HASH = "0" * 64
 KIND_OBSERVATION = "observation"
 KIND_DECISION = "decision"
 KIND_REVERT = "revert"
+KIND_EXECUTE_FAILED = "execute_failed"
+KIND_STATE = "state"
 KIND_OFFLINE_WINDOW = "offline_window"
-_PROTECTED_KINDS = frozenset({KIND_DECISION, KIND_REVERT, KIND_OFFLINE_WINDOW})
+_PROTECTED_KINDS = frozenset(
+    {KIND_DECISION, KIND_REVERT, KIND_EXECUTE_FAILED, KIND_OFFLINE_WINDOW}
+)
 
 _STATE_FILE = "acks.json"
 _JOURNAL_FILE = "journal.jsonl"
@@ -123,6 +127,13 @@ class _State:
     anchor: str = GENESIS_HASH
     loss_counters: dict[str, int] = field(default_factory=dict)
     evicted_ranges: list[list[int]] = field(default_factory=list)
+
+
+def _parse_ts(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class HashJournal:
@@ -293,6 +304,63 @@ class HashJournal:
             os.fsync(handle.fileno())
         os.replace(tmp, self.journal_path)
         self._persist_state()
+
+    # -- caps (the gate's CapsView) ----------------------------------------
+
+    def _executed_decisions(self) -> list[tuple[JournalRecord, dict[str, Any]]]:
+        """Decision records that actually took effect: outcome=execute with a
+        successful executor apply. Failed applies bound nothing — only real
+        containment consumes a cap."""
+        executed = []
+        for record in self._records:
+            if record.kind != KIND_DECISION:
+                continue
+            payload = record.payload
+            if payload.get("outcome") != "execute":
+                continue
+            execution = payload.get("execution") or {}
+            if execution.get("success") is not True:
+                continue
+            executed.append((record, payload))
+        return executed
+
+    def executed_in_last_hour(self, action_type: str, now: datetime) -> int:
+        """Executed actions of this type in (now-1h, now] — the bundle's
+        per-hour cap input."""
+        count = 0
+        for record, payload in self._executed_decisions():
+            action = payload.get("action") or {}
+            if action.get("action_type") != action_type:
+                continue
+            ts = _parse_ts(record.timestamp)
+            if ts is None:
+                continue
+            if now - timedelta(hours=1) < ts <= now:
+                count += 1
+        return count
+
+    def active_blocks(self, now: datetime) -> int:
+        """Executed blocks whose TTL has not expired and that no successful
+        revert has closed — the bundle's max-active-blocks cap input."""
+        reverted = {
+            record.payload.get("revert_of")
+            for record in self._records
+            if record.kind == KIND_REVERT
+            and record.payload.get("revert_of") is not None
+            and record.payload.get("success") is True
+        }
+        active = 0
+        for record, payload in self._executed_decisions():
+            if record.local_sequence in reverted:
+                continue
+            action = payload.get("action") or {}
+            ttl = action.get("ttl_seconds")
+            ts = _parse_ts(record.timestamp)
+            if ts is None or not isinstance(ttl, int):
+                continue
+            if ts <= now < ts + timedelta(seconds=ttl):
+                active += 1
+        return active
 
     # -- verification ------------------------------------------------------
 
