@@ -20,6 +20,10 @@ PATCH /api/federation/sources/{source_id}
 POST /api/agents/custom
 POST /api/agents/custom/generate
 POST /api/agents/{source_agent_id}/fork
+# Edge mesh: enroll is guarded by the one-time enrollment token, journal by the
+# per-node bearer token (ROUTER_MANAGED; see services/api/routers/edge.py).
+POST /api/edge/enroll
+POST /api/edge/journal
 POST /api/ai/decisions
 POST /api/ai/decisions/{decision_id}/feedback
 POST /api/analytics/estimate-cost
@@ -89,6 +93,8 @@ POST /api/skills/{name}/test
 POST /api/sla-policies/
 POST /api/sla-policies/{policy_id}/set-default
 POST /api/v1/cases/search
+POST /api/v1/edge/enroll
+POST /api/v1/edge/journal
 POST /api/webhooks/
 POST /api/webhooks/{webhook_id}/test
 POST /api/workflows/custom

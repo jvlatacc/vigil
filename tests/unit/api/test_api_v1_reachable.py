@@ -13,6 +13,7 @@ no install has. These tests put the fallback back.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,12 @@ def client_with_a_frontend_build():
 
     from services.api.main import app, serves_the_app_shell
 
+    # A real install of the edge contract configures EDGE_ENROLLMENT_TOKEN;
+    # without it the enroll route answers its fail-closed 503 before auth, and
+    # the unauthenticated probe below would read that as "not reachable".
+    prev_enrollment = os.environ.get("EDGE_ENROLLMENT_TOKEN")
+    os.environ["EDGE_ENROLLMENT_TOKEN"] = "reachable-test-token"
+
     async def app_shell_or_error(request, exc):
         if exc.status_code == 404 and serves_the_app_shell(
             request.url.path, request.method
@@ -72,6 +79,10 @@ def client_with_a_frontend_build():
         with TestClient(app) as client:
             yield client
     finally:
+        if prev_enrollment is None:
+            os.environ.pop("EDGE_ENROLLMENT_TOKEN", None)
+        else:
+            os.environ["EDGE_ENROLLMENT_TOKEN"] = prev_enrollment
         if previous is None:
             app.exception_handlers.pop(StarletteHTTPException, None)
         else:

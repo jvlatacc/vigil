@@ -3703,6 +3703,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/edge/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enroll
+         * @description Exchange a one-time enrollment token for a per-node bearer token.
+         */
+        post: operations["post_api_edge_enroll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/edge/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Journal
+         * @description Reconcile a hash-chained journal batch into approval_actions.
+         */
+        post: operations["post_api_edge_journal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Nodes
+         * @description List enrolled Warden nodes and their status.
+         */
+        get: operations["get_api_edge_nodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/edge/nodes/{node_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Node
+         * @description Revoke a node: its bearer token stops working immediately.
+         */
+        post: operations["post_api_edge_nodes_node_id_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/edge/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current Policy
+         * @description Fetch the node's current signed policy pack.
+         */
+        get: operations["get_api_edge_policy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/exclusions": {
         parameters: {
             query?: never;
@@ -7472,6 +7572,106 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/edge/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enroll
+         * @description Exchange a one-time enrollment token for a per-node bearer token.
+         */
+        post: operations["post_api_v1_edge_enroll"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/journal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reconcile Journal
+         * @description Reconcile a hash-chained journal batch into approval_actions.
+         */
+        post: operations["post_api_v1_edge_journal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Nodes
+         * @description List enrolled Warden nodes and their status.
+         */
+        get: operations["get_api_v1_edge_nodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/nodes/{node_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Node
+         * @description Revoke a node: its bearer token stops working immediately.
+         */
+        post: operations["post_api_v1_edge_nodes_node_id_revoke"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/edge/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current Policy
+         * @description Fetch the node's current signed policy pack.
+         */
+        get: operations["get_api_v1_edge_policy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/findings": {
         parameters: {
             query?: never;
@@ -10159,6 +10359,70 @@ export interface components {
             /** Provider Type */
             provider_type: string;
         };
+        /** EdgeNodeResponse */
+        EdgeNodeResponse: {
+            /**
+             * Enrolled At
+             * Format: date-time
+             */
+            enrolled_at: string;
+            /** Enrolled By */
+            enrolled_by: string;
+            /** Last Seen */
+            last_seen: string | null;
+            /** Node Id */
+            node_id: string;
+            /** Revocation Reason */
+            revocation_reason: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Revoked By */
+            revoked_by: string | null;
+            /** Segment Labels */
+            segment_labels: string[];
+            /** Status */
+            status: string;
+        };
+        /** EdgeNodesResponse */
+        EdgeNodesResponse: {
+            /** Count */
+            count: number;
+            /** Nodes */
+            nodes: components["schemas"]["EdgeNodeResponse"][];
+        };
+        /** EdgePolicyResponse */
+        EdgePolicyResponse: {
+            /** Envelope */
+            envelope: {
+                [key: string]: unknown;
+            };
+            /**
+             * Not After
+             * Format: date-time
+             */
+            not_after: string;
+            /**
+             * Not Before
+             * Format: date-time
+             */
+            not_before: string;
+            /** Payload Hash */
+            payload_hash: string;
+            /** Policy Version */
+            policy_version: number;
+        };
+        /** EnrollRequest */
+        EnrollRequest: {
+            /** Segment Labels */
+            segment_labels?: string[];
+        };
+        /** EnrollResponse */
+        EnrollResponse: {
+            /** Node Id */
+            node_id: string;
+            /** Token */
+            token: string;
+        };
         /**
          * EntityContext
          * @description Free-form entity context; ``source_evidence`` is the one named key.
@@ -10854,6 +11118,67 @@ export interface components {
             /** Parent Issue Key */
             parent_issue_key: string;
         };
+        /** JournalExecutionModel */
+        JournalExecutionModel: {
+            /** At */
+            at?: string | null;
+            /** Executor */
+            executor: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "executed" | "failed" | "dry_run";
+        };
+        /** JournalPush */
+        JournalPush: {
+            /** Chain Head */
+            chain_head: string;
+            /** Node Id */
+            node_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Records */
+            records: components["schemas"]["JournalRecord"][];
+        };
+        /**
+         * JournalRecord
+         * @description One decision in a Warden journal. The field set is frozen — it is
+         *     exactly what ``core.edge.journal.record_hash`` covers — so extras are
+         *     refused and both sides hash the same content.
+         */
+        JournalRecord: {
+            /** Action Type */
+            action_type: string;
+            /** Decision Rule */
+            decision_rule: string;
+            execution: components["schemas"]["JournalExecutionModel"];
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Mode */
+            mode: string;
+            /** Prev Hash */
+            prev_hash: string;
+            /** Seq */
+            seq: number;
+            /** Target */
+            target: string;
+            /** Ts */
+            ts: string;
+        };
+        /** JournalResponse */
+        JournalResponse: {
+            /** Accepted Through */
+            accepted_through: number;
+            /** Duplicate Ids */
+            duplicate_ids: string[];
+            /** Merged Count */
+            merged_count: number;
+            /** Receipt Id */
+            receipt_id: string | null;
+            /** Rejected */
+            rejected: components["schemas"]["RecordRejectionModel"][];
+        };
         /**
          * KafkaConfigBody
          * @description Non-secret Kafka settings persisted in SystemConfig.
@@ -11494,6 +11819,15 @@ export interface components {
             /** Start Time */
             start_time?: string | null;
         };
+        /** RecordRejectionModel */
+        RecordRejectionModel: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Seq */
+            seq: number;
+        };
         /**
          * RecoveryCodesResponse
          * @description One-time MFA recovery codes (shown once, cannot be retrieved again).
@@ -11568,6 +11902,14 @@ export interface components {
             action: string;
             /** Notes */
             notes?: string | null;
+        };
+        /** RevokeRequest */
+        RevokeRequest: {
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
         };
         /**
          * Routability
@@ -19224,6 +19566,175 @@ export interface operations {
             };
         };
     };
+    post_api_edge_enroll: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_edge_journal: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalPush"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_edge_nodes: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_edge_nodes_node_id_revoke: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_edge_policy: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgePolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_exclusions: {
         parameters: {
             query?: {
@@ -25569,6 +26080,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseMergeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_edge_enroll: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EnrollResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_edge_journal: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalPush"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_edge_nodes: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_edge_nodes_node_id_revoke: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeNodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_edge_policy: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgePolicyResponse"];
                 };
             };
             /** @description Validation Error */
