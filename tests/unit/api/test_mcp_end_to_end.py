@@ -50,9 +50,18 @@ def issued_credential():
     Base.metadata.create_all(
         engine, tables=[Role.__table__, User.__table__, McpCredential.__table__]
     )
-    session = sessionmaker(bind=engine)()
+    maker = sessionmaker(bind=engine)
+    session = maker()
+    # cases.write: the surface's case tools now answer to the caller's grant,
+    # and the check resolves the bound user's role for itself. The store is
+    # also the permission-check database, so the real role model decides.
     session.add(
-        Role(role_id="r-analyst", name="analyst", description="", permissions={})
+        Role(
+            role_id="r-analyst",
+            name="analyst",
+            description="",
+            permissions={"cases.write": True},
+        )
     )
     session.add(
         User(
@@ -73,7 +82,9 @@ def issued_credential():
     def _this_store(_=None):
         yield session
 
-    with patch("core.auth.mcp_credential_service.unit_of_work", _this_store):
+    with patch("core.auth.mcp_credential_service.unit_of_work", _this_store), patch(
+        "core.storage.unit_of_work.get_db_session", maker
+    ):
         yield minted.token
 
     session.close()

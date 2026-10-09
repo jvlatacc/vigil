@@ -9,7 +9,11 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
 from core.agents.projections import pack_completed_hunts, read_replay
-from core.auth.permissions import APPROVE_PERMISSION, username_has_permission
+from core.auth.permissions import (
+    APPROVE_PERMISSION,
+    CASES_WRITE_PERMISSION,
+    username_has_permission,
+)
 from core.integrations.mcp.surface import current_caller
 from core.llm.tool_schemas import FIND_INTEGRATION_TOOLS, INTEGRATION_TOOLS
 from core.memory.recall_contract import RECALL_TOOL
@@ -191,6 +195,8 @@ def create_case(
     assignee: Optional[str] = None,
     tags: Optional[list] = None,
 ) -> Args:
+    if refusal := case_write_refusal():
+        return refusal
     data = _data()
     ids = finding_ids or []
     case = data.create_case(
@@ -233,6 +239,8 @@ def update_case(
     from core.cases.agent_closure import record_agent_close, record_reopen
     from core.time import utcnow
 
+    if refusal := case_write_refusal():
+        return refusal
     data = _data()
     case = data.get_case(case_id)
     if not case:
@@ -293,6 +301,8 @@ def _case_records(args: Args) -> Args:
 def add_finding_to_case(*, case_id: str, finding_id: str) -> Args:
     from core.cases import case_journal_service
 
+    if refusal := case_write_refusal():
+        return refusal
     linked = case_journal_service.link_finding(_data(), case_id, finding_id)
     if linked is None:
         return {"error": f"Failed to add {finding_id} to {case_id}"}
@@ -315,6 +325,8 @@ def add_resolution_step(
 ) -> Args:
     from core.cases import case_journal_service
 
+    if refusal := case_write_refusal():
+        return refusal
     step = case_journal_service.append_resolution_step(
         _data(),
         case_id,
@@ -487,6 +499,15 @@ def _without_approval_right() -> Optional[Args]:
     return {
         "error": f"{caller} may not decide approvals: {APPROVE_PERMISSION} required"
     }
+
+
+# Case writes answer the grant the cases router asks, against the bound person,
+# so the HTTP API and MCP answer one question alike. None (a hunt) writes as before.
+def case_write_refusal() -> Optional[Args]:
+    caller = current_caller()
+    if caller is None or username_has_permission(caller, CASES_WRITE_PERMISSION):
+        return None
+    return {"error": f"{caller} may not write cases: {CASES_WRITE_PERMISSION} required"}
 
 
 # The actor is the caller, not an argument. A model that names one is choosing
