@@ -18,6 +18,7 @@ import dataclasses
 import logging
 import re
 import sys
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -40,6 +41,11 @@ from core.response.approval_service import (
     ActionStatus,
     Reversibility,
 )
+from core.response.breaker import (
+    BREAKER_FAILURE_SAMPLE,
+    BreakerCounts,
+    breaker_decision,
+)
 from core.response.config import (
     CONTAINMENT_TICK_SECONDS,
     ContainmentCounts,
@@ -48,6 +54,7 @@ from core.response.config import (
     approval_requirement,
     blast_bound_decision,
     containment_subnet,
+    decision_rule,
     response_action_decision,
 )
 from core.response.protected_targets import CONTAINMENT_ACTION_TYPES
@@ -278,6 +285,74 @@ def quota_holds(
     return holds
 
 
+def breaker_holds(
+    approvals: Sequence[ReplayApproval],
+    config: ResponseConfig,
+    quotas: Sequence[Optional[str]],
+) -> List[Optional[str]]:
+    """Circuit-breaker holds, re-decided from the walked history.
+
+    The live gate measures the storm from ``approval_actions`` at each
+    insert; replay derives the same signature from the rows themselves, in
+    ``created_at`` order. Two approximations, both conservative in the same
+    direction: the failure sample orders by ``created_at`` where the live
+    read orders by ``executed_at``, and a manual-reset trip (the default)
+    holds the containment rows to the end of the walked window, because the
+    reset events between them are outside what replay can see. The gate
+    measures the storm only on a row the quotas did not hold, so the
+    caller's quota verdicts for the same rows gate trip evaluation here.
+    No database access.
+    """
+    holds: List[Optional[str]] = []
+    history: List[Tuple[datetime, str]] = []
+    sample: deque[str] = deque(maxlen=BREAKER_FAILURE_SAMPLE)
+    tripped_until: Optional[datetime] = None
+    for action, quota in zip(approvals, quotas):
+        if (
+            action.created_at is None
+            or action.action_type not in CONTAINMENT_ACTION_TYPES
+            or action.status == ActionStatus.REJECTED.value
+        ):
+            # A person's no is not the daemon's volume: it neither counts
+            # toward the signature nor is held by it.
+            holds.append(None)
+            continue
+        created_at: datetime = action.created_at
+        history.append((created_at, action.target))
+        if action.status in (ActionStatus.EXECUTED.value, ActionStatus.FAILED.value):
+            sample.append(action.status)
+        if tripped_until is not None:
+            if created_at < tripped_until:
+                holds.append(decision_rule("response.breaker_state", "tripped"))
+                continue
+            tripped_until = None  # the auto-resume cooldown elapsed; armed again
+        if quota is not None:
+            # The gate measures the storm only on a row the quotas did not hold.
+            holds.append(None)
+            continue
+        hour_cutoff = created_at - timedelta(hours=1)
+        rule = breaker_decision(
+            BreakerCounts(
+                volume_hour=sum(1 for at, _ in history if at >= hour_cutoff),
+                distinct_targets_hour=len(
+                    {t for at, t in history if at >= hour_cutoff and t}
+                ),
+                failures=sum(1 for s in sample if s == ActionStatus.FAILED.value),
+                attempts=len(sample),
+            ),
+            config,
+        )
+        holds.append(rule)
+        if rule is not None:
+            if config.breaker_auto_resume_minutes > 0:
+                tripped_until = created_at + timedelta(
+                    minutes=config.breaker_auto_resume_minutes
+                )
+            else:
+                tripped_until = datetime.max  # manual reset only
+    return holds
+
+
 def replay_decisions(
     findings: Sequence[ReplayFinding],
     approvals: Sequence[ReplayApproval],
@@ -312,8 +387,14 @@ def replay_decisions(
                 declared_rule=dec[1] if dec else "",
             )
         )
-    for action, eff_hold, dec_hold in zip(
-        approvals, quota_holds(approvals, effective), quota_holds(approvals, declared)
+    eff_quotas = quota_holds(approvals, effective)
+    dec_quotas = quota_holds(approvals, declared)
+    for action, eff_quota, dec_quota, eff_breaker, dec_breaker in zip(
+        approvals,
+        eff_quotas,
+        dec_quotas,
+        breaker_holds(approvals, effective, eff_quotas),
+        breaker_holds(approvals, declared, dec_quotas),
     ):
         eff_req, eff_rule = approval_requirement(
             effective.force_manual_approval,
@@ -327,8 +408,10 @@ def replay_decisions(
             action.confidence,
             declared,
         )
-        # A quota hold is a person requirement layered on top: the rule it
-        # fired on is the one the row would have been decided by.
+        # Quota and breaker holds are person requirements layered on top:
+        # the rule the gate would fire first is the one the row records.
+        eff_hold = eff_quota if eff_quota is not None else eff_breaker
+        dec_hold = dec_quota if dec_quota is not None else dec_breaker
         if eff_hold is not None:
             eff_req, eff_rule = True, eff_hold
         if dec_hold is not None:

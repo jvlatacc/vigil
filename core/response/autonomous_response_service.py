@@ -313,6 +313,20 @@ class AutonomousResponseService:
                     )
                     continue
 
+                # The breaker honors a trip before anything else: while it
+                # is tripped, no containment row executes — the row stays
+                # approved for when a person resets the breaker. A failed
+                # state read skips containment this tick (fail-closed).
+                if action.action_type in CONTAINMENT_ACTION_TYPES:
+                    breaker = self.approval_service.breaker_hold()
+                    if breaker is not None:
+                        logger.warning(
+                            "Action %s not executed this tick: %s",
+                            action.action_id,
+                            breaker,
+                        )
+                        continue
+
                 params = action.parameters or {}
 
                 # Last line of defense before the world changes. A failed or

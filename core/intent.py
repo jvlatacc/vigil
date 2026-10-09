@@ -138,6 +138,30 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         SHORTER_TIGHTER,
     ),
     IntentField(
+        "respond.breaker_volume_threshold",
+        "response.breaker_volume_threshold",
+        "daemon_breaker_volume_threshold",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "respond.breaker_distinct_targets",
+        "response.breaker_distinct_targets",
+        "daemon_breaker_distinct_targets",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "respond.breaker_failure_rate",
+        "response.breaker_failure_rate",
+        "daemon_breaker_failure_rate",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "respond.breaker_auto_resume_minutes",
+        "response.breaker_auto_resume_minutes",
+        "daemon_breaker_auto_resume_minutes",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",
