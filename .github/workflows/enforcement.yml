@@ -2,17 +2,24 @@ name: Enforcement
 
 # The enforcement daemon is a standalone Go module with its own toolchain, so
 # it has its own workflow rather than steps in ci-cd.yml. Path-filtered: a PR
-# that doesn't touch the daemon doesn't pay for it. No repository condition:
-# nothing here needs a secret, so it runs on forks as well.
+# that doesn't touch the daemon (or its image / chart / CI wiring) doesn't pay
+# for it. No repository condition: nothing here needs a secret, so it runs on
+# forks as well.
 on:
   push:
     branches: [main]
     paths:
       - "services/enforcement/**"
+      - "infra/docker/Dockerfile.enforcer"
+      - "infra/helm/**"
+      - ".dockerignore"
       - ".github/workflows/enforcement.yml"
   pull_request:
     paths:
       - "services/enforcement/**"
+      - "infra/docker/Dockerfile.enforcer"
+      - "infra/helm/**"
+      - ".dockerignore"
       - ".github/workflows/enforcement.yml"
   workflow_dispatch:
 
@@ -45,3 +52,152 @@ jobs:
         # The engine's decision logic is the security boundary; run it under
         # the race detector — the enforcer serves concurrent requests.
         run: go test -race ./...
+
+  image:
+    name: Enforcer image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: hadolint Dockerfile.enforcer
+        run: |
+          curl -sSLo hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x hadolint
+          ./hadolint infra/docker/Dockerfile.enforcer
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the enforcer image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: infra/docker/Dockerfile.enforcer
+          push: false
+          load: true
+          tags: vigil-enforcer:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Runtime image carries no toolchain, but the BPF objects
+        # The acceptance claim for Dockerfile.enforcer, asserted on the built
+        # image: the builder stages compile (clang for CO-RE objects, Go for
+        # the binary) and the runtime stage ships NEITHER toolchain nor
+        # kernel headers — a protected host installs nothing to enforce.
+        run: |
+          docker run --rm --entrypoint sh vigil-enforcer:ci -ec '
+            if command -v clang >/dev/null 2>&1; then
+              echo "::error::runtime image ships clang"
+              exit 1
+            fi
+            if [ -e /usr/lib/llvm ] || [ -e /usr/include/linux/bpf.h ]; then
+              echo "::error::runtime image ships LLVM or kernel headers"
+              exit 1
+            fi
+            test -f /app/bpf/xdp_drop.o
+            test -f /app/bpf/socket_redirect.o
+            test -f /app/bpf/interdict.o
+            echo "runtime image clean; BPF objects present"'
+
+      - name: Enforcer starts (faked kernel) and answers /healthz
+        # The runner has no bpffs, so the real loader refuses to serve —
+        # fail-closed by design, never a silent fake. This smoke therefore
+        # selects the faked kernel explicitly (the same opt-in dev/CI uses)
+        # and asserts /healthz answers — the exact assertion release.yml
+        # runs against the published image.
+        run: |
+          set -eu
+          cid=$(docker run -d \
+            -e VIGIL_ENFORCEMENT_TOKEN=ci-smoke-token \
+            -e VIGIL_ENFORCEMENT_KERNEL=fake \
+            vigil-enforcer:ci)
+          ok=0
+          cleanup() {
+            if [ "$ok" != 1 ]; then
+              echo "::error::enforcer exited or did not answer GET /healthz on 6986"
+              docker logs "$cid" || true
+            fi
+            docker rm -f "$cid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          i=0
+          while [ "$i" -lt 60 ]; do
+            i=$((i + 1))
+            if [ -z "$(docker ps -q --filter "id=$cid")" ]; then
+              exit 1
+            fi
+            if docker exec "$cid" curl -fsS --max-time 2 http://127.0.0.1:6986/healthz \
+                | grep -q '"faked"'; then
+              ok=1
+              echo "enforcer ok (faked kernel, healthz reports it)"
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+  chart:
+    name: Enforcer chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.15.2
+
+      # Same dependency fetch as helm-chart.yml (the enforcer template ships
+      # in the chart that owns those subcharts).
+      - name: Fetch chart dependencies
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+          helm dependency update infra/helm/vigil
+          for tgz in infra/helm/vigil/charts/*.tgz; do
+            tar -xzf "$tgz" -C infra/helm/vigil/charts/
+          done
+
+      - name: helm lint (default values)
+        run: helm lint infra/helm/vigil
+
+      - name: Render with the enforcer disabled — dormant by default
+        # Dormancy is a security property, not a default: a chart upgrade
+        # must never silently add the privileged DaemonSet.
+        run: |
+          helm template release-check infra/helm/vigil \
+            --set secrets.anthropicApiKey=test-key \
+            > /tmp/manifest-enforcer-off.yaml
+          if grep -q 'kind: DaemonSet' /tmp/manifest-enforcer-off.yaml; then
+            echo "::error::enforcer DaemonSet rendered without enforcer.enabled"
+            exit 1
+          fi
+          echo "no DaemonSet in the default render"
+
+      - name: Render with the enforcer enabled
+        run: |
+          helm template release-check infra/helm/vigil \
+            --set enforcer.enabled=true \
+            --set secrets.enforcementToken=ci-render-token \
+            > /tmp/manifest-enforcer-on.yaml
+
+      - name: DaemonSet carries the enforcement security overrides
+        # Each override the review depends on, asserted on the rendered
+        # manifest so a template edit cannot silently drop it.
+        run: |
+          grep -q 'hostNetwork: true' /tmp/manifest-enforcer-on.yaml
+          grep -q 'dnsPolicy: ClusterFirstWithHostNet' /tmp/manifest-enforcer-on.yaml
+          grep -q 'runAsUser: 10002' /tmp/manifest-enforcer-on.yaml
+          grep -q 'readOnlyRootFilesystem: true' /tmp/manifest-enforcer-on.yaml
+          grep -q 'allowPrivilegeEscalation: false' /tmp/manifest-enforcer-on.yaml
+          grep -q 'VIGIL_ENFORCEMENT_TOKEN' /tmp/manifest-enforcer-on.yaml
+          echo "enforcement security overrides present"
+
+      - name: Validate manifests with kubeconform
+        run: |
+          curl -sSLo kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xzf kubeconform.tar.gz
+          ./kubeconform -strict -ignore-missing-schemas -summary /tmp/manifest-enforcer-off.yaml
+          ./kubeconform -strict -ignore-missing-schemas -summary /tmp/manifest-enforcer-on.yaml
