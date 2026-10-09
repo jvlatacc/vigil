@@ -7,10 +7,14 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from core.auth.permissions import permission_gate
 from core.routing import Auth, RouterMeta
 from core.storage.database_data_service import DatabaseDataService
 
-router = APIRouter()
+# Timeline rows are findings laid out in time (per case, per finding, per
+# cluster, or over a range), so every route here asks findings.read — the
+# right the findings and cases screens ask for on the same data.
+router = APIRouter(dependencies=[permission_gate("findings.read")])
 
 ROUTER_META = RouterMeta(
     prefix="/api/timeline",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -53,11 +54,18 @@ def _clean(throwaway_database):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from services.api.middleware.auth import get_current_user
     from services.api.routers import triage
 
     app = FastAPI()
     app.include_router(triage.router, prefix=triage.ROUTER_META.prefix)
+    # The router carries the findings.read gate; answer it as a signed-in
+    # analyst would be answered, without standing up session auth here.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
+    )
     return TestClient(app)
 
 

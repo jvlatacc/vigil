@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -79,11 +80,18 @@ def _clean(throwaway_database):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from services.api.middleware.auth import get_current_user
     from services.api.routers import overview
 
     app = FastAPI()
     app.include_router(overview.router, prefix=overview.ROUTER_META.prefix)
+    # The router carries the findings.read gate; answer it as a signed-in
+    # analyst would be answered, without standing up session auth here.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
+    )
     return TestClient(app)
 
 
@@ -524,7 +532,9 @@ def test_alert_read_matches_the_feed_item_and_reaches_past_the_feed(client):
         )
         session.flush()
         _link(session, "ov-c-one", "ov-old")
-    feed = {r["finding_id"]: r for r in overview_payload(day=base.date(), now=base)["feed"]}
+    feed = {
+        r["finding_id"]: r for r in overview_payload(day=base.date(), now=base)["feed"]
+    }
     assert "ov-old" not in feed and "ov-marked-one" not in feed
     assert all(row["noise_marked"] is False for row in feed.values())
 
@@ -537,7 +547,9 @@ def test_alert_read_matches_the_feed_item_and_reaches_past_the_feed(client):
     assert old["case_id"] == "ov-c-one"
     assert old["noise_marked"] is False
     # noise-marked: not skipped, and says so
-    assert client.get("/api/overview/alerts/ov-marked-one").json()["noise_marked"] is True
+    assert (
+        client.get("/api/overview/alerts/ov-marked-one").json()["noise_marked"] is True
+    )
     assert overview_alert("ov-marked-one")["terminal_state"] == "waiting"
 
 

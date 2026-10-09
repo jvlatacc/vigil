@@ -4,10 +4,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
+from core.auth.permissions import permission_gate
 from core.routing import Auth, RouterMeta
 from services.api.triage_read import triage_payload
 
-router = APIRouter()
+# The Triage queue is intake rows over findings, so it asks findings.read —
+# the same right the findings surface itself asks for. Nothing here writes.
+router = APIRouter(dependencies=[permission_gate("findings.read")])
 
 ROUTER_META = RouterMeta(
     prefix="/api",

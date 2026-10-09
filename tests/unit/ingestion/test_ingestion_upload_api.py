@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -14,9 +15,10 @@ for p in (str(_REPO_ROOT),):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from services.api.routers import ingestion as ingestion_api  # noqa: E402
 from core.ingestion import ingestion_service  # noqa: E402
 from core.ingestion.ingestion_jobs import IngestionJobRegistry  # noqa: E402
+from services.api.middleware.auth import get_current_user  # noqa: E402
+from services.api.routers import ingestion as ingestion_api  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +61,12 @@ def client(monkeypatch):
 
     app = FastAPI()
     app.include_router(ingestion_api.router, prefix="/api/ingest")
+    # The router carries the findings.read/write gates; answer them as a
+    # signed-in analyst would be answered, without session auth here.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
+    )
     with TestClient(app) as test_client:
         yield test_client
 

@@ -379,11 +379,20 @@ def test_attack_tab_and_timeline_describe_the_queue():
     assert [f["finding_id"] for f in drill["findings"]] == ["ipx-other"]
 
 
-def test_dashboard_timeline_hides_excluded_findings():
+def test_dashboard_timeline_hides_excluded_findings(monkeypatch):
+    from types import SimpleNamespace
+
+    from services.api.middleware.auth import get_current_user
     from services.api.routers.timeline import router as timeline_router
 
     app = FastAPI()
     app.include_router(timeline_router, prefix="/api/timeline")
+    # The router carries the findings.read gate; answer it as a signed-in
+    # analyst would be answered, without standing up session auth here.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
+    )
     _standard_findings()
     _exclude()
     response = TestClient(app).get("/api/timeline/range", params={"limit": 5000})

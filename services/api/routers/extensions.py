@@ -40,6 +40,9 @@ async def get_extension_session_token(
     # Mirror the connector's manifest `mountPoint.permission` server-side by
     # convention (`<id>.view`), so the API enforces the same RBAC gate the UI
     # and the loglm.view grant do — otherwise any authenticated user could mint.
+    # This is the recorded exception to the declarative permission_gate sweep:
+    # the permission name depends on the {integration_id} path parameter, which
+    # a static route-level gate cannot express.
     required = f"{integration_id}.view"
     if not AuthService.check_permission(current_user.user_id, required):
         raise HTTPException(

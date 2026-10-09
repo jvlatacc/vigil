@@ -5,10 +5,14 @@ from pydantic import BaseModel
 
 from core.agents.enablement import set_agent_enabled
 from core.agents.manager import CUSTOM_AGENT_ID_PREFIX, AgentManager
+from core.auth.permissions import permission_gate
 from core.routing import Auth, RouterMeta
 from core.storage.models import User
 from services.api.middleware.auth import get_current_active_user
 
+# The agent catalog is the chat surface's cast of characters — the picker and
+# the agent screens read it — so reads ask ai_chat.use. Flipping one on or off
+# changes what the whole team's chat offers, so the toggle asks settings.write.
 router = APIRouter()
 
 ROUTER_META = RouterMeta(
@@ -36,7 +40,7 @@ def _resolve_agent(agent_id: str):
     return None
 
 
-@router.get("/agents")
+@router.get("/agents", dependencies=[permission_gate("ai_chat.use")])
 async def list_agents():
     """Get list of all available SOC agents (built-ins + DB-backed customs).
 
@@ -51,7 +55,7 @@ async def list_agents():
     return {"agents": agent_manager.get_agent_list()}
 
 
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", dependencies=[permission_gate("ai_chat.use")])
 async def get_agent(agent_id: str):
     """Get details for a specific agent."""
     agent = _resolve_agent(agent_id)
@@ -79,7 +83,9 @@ class AgentEnabledRequest(BaseModel):
     enabled: bool
 
 
-@router.put("/agents/{agent_id}/enabled")
+@router.put(
+    "/agents/{agent_id}/enabled", dependencies=[permission_gate("settings.write")]
+)
 async def set_enabled(
     agent_id: str,
     body: AgentEnabledRequest,

@@ -2,10 +2,13 @@
 
 from fastapi import APIRouter, HTTPException
 
+from core.auth.permissions import permission_gate
 from core.findings.overview import overview_alert, overview_payload
 from core.routing import Auth, RouterMeta
 
-router = APIRouter()
+# The console home reads findings (arrivals, outcomes, the feed), so it asks
+# the same findings.read the rest of the findings surface already asks for.
+router = APIRouter(dependencies=[permission_gate("findings.read")])
 
 ROUTER_META = RouterMeta(
     prefix="/api",

@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from core.auth.permissions import permission_gate
 from core.config import get_settings
 from core.ingestion.ingestion_jobs import (
     IngestionJob,
@@ -35,7 +36,11 @@ from core.storage.s3_service import S3_LIST_ERRORS, describe_s3_error
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Ingestion creates findings, so reading the job pipeline asks findings.read
+# and every ingest action asks findings.write — the same right a manual
+# findings write needs. GET /s3-files exists to pick files to ingest, so it
+# rides with the writes.
+router = APIRouter(dependencies=[permission_gate("findings.read")])
 
 ROUTER_META = RouterMeta(
     prefix="/api/ingest",
@@ -107,13 +112,18 @@ async def _spool_upload(file: UploadFile, suffix: str) -> Path:
                 temp_path.unlink(missing_ok=True)
                 raise HTTPException(
                     status_code=413,
-                    detail=f"File too large. Maximum upload size is {MAX_UPLOAD_SIZE_BYTES // (1024*1024)}MB.",
+                    detail=f"File too large. Maximum upload size is {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB.",
                 )
             temp_file.write(chunk)
     return temp_path
 
 
-@router.post("/upload", response_model=IngestionJobStatus, status_code=202)
+@router.post(
+    "/upload",
+    response_model=IngestionJobStatus,
+    status_code=202,
+    dependencies=[permission_gate("findings.write")],
+)
 async def upload_and_ingest_file(
     file: UploadFile = File(...),
     data_type: str = Form("finding"),
@@ -174,7 +184,11 @@ async def get_ingestion_job(job_id: str):
     return IngestionJobStatus(**job.snapshot())
 
 
-@router.post("/ingest-string", response_model=IngestionStats)
+@router.post(
+    "/ingest-string",
+    response_model=IngestionStats,
+    dependencies=[permission_gate("findings.write")],
+)
 async def ingest_from_string(
     data: str = Form(...), format: str = Form("json"), data_type: str = Form("finding")
 ):
@@ -324,8 +338,17 @@ async def get_csv_template(data_type: str):
         )
 
 
-@router.post("/sync-s3-folder", response_model=IngestionStats)
-@router.post("/sync-s3-parquet", response_model=IngestionStats, include_in_schema=False)
+@router.post(
+    "/sync-s3-folder",
+    response_model=IngestionStats,
+    dependencies=[permission_gate("findings.write")],
+)
+@router.post(
+    "/sync-s3-parquet",
+    response_model=IngestionStats,
+    include_in_schema=False,
+    dependencies=[permission_gate("findings.write")],
+)
 def sync_s3_folder(prefix: Optional[str] = Query(None)):
     """
     Discover and ingest all supported files from an S3 prefix.
@@ -463,7 +486,7 @@ def _get_s3_service():
     )
 
 
-@router.get("/s3-files")
+@router.get("/s3-files", dependencies=[permission_gate("findings.write")])
 def list_s3_files(prefix: Optional[str] = Query("")):
     """
     List files in the configured S3 bucket with metadata.
@@ -492,7 +515,11 @@ class S3FileIngestRequest(BaseModel):
     key: str
 
 
-@router.post("/s3-file", response_model=IngestionStats)
+@router.post(
+    "/s3-file",
+    response_model=IngestionStats,
+    dependencies=[permission_gate("findings.write")],
+)
 def ingest_s3_file(request: S3FileIngestRequest):
     """
     Download and ingest a single file from S3 by key.

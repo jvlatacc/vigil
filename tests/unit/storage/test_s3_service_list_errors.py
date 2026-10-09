@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import boto3
 import pytest
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from core.storage.s3_service import S3Service
+from services.api.middleware.auth import get_current_user
 from services.api.routers import config as config_api
 from services.api.routers import ingestion as ingestion_api
 
@@ -114,6 +116,12 @@ def ingest_client(monkeypatch):
     monkeypatch.setattr(ingestion_api, "_get_s3_service", lambda: svc)
     app = FastAPI()
     app.include_router(ingestion_api.router, prefix="/api/ingest")
+    # The router carries the findings.read/write gates; the S3-denial 403 the
+    # tests assert on must be the handler's, not the permission gate's.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
+    )
     with TestClient(app) as client:
         yield client
 
