@@ -32,3 +32,14 @@ CREATE INDEX IF NOT EXISTS idx_role_group_mappings_group ON role_group_mappings(
 INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALUES
 ('role-unmapped', 'Unmapped', 'Authenticated via the IdP but no directory group maps to a Vigil role; grants nothing until an administrator maps one of the holder''s groups', '{}', true)
 ON CONFLICT (role_id) DO NOTHING;
+
+-- Additive vocabulary for deployments created before tools.execute existed
+-- (fresh installs already carry the key in the 06 seeds). Only the seeded
+-- system roles are touched: roles that may drive the agent — every one
+-- holding ai_chat.use — keep doing what they could before the tool-call
+-- gates existed; a role whose map lacks the key denies tool calls, and
+-- custom roles stay denied until an operator grants the baseline or writes
+-- a per-server `tools.server.<name>` override.
+UPDATE roles SET permissions = permissions || '{"tools.execute": true}'::jsonb
+WHERE role_id IN ('role-analyst', 'role-senior-analyst', 'role-manager', 'role-admin')
+  AND NOT permissions ? 'tools.execute';
