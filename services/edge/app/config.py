@@ -30,6 +30,9 @@ MODEL_URL_VAR = "VIGIL_EDGE_OLLAMA_URL"
 HEALTH_PORT_VAR = "VIGIL_EDGE_HEALTH_PORT"
 NODE_LABELS_VAR = "VIGIL_EDGE_NODE_LABELS"
 EVE_PATH_VAR = "VIGIL_EDGE_EVE_PATH"
+JOURNAL_MAX_BYTES_VAR = "VIGIL_EDGE_JOURNAL_MAX_BYTES"
+
+DEFAULT_JOURNAL_MAX_BYTES = 64 * 1024 * 1024
 
 MODES = ("gateway", "cluster")
 
@@ -68,6 +71,7 @@ class EdgeConfig:
     health_port: int = 9091
     node_labels: dict[str, str] = field(default_factory=dict)
     eve_path: Path | None = None
+    journal_max_bytes: int = DEFAULT_JOURNAL_MAX_BYTES
     edge_version: str = __version__
 
     @classmethod
@@ -104,6 +108,20 @@ class EdgeConfig:
         model = "qwen2.5:1.5b" if raw_model is None else raw_model.strip()
         eve_path = (env.get(EVE_PATH_VAR) or "").strip()
 
+        raw_journal_max = (env.get(JOURNAL_MAX_BYTES_VAR) or "").strip()
+        journal_max_bytes = DEFAULT_JOURNAL_MAX_BYTES
+        if raw_journal_max:
+            try:
+                journal_max_bytes = int(raw_journal_max)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{JOURNAL_MAX_BYTES_VAR} must be an integer byte count, got {raw_journal_max!r}"
+                ) from exc
+            if journal_max_bytes <= 0:
+                raise ConfigError(
+                    f"{JOURNAL_MAX_BYTES_VAR} must be positive, got {journal_max_bytes}"
+                )
+
         return cls(
             node_id=(env.get(NODE_ID_VAR) or "").strip(),
             mode=mode,
@@ -124,6 +142,7 @@ class EdgeConfig:
             health_port=health_port,
             node_labels=dict(parsed_labels),
             eve_path=Path(eve_path) if eve_path else None,
+            journal_max_bytes=journal_max_bytes,
         )
 
     def validate(self) -> list[str]:
