@@ -2403,6 +2403,48 @@
       "nullable": false
     }
   },
+  "protected_assets": {
+    "asset_class": {
+      "data_type": "character varying(30)",
+      "nullable": false
+    },
+    "asset_id": {
+      "data_type": "uuid",
+      "nullable": false
+    },
+    "created_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "created_by": {
+      "data_type": "character varying(100)",
+      "nullable": false
+    },
+    "label": {
+      "data_type": "text",
+      "nullable": false
+    },
+    "match_kind": {
+      "data_type": "character varying(20)",
+      "nullable": false
+    },
+    "match_value": {
+      "data_type": "text",
+      "nullable": false
+    },
+    "removal_reason": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "removed_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "removed_by": {
+      "data_type": "character varying(100)",
+      "nullable": true
+    }
+  },
   "roles": {
     "created_at": {
       "data_type": "timestamp without time zone",
