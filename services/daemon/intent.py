@@ -249,34 +249,32 @@ def quota_holds(
     holds: List[Optional[str]] = []
     history: List[Tuple[datetime, Optional[ContainmentSubnet]]] = []
     for action in approvals:
-        modeled = (
-            action.created_at is not None
-            and action.action_type in CONTAINMENT_ACTION_TYPES
-            and action.status
-            not in (ActionStatus.FAILED.value, ActionStatus.REJECTED.value)
-        )
-        if not modeled:
+        if (
+            action.created_at is None
+            or action.action_type not in CONTAINMENT_ACTION_TYPES
+            or action.status in (ActionStatus.FAILED.value, ActionStatus.REJECTED.value)
+        ):
             holds.append(None)
             continue
+        created_at: datetime = action.created_at
         subnet = containment_subnet(action.target, config)
         counts = ContainmentCounts(
             tick=sum(
                 1
-                for created_at, _ in history
-                if created_at
-                >= action.created_at - timedelta(seconds=CONTAINMENT_TICK_SECONDS)
+                for prior_at, _ in history
+                if prior_at >= created_at - timedelta(seconds=CONTAINMENT_TICK_SECONDS)
             ),
             subnet_hour=sum(
                 1
-                for created_at, row_subnet in history
-                if row_subnet is not None
-                and row_subnet == subnet
-                and created_at >= action.created_at - timedelta(hours=1)
+                for prior_at, prior_subnet in history
+                if prior_subnet is not None
+                and prior_subnet == subnet
+                and prior_at >= created_at - timedelta(hours=1)
             ),
             subnet_size=subnet.num_addresses if subnet else 0,
         )
         holds.append(blast_bound_decision(counts, config))
-        history.append((action.created_at, subnet))
+        history.append((created_at, subnet))
     return holds
 
 

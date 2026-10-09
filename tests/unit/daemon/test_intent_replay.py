@@ -17,6 +17,7 @@ from core.response.config import (
     approval_requirement,
     response_action_decision,
 )
+from core.time import utcnow
 from services.daemon.config import DaemonConfig
 from services.daemon.intent import (
     ReplayApproval,
@@ -181,6 +182,114 @@ def test_same_action_under_a_different_rule_is_not_a_row():
         [_approval("a-96", 0.96)],
         ResponseConfig(),
         ResponseConfig(confidence_threshold=0.95),
+    )
+    assert report.rows == []
+
+
+# --- quota holds -------------------------------------------------------------
+
+
+def _timed_approval(
+    action_id,
+    target,
+    seconds,
+    *,
+    action_type="waf_block",
+    status="approved",
+):
+    return ReplayApproval(
+        id=action_id,
+        confidence=0.99,
+        reversibility=Reversibility.REVERSIBLE,
+        action_type=action_type,
+        target=target,
+        status=status,
+        created_at=utcnow() - timedelta(minutes=5) + timedelta(seconds=seconds),
+    )
+
+
+def test_a_tighter_tick_cap_holds_the_overflow_row():
+    approvals = [_timed_approval(f"a-{i}", "203.0.113.7", i) for i in range(3)]
+    report = replay_decisions(
+        [], approvals, ResponseConfig(), ResponseConfig(max_containment_per_tick=2)
+    )
+    assert [row.id for row in report.rows] == ["a-2"]
+    row = report.rows[0]
+    assert row.effective == "unattended"
+    assert row.declared == "approval"
+    assert row.declared_rule == "response.max_containment_per_tick=2 met (2)"
+    assert report.actions_now_requiring_approval == 1
+    assert report.actions_now_unattended == 0
+
+
+def test_the_subnet_hour_walk_groups_targets_by_network():
+    # 203.0.113.7 and 203.0.113.200 share a /24; 203.0.114.7 does not. A
+    # per-target idempotency key would call all three distinct; the walk
+    # sees the second /24 row as the same blast radius.
+    targets = ["203.0.113.7", "203.0.113.200", "203.0.114.7"]
+    approvals = [_timed_approval(f"a-{i}", targets[i], i) for i in range(3)]
+    report = replay_decisions(
+        [],
+        approvals,
+        ResponseConfig(),
+        ResponseConfig(max_containment_per_subnet_hour=1),
+    )
+    assert [row.id for row in report.rows] == ["a-1"]
+    assert (
+        report.rows[0].declared_rule
+        == "response.max_containment_per_subnet_hour=1 met (1)"
+    )
+
+
+def test_a_declared_prefix_shrinks_the_subnet_the_share_governs():
+    # A /28 is 16 addresses; 10% of 16 is 1 — the second containment in
+    # that subnet-hour holds under the declared prefix, and under today's
+    # /24 (effective cap 10) it would not.
+    approvals = [_timed_approval(f"a-{i}", f"203.0.113.{i + 1}", i) for i in range(2)]
+    report = replay_decisions(
+        [], approvals, ResponseConfig(), ResponseConfig(containment_subnet_prefix=28)
+    )
+    assert [row.id for row in report.rows] == ["a-1"]
+    assert (
+        report.rows[0].declared_rule
+        == "response.max_containment_per_subnet_hour=1 met (1)"
+    )
+
+
+def test_a_failed_row_is_not_quota_volume_and_casts_no_shadow():
+    # The gate does not count a failed attempt, and replay matches: the
+    # failed row is neither held nor counted for the row that follows it.
+    approvals = [
+        _timed_approval("a-failed", "203.0.113.7", 0, status="failed"),
+        _timed_approval("a-live", "203.0.114.7", 1),
+    ]
+    report = replay_decisions(
+        [], approvals, ResponseConfig(), ResponseConfig(max_containment_per_tick=1)
+    )
+    assert report.rows == []
+
+
+def test_an_observing_action_is_not_quota_volume():
+    approvals = [
+        _timed_approval(f"a-{i}", "203.0.113.7", i, action_type="execute_spl_query")
+        for i in range(5)
+    ]
+    report = replay_decisions(
+        [], approvals, ResponseConfig(), ResponseConfig(max_containment_per_tick=1)
+    )
+    assert report.rows == []
+
+
+def test_bare_approvals_model_no_quota():
+    # The existing positional callers replay exactly as before: an
+    # untyped, timeless row is bounded by nothing.
+    approvals = [
+        _approval("a-92", 0.92),
+        _approval("a-96", 0.96),
+        _approval("a-99", 0.99),
+    ]
+    report = replay_decisions(
+        [], approvals, ResponseConfig(), ResponseConfig(max_containment_per_tick=1)
     )
     assert report.rows == []
 
