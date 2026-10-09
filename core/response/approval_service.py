@@ -15,7 +15,7 @@ other existing callers) keep working.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -23,7 +23,15 @@ from opentelemetry.metrics import Observation
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
-from core.response.config import ResponseConfig, approval_requirement, decision_rule
+from core.response.config import (
+    CONTAINMENT_TICK_SECONDS,
+    ContainmentCounts,
+    ResponseConfig,
+    approval_requirement,
+    blast_bound_decision,
+    containment_subnet,
+    decision_rule,
+)
 from core.response.protected_targets import (
     CONTAINMENT_ACTION_TYPES,
     ProtectedTarget,
@@ -49,6 +57,46 @@ def _active_protected_targets() -> tuple[ProtectedTarget, ...]:
 
     with get_db_manager().session_scope() as session:
         return rows_to_targets(active_rows(session))
+
+
+def _containment_counts(target: str, cfg: ResponseConfig) -> ContainmentCounts:
+    """Rolling-window containment volume around ``target``, read per decision.
+
+    One query over ``approval_actions`` — the counts are read, not
+    accumulated, so a daemon restart cannot reset a quota. The tick window
+    is the executor cadence's rolling analog (``CONTAINMENT_TICK_SECONDS``);
+    the subnet window is the target's containment subnet over the rolling
+    hour. Rows that failed (retriable) or were rejected (a person's no) are
+    not volume. Raises on a failed read; the caller fails closed.
+    """
+    now = utcnow()
+    subnet = containment_subnet(target, cfg)
+    with get_db_manager().session_scope() as session:
+        rows = session.execute(
+            select(ApprovalActionRow.created_at, ApprovalActionRow.target).where(
+                ApprovalActionRow.action_type.in_(CONTAINMENT_ACTION_TYPES),
+                ApprovalActionRow.created_at >= now - timedelta(hours=1),
+                ApprovalActionRow.status.not_in(
+                    (ActionStatus.FAILED.value, ActionStatus.REJECTED.value)
+                ),
+            )
+        ).all()
+    tick_cutoff = now - timedelta(seconds=CONTAINMENT_TICK_SECONDS)
+    tick = 0
+    subnet_hour = 0
+    for created_at, row_target in rows:
+        if created_at is not None and created_at >= tick_cutoff:
+            tick += 1
+        if subnet is None or not row_target:
+            continue
+        row_subnet = containment_subnet(row_target, cfg)
+        if row_subnet is not None and row_subnet == subnet:
+            subnet_hour += 1
+    return ContainmentCounts(
+        tick=tick,
+        subnet_hour=subnet_hour,
+        subnet_size=subnet.num_addresses if subnet else 0,
+    )
 
 
 APPROVAL_CONFIG_KEY = "approval.force_manual_approval"
@@ -243,6 +291,21 @@ class ApprovalService:
             return current_rules(self.config, read_failed=True)
         return current_rules(self.config, rows)
 
+    def containment_quota_hold(self, target: str) -> Optional[str]:
+        """The blast-radius quota rule for this containment, or None to allow.
+
+        Counts are read at each decision like the stored approval flag, so a
+        long-lived service sees the operator's dials without a restart. A
+        failed read holds containment for a person (the fail-closed pattern):
+        an unreadable quota must not read as an available one.
+        """
+        try:
+            counts = _containment_counts(target, self.config)
+            return blast_bound_decision(counts, self.config)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Cannot count containment volume; holding for a person: %s", e)
+            return decision_rule("response.containment_counts_read", "failed")
+
     # ------------------------------------------------------------------
     # CRUD — DB-backed
     # ------------------------------------------------------------------
@@ -344,6 +407,16 @@ class ApprovalService:
             or self._stored_force_manual_approval()
             or invariant is not None
         )
+
+        # Blast-radius quotas are the volume governor beneath the invariants:
+        # they bound how much unattended containment may happen in a rolling
+        # executor tick and in a target's subnet over the rolling hour. A row
+        # already held for another reason does not pay the counts read — the
+        # outcome would not change.
+        quota = None
+        if action_type.value in CONTAINMENT_ACTION_TYPES and not forced:
+            quota = self.containment_quota_hold(target)
+            forced = quota is not None
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
@@ -351,6 +424,8 @@ class ApprovalService:
             rule = decision_rule("approval.human_only", True)
         elif invariant is not None:
             rule = invariant
+        elif quota is not None:
+            rule = quota
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 

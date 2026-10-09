@@ -19,9 +19,9 @@ import logging
 import re
 import sys
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from sqlalchemy import select
 
@@ -35,12 +35,22 @@ from core.intent import (
     intent_file,
     read_intent,
 )
-from core.response.approval_service import APPROVAL_CONFIG_KEY, Reversibility
+from core.response.approval_service import (
+    APPROVAL_CONFIG_KEY,
+    ActionStatus,
+    Reversibility,
+)
 from core.response.config import (
+    CONTAINMENT_TICK_SECONDS,
+    ContainmentCounts,
+    ContainmentSubnet,
     ResponseConfig,
     approval_requirement,
+    blast_bound_decision,
+    containment_subnet,
     response_action_decision,
 )
+from core.response.protected_targets import CONTAINMENT_ACTION_TYPES
 from core.storage.config_service import get_config_service
 from core.storage.connection import get_db_manager
 from core.storage.models import ApprovalAction, Finding
@@ -196,6 +206,14 @@ class ReplayApproval:
     id: str
     confidence: float
     reversibility: Reversibility
+    # Quota replay needs when the row was created, what it contained, and
+    # the status it reached; ``load_replay_rows`` always supplies them. The
+    # bare positional form (existing callers) replays without quota
+    # modeling: an untyped, timeless row is bounded by nothing.
+    action_type: str = ""
+    target: str = ""
+    status: str = ""
+    created_at: Optional[datetime] = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +232,50 @@ class ReplayReport:
     actions_now_requiring_approval: int
     actions_now_unattended: int
     findings_gained_or_lost: int
+
+
+def quota_holds(
+    approvals: Sequence[ReplayApproval], config: ResponseConfig
+) -> List[Optional[str]]:
+    """Blast-radius quota holds, re-decided from the walked history.
+
+    The live gate reads the rolling-window counts from ``approval_actions``
+    at each insert; replay derives the same counts from the rows themselves,
+    in ``created_at`` order, so a declared quota's effect shows in the
+    would-differ accounting. Failed and person-rejected rows are not volume,
+    mirroring the gate; rows replayed without a type or a time (the bare
+    construction) are not modeled. No database access.
+    """
+    holds: List[Optional[str]] = []
+    history: List[Tuple[datetime, Optional[ContainmentSubnet]]] = []
+    for action in approvals:
+        if (
+            action.created_at is None
+            or action.action_type not in CONTAINMENT_ACTION_TYPES
+            or action.status in (ActionStatus.FAILED.value, ActionStatus.REJECTED.value)
+        ):
+            holds.append(None)
+            continue
+        created_at: datetime = action.created_at
+        subnet = containment_subnet(action.target, config)
+        counts = ContainmentCounts(
+            tick=sum(
+                1
+                for prior_at, _ in history
+                if prior_at >= created_at - timedelta(seconds=CONTAINMENT_TICK_SECONDS)
+            ),
+            subnet_hour=sum(
+                1
+                for prior_at, prior_subnet in history
+                if prior_subnet is not None
+                and prior_subnet == subnet
+                and prior_at >= created_at - timedelta(hours=1)
+            ),
+            subnet_size=subnet.num_addresses if subnet else 0,
+        )
+        holds.append(blast_bound_decision(counts, config))
+        history.append((created_at, subnet))
+    return holds
 
 
 def replay_decisions(
@@ -250,7 +312,9 @@ def replay_decisions(
                 declared_rule=dec[1] if dec else "",
             )
         )
-    for action in approvals:
+    for action, eff_hold, dec_hold in zip(
+        approvals, quota_holds(approvals, effective), quota_holds(approvals, declared)
+    ):
         eff_req, eff_rule = approval_requirement(
             effective.force_manual_approval,
             action.reversibility,
@@ -263,6 +327,12 @@ def replay_decisions(
             action.confidence,
             declared,
         )
+        # A quota hold is a person requirement layered on top: the rule it
+        # fired on is the one the row would have been decided by.
+        if eff_hold is not None:
+            eff_req, eff_rule = True, eff_hold
+        if dec_hold is not None:
+            dec_req, dec_rule = True, dec_hold
         if eff_req == dec_req:
             continue
         if dec_req:
@@ -367,6 +437,10 @@ def load_replay_rows(
                     id=action.action_id,
                     confidence=float(action.confidence),
                     reversibility=Reversibility(action.reversibility),
+                    action_type=action.action_type,
+                    target=action.target or "",
+                    status=action.status,
+                    created_at=action.created_at,
                 )
             )
     return findings, approvals

@@ -432,6 +432,10 @@ export default function AutoInvestigateSection({ notify }: SectionProps) {
 
       <ProtectedTargetsCard notify={notify} />
 
+      {/* TODO(PR6): blast-radius quota knobs (DAEMON_MAX_CONTAINMENT_PER_TICK,
+          DAEMON_CONTAINMENT_SUBNET_PREFIX, DAEMON_MAX_CONTAINMENT_SHARE_PER_HOUR,
+          DAEMON_MAX_CONTAINMENT_PER_SUBNET_HOUR) surface here as number fields. */}
+
       <SettingsCard
         wide
         title="Advanced"

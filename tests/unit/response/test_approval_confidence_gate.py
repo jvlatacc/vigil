@@ -87,6 +87,9 @@ def test_the_executor_skips_a_row_no_person_decided():
             _row("human", requires_approval=True, approved_by="alice"),
         ]
     )
+    # The executor reads the quota knobs from the config its constructor
+    # would set; __new__ skips that, so the test supplies it directly.
+    service.config = ResponseConfig()
     service._execute_cloudflare_action = lambda **_: {"success": True}
 
     results = service.execute_approved_actions()

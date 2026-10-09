@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
-from core.response.config import ResponseConfig
-from core.response.protected_targets import containment_hold
+from core.response.config import ContainmentCounts, ResponseConfig, blast_bound_decision
+from core.response.protected_targets import CONTAINMENT_ACTION_TYPES, containment_hold
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +294,12 @@ class AutonomousResponseService:
             # state underneath the gate. A failed read holds everything.
             rules = self.approval_service.protected_target_rules()
 
+            # Blast-radius quotas, executor side: containment attempts this
+            # pass, counted as they are dispatched — a row the executor does
+            # not attempt (an unknown action type, a skipped no-person row)
+            # consumes none of the tick's allowance.
+            containment_this_tick = 0
+
             for action in approved_actions:
                 # Skip if already executed
                 if action.executed_at:
@@ -337,6 +343,26 @@ class AutonomousResponseService:
                     )
                     continue
 
+                # The per-tick volume cap: at most max_containment_per_tick
+                # containment attempts in this executor pass. Overflow is not
+                # lost work — the row stays approved and the next tick picks
+                # it up — and the gate's subnet-hour quota has already held
+                # the row's volume cousins for a person.
+                if action.action_type in CONTAINMENT_ACTION_TYPES:
+                    bound = blast_bound_decision(
+                        ContainmentCounts(
+                            tick=containment_this_tick, subnet_hour=0, subnet_size=0
+                        ),
+                        self.config,
+                    )
+                    if bound is not None:
+                        logger.warning(
+                            "Action %s held this tick by its blast-radius " "quota: %s",
+                            action.action_id,
+                            bound,
+                        )
+                        continue
+
                 result: Optional[Dict] = None
 
                 if action.action_type == "isolate_host":
@@ -361,6 +387,9 @@ class AutonomousResponseService:
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.
                     continue
+
+                if action.action_type in CONTAINMENT_ACTION_TYPES:
+                    containment_this_tick += 1
 
                 if result.get("success"):
                     self.approval_service.mark_executed(action.action_id, result)
