@@ -139,6 +139,10 @@ _INDICATOR_TO_ENTITY_TYPE: Dict[str, str] = {
     "hash_md5": "hash",
     "hash_sha1": "hash",
     "hash_sha256": "hash",
+    # Not a STIX pattern type (KEV data constructs NormalizedIndicator
+    # directly); listed so the off-vocabulary guard below keeps vouching for
+    # every type a feed row can carry, KEV rows included.
+    "cve": "cve",
 }
 _UNMAPPED = set(_STIX_TO_VIGIL_TYPE.values()) - set(_INDICATOR_TO_ENTITY_TYPE)
 _OFF_VOCABULARY = set(_INDICATOR_TO_ENTITY_TYPE.values()) - set(ENTITY_KEY_TYPES)
