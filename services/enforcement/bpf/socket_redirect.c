@@ -24,6 +24,12 @@
 // passes traffic unsteered — a bookkeeping failure must never blackhole a
 // flow. The sink socket itself is unaffected: only enrolled member sockets'
 // messages are candidates for redirection.
+//
+// Delivery note: bpf_msg_redirect_map with BPF_F_INGRESS queues the message
+// on the sink socket's RECEIVE queue — the map holds the daemon's end of the
+// sink connection, so the daemon runs a read-and-echo bridge (kernel_bpf.go
+// SetSink) that forwards deposited payloads down the wire to the configured
+// sink application.
 #include "vigil_common.h"
 
 /* Stable UAPI values (asm-generic/socket.h); not pulled in by linux/bpf.h. */
@@ -73,13 +79,38 @@ static __always_inline int vigil_enforced(struct vigil_ipport *key)
 
 /* The engine's key: 16-byte address then the port's network-order bytes.
  * The port fields (bpf_sock_ops.remote_port, sk_msg_md.remote_port) are
- * "stored in network byte order" UAPI u32s — copying their first two bytes
- * is byte-exact for the __be16 key with no endianness arithmetic. */
+ * "stored in network byte order" UAPI u32s — the verifier byte-swaps the
+ * loaded u32, so for port 9999 the register reads 0x0F270000 (captured on
+ * 6.1). The wire bytes [27,0F] therefore sit at little-endian memory
+ * offsets 2 and 3 of the register: extract (reg >> 16) then (reg >> 24).
+ * The loader writes the map key's port big-endian, so store those two
+ * bytes through a pointer — the field is a scalar __be16 and its VALUE
+ * space must not reinterpret the wire bytes. Full-width loads only —
+ * verifiers reject narrow context reads of the port field (observed on
+ * 6.1: "invalid bpf_context access off=64 size=1"). */
 static __always_inline void vigil_fill_key(struct vigil_ipport *k,
-					   const __u8 *addr16, const void *port_be)
+					   const __u8 *addr16, __u32 port_be32)
 {
 	__builtin_memcpy(k->ip, addr16, 16);
-	__builtin_memcpy(&k->port, port_be, 2);
+	*(__u8 *)&k->port = (__u8)(port_be32 >> 16);
+	*((__u8 *)&k->port + 1) = (__u8)(port_be32 >> 24);
+}
+
+/* remote_ip6 words are "stored in network byte order" — each u32's value
+ * carries the wire bytes; shifting preserves wire order into dst. memcpy
+ * from the context is not an option: it compiles to narrow (u8) context
+ * reads, which sock_ops/sk_msg verifiers reject. */
+static __always_inline void vigil_store_ip6(__u8 *dst, __u32 w0, __u32 w1,
+					    __u32 w2, __u32 w3)
+{
+	dst[0] = (__u8)(w0 >> 24); dst[1] = (__u8)(w0 >> 16);
+	dst[2] = (__u8)(w0 >> 8);  dst[3] = (__u8)w0;
+	dst[4] = (__u8)(w1 >> 24); dst[5] = (__u8)(w1 >> 16);
+	dst[6] = (__u8)(w1 >> 8);  dst[7] = (__u8)w1;
+	dst[8] = (__u8)(w2 >> 24); dst[9] = (__u8)(w2 >> 16);
+	dst[10] = (__u8)(w2 >> 8); dst[11] = (__u8)w2;
+	dst[12] = (__u8)(w3 >> 24); dst[13] = (__u8)(w3 >> 16);
+	dst[14] = (__u8)(w3 >> 8);  dst[15] = (__u8)w3;
 }
 
 /* Round-robin member slot; collisions overwrite (benign: the verdict still
@@ -108,8 +139,10 @@ int vigil_sock_enroll(struct bpf_sock_ops *skops)
 	if (skops->family == AF_INET)
 		vigil_v4_mapped((struct vigil_ip *)addr, skops->remote_ip4);
 	else
-		__builtin_memcpy(addr, skops->remote_ip6, 16);
-	vigil_fill_key(&k, addr, &skops->remote_port);
+		vigil_store_ip6(addr, skops->remote_ip6[0],
+				skops->remote_ip6[1], skops->remote_ip6[2],
+				skops->remote_ip6[3]);
+	vigil_fill_key(&k, addr, skops->remote_port);
 	if (!vigil_enforced(&k))
 		return 0;
 	slot = vigil_next_slot();
@@ -123,21 +156,23 @@ int vigil_sk_msg_redirect(struct sk_msg_md *msg)
 	struct vigil_ipport k;
 	__u8 addr[16];
 	__u32 zero = 0;
-	__u64 *drops;
+	__u64 *redirected;
 
 	if (msg->family == AF_INET)
 		vigil_v4_mapped((struct vigil_ip *)addr, msg->remote_ip4);
 	else
-		__builtin_memcpy(addr, msg->remote_ip6, 16);
-	vigil_fill_key(&k, addr, &msg->remote_port);
+		vigil_store_ip6(addr, msg->remote_ip6[0],
+				msg->remote_ip6[1], msg->remote_ip6[2],
+				msg->remote_ip6[3]);
+	vigil_fill_key(&k, addr, msg->remote_port);
 	if (!vigil_enforced(&k))
 		return SK_PASS;
 	/* Redirect the message into the sink socket at index 0; SK_PASS is
 	 * the verdict that forwards the (redirected) message. */
 	bpf_msg_redirect_map(msg, &sink_sockets, zero, BPF_F_INGRESS);
-	drops = bpf_map_lookup_elem(&redirected_packets, &zero);
-	if (drops)
-		__sync_fetch_and_add(drops, 1);
+	redirected = bpf_map_lookup_elem(&redirected_packets, &zero);
+	if (redirected)
+		__sync_fetch_and_add(redirected, 1);
 	return SK_PASS;
 }
 

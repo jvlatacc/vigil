@@ -140,6 +140,29 @@ func TestInterdictFallbackReasonClassifiesLSMFailures(t *testing.T) {
 			t.Errorf("interdictFallbackReason(%v) = %q, want \"\" (plain failure must not degrade)", err, got)
 		}
 	}
+	// The observed live signature (cilium link attach on an lsm=-less
+	// 6.1 kernel): the errno does not survive the wrap, the message does.
+	live := fmt.Errorf("program vigil_interdict_connect: attach LSM/LSMMac: socket_connect LSM hook not supported")
+	if got := interdictFallbackReason(live); got == "" {
+		t.Errorf("interdictFallbackReason(live attach error) = \"\", want an LSM-unavailable reason")
+	}
+}
+
+// TestEntriesUnloadedKindIsEmpty pins the reconciler-critical semantics of
+// an unloaded primitive: no loaded state means NO enforcement entries — an
+// empty set, not an error. A hard error here aborts the reconciler's whole
+// sweep whenever any one optional kind is degraded (the observed failure:
+// no sink configured → every 15s tick failed → expired XDP entries were
+// never reclaimed and eviction receipts were suppressed).
+func TestEntriesUnloadedKindIsEmpty(t *testing.T) {
+	k := signalFallbackKernel() // kinds map empty: nothing loaded
+	entries, err := k.Entries(KindSocketRedirect)
+	if err != nil {
+		t.Fatalf("Entries(unloaded kind) error = %v, want nil", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("Entries(unloaded kind) = %d entries, want 0", len(entries))
+	}
 }
 
 // TestParseCgroupV2IDExtractsInode covers the /proc/<pid>/cgroup parser
@@ -340,7 +363,9 @@ func procState(t *testing.T, pid int) string {
 	if idx < 0 || idx+2 >= len(s) {
 		t.Fatalf("unexpected stat format: %q", s)
 	}
-	return strings.TrimSpace(s[idx+2:])
+	// Field 3 (state) is the first token after the command name — the
+	// remaining fields (ppid, pgrp, …) follow it on the same line.
+	return strings.Fields(strings.TrimSpace(s[idx+2:]))[0]
 }
 
 // encodeEngineKeyPID is the engine's PID target encoding (big-endian u64)

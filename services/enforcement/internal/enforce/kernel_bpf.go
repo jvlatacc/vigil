@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -366,6 +367,29 @@ func (k *BPFKernel) SetSink(conn net.Conn) error {
 	}
 	bk.sinkConn = conn
 	bk.sinkFile = file
+	// Echo bridge: sk_msg redirection deposits payloads on THIS socket's
+	// receive queue — the daemon's end of the sink connection — so
+	// without a reader the bytes sit unread and the sink application
+	// never sees them. Read them and write them straight back down the
+	// wire: they then travel as ordinary TCP data to the configured
+	// tarpit/capture listener. Teardown closes the connection, which
+	// ends the bridge with a read error.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				if _, werr := conn.Write(buf[:n]); werr != nil {
+					k.log.Warn("sink bridge write failed; redirected payloads stop reaching the sink", "err", werr)
+					return
+				}
+			}
+			if err != nil {
+				k.log.Info("sink bridge ended", "err", err)
+				return
+			}
+		}
+	}()
 	return nil
 }
 
@@ -379,6 +403,10 @@ func (k *BPFKernel) MarkDegraded(kind Kind, reason string) {
 	k.caps[kind] = Capability{Supported: false, Reason: reason}
 }
 
+// errNoTSUPP is the kernel-internal ENOTSUPP (524) — the errno behind
+// "LSM hook not supported". x/sys/unix does not export it.
+const errNoTSUPP = syscall.Errno(524)
+
 // interdictFallbackReason reports why the process-interdict kind should
 // degrade to the signal fallback, or "" when the error is not an LSM
 // availability failure — a build or environment failure must degrade
@@ -388,8 +416,16 @@ func interdictFallbackReason(err error) string {
 	case errors.Is(err, unix.EPERM),
 		errors.Is(err, unix.EINVAL),
 		errors.Is(err, unix.EOPNOTSUPP),
-		errors.Is(err, unix.ENOTSUP):
+		errors.Is(err, unix.ENOTSUP),
+		errors.Is(err, errNoTSUPP):
 		return "BPF LSM unavailable (needs CONFIG_BPF_LSM and \"bpf\" in the kernel's lsm= parameter): " + err.Error()
+	}
+	// The kernel surfaces an unsupported LSM hook (lsm= without "bpf",
+	// CONFIG_BPF_LSM off) with ENOTSUPP — "LSM hook not supported" — and
+	// cilium/ebpf's link error does not always preserve that errno for
+	// errors.Is; the observed signature is classified by message too.
+	if strings.Contains(err.Error(), "LSM hook not supported") {
+		return "BPF LSM unavailable: kernel reports the hook unsupported (" + err.Error() + ")"
 	}
 	return ""
 }
@@ -622,6 +658,13 @@ func mapOccupancy(bk *bpfKindState) (int, error) {
 func (k *BPFKernel) Entries(kind Kind) ([]MapEntry, error) {
 	bk, err := k.state(kind)
 	if err != nil {
+		if errors.Is(err, errKindNotLoaded) {
+			// An unloaded primitive holds no enforcement entries —
+			// nothing to enumerate or evict. Returning an error here
+			// aborts the reconciler's whole sweep whenever any one
+			// optional kind is degraded (e.g. no sink configured).
+			return []MapEntry{}, nil
+		}
 		return nil, err
 	}
 	if bk.mode == "signal" {
