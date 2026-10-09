@@ -1,14 +1,16 @@
-"""Every system role carries the RBAC refactor's permission matrix, twice.
+"""Every system role carries the RBAC refactor's permission matrix, thrice.
 
-The five-role seed lives in two places that must not drift: the INSERT in
+The five-role seed lives in three places that must not drift: the INSERT in
 ``infra/database/init/06_auth_tables.sql`` (initdb and
-``scripts/seed_reference_data.py``) and the same INSERT in
-``scripts/init_roles.py``. Both add new permissions with
+``scripts/seed_reference_data.py``), the same INSERT in
+``scripts/init_roles.py``, and the chart's bundled copy under
+``infra/helm/vigil/files/database-init/`` -- CI diffs the directories, so a
+drift there fails only after a push. The seeds add new permissions with
 ``ON CONFLICT (role_id) DO NOTHING``, which never touches a role that already
-exists -- so both also carry an upgrade merge that adds the new keys to
+exists -- so they also carry an upgrade merge that adds the new keys to
 existing system roles; without it a gate naming a new permission would deny
 every user on an upgraded deployment. This pins the matrix, the agreement
-between the two sites, and both idempotency mechanisms.
+between the sites, and both idempotency mechanisms.
 """
 
 import json
@@ -25,6 +27,11 @@ pytestmark = pytest.mark.unit
 REPO = Path(__file__).resolve().parents[3]
 ROLE_SEEDS = REPO / "scripts" / "init_roles.py"
 AUTH_SQL = REPO / "infra" / "database" / "init" / "06_auth_tables.sql"
+# The chart bundles a byte-identical copy: Helm can only read files inside the
+# chart directory, and drift here would ship the chart a different schema than
+# the compose stack (CI's "Verify db-init SQL copies are in sync" step).
+CHART_SQL = REPO / "infra" / "helm" / "vigil" / "files" / "database-init" / "06_auth_tables.sql"
+SEED_SITES = (ROLE_SEEDS, AUTH_SQL, CHART_SQL)
 
 # The RBAC refactor's additions, per role (the blueprint's matrix):
 # viewer holds none of the tool-plane three; analysts get invoke + use;
@@ -86,10 +93,9 @@ def _seeded_roles(text: str) -> dict:
     return roles
 
 
-def test_the_two_seed_sites_agree():
-    assert _seeded_roles(ROLE_SEEDS.read_text(encoding="utf-8")) == _seeded_roles(
-        AUTH_SQL.read_text(encoding="utf-8")
-    )
+def test_all_seed_sites_agree():
+    seeded = [_seeded_roles(path.read_text(encoding="utf-8")) for path in SEED_SITES]
+    assert all(site == seeded[0] for site in seeded[1:])
 
 
 def test_all_five_roles_are_seeded():
@@ -112,8 +118,8 @@ def test_the_seeded_upgrade_merge_carries_the_same_matrix():
     assert merges == ADDITIONS
 
 
-def test_both_seed_sites_are_idempotent():
-    for path in (ROLE_SEEDS, AUTH_SQL):
+def test_every_seed_site_is_idempotent():
+    for path in SEED_SITES:
         text = path.read_text(encoding="utf-8")
         assert "ON CONFLICT (role_id) DO NOTHING" in text, path
         # One upgrade merge per role: re-running restamps the same canonical
