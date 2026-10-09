@@ -5783,6 +5783,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/response/breaker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Breaker Status
+         * @description Current breaker state, trip counters, and cooldown remaining.
+         */
+        get: operations["get_api_response_breaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/breaker/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Breaker Reset
+         * @description Manually close the breaker and clear the trip counters. Audited.
+         *
+         *     The audit entry joins no transaction — the breaker resets first, then
+         *     the write happens; a failed audit surfaces as a failed request with the
+         *     reset already applied (a retry records it; the reset itself is
+         *     idempotent). Swallowing the audit failure would let a safety reset
+         *     commit with no record.
+         */
+        post: operations["post_api_response_breaker_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -7561,6 +7607,52 @@ export interface paths {
         patch: operations["patch_api_v1_findings_finding_id"];
         trace?: never;
     };
+    "/api/v1/response/breaker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Breaker Status
+         * @description Current breaker state, trip counters, and cooldown remaining.
+         */
+        get: operations["get_api_v1_response_breaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/breaker/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Breaker Reset
+         * @description Manually close the breaker and clear the trip counters. Audited.
+         *
+         *     The audit entry joins no transaction — the breaker resets first, then
+         *     the write happens; a failed audit surfaces as a failed request with the
+         *     reset already applied (a retry records it; the reset itself is
+         *     idempotent). Swallowing the audit failure would let a safety reset
+         *     commit with no record.
+         */
+        post: operations["post_api_v1_response_breaker_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workflows": {
         parameters: {
             query?: never;
@@ -8707,6 +8799,56 @@ export interface components {
             breached_cases?: {
                 [key: string]: unknown;
             }[];
+        };
+        /** BreakerResetRequest */
+        BreakerResetRequest: {
+            /**
+             * Reason
+             * @description Why the breaker is being manually reset; recorded in the config audit log.
+             */
+            reason: string;
+        };
+        /** BreakerResetResponse */
+        BreakerResetResponse: {
+            after: components["schemas"]["BreakerStatusResponse"];
+            before: components["schemas"]["BreakerStatusResponse"];
+            /**
+             * Rule
+             * @default response.breaker_reset=manual
+             */
+            rule: string;
+        };
+        /**
+         * BreakerStatusResponse
+         * @description Frozen shape of one breaker observation (mirrors ``BreakerStatus``).
+         */
+        BreakerStatusResponse: {
+            /** Counters */
+            counters?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * Escalation Fired
+             * @default false
+             */
+            escalation_fired: boolean;
+            /** Opened At */
+            opened_at?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Rule */
+            rule?: string | null;
+            /** Seconds Left */
+            seconds_left?: number | null;
+            /** State */
+            state: string;
+            /**
+             * Store
+             * @default redis
+             */
+            store: string;
         };
         /** BudgetSettingsResponse */
         BudgetSettingsResponse: {
@@ -22777,6 +22919,72 @@ export interface operations {
             };
         };
     };
+    get_api_response_breaker: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_response_breaker_reset: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BreakerResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerResetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_services: {
         parameters: {
             query?: never;
@@ -25718,6 +25926,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FindingUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_response_breaker: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_response_breaker_reset: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BreakerResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerResetResponse"];
                 };
             };
             /** @description Validation Error */

@@ -290,6 +290,11 @@ class Settings(BaseSettings):
     # is reconciled by the TTL sweeper.
     daemon_fastpath_anti_flap_rollback_floor_seconds: int = 600
     daemon_fastpath_apply_timeout_seconds: int = 60
+    # The daemon's lease sweep cadence. Expiry is datastore-enforced — the
+    # scan reads rows, not memory — so the sweep runs regardless of the
+    # enable switch: disabling stops NEW leases; it never orphans live
+    # ones.
+    daemon_fastpath_lease_sweep_interval: int = 60
     # The confidence band, mirroring the response band above but tunable
     # independently: the millisecond path may need a higher bar than the
     # deliberation loop it precedes.
@@ -314,6 +319,15 @@ class Settings(BaseSettings):
     # Critical-asset allowlist: principals the gate never leases against,
     # regardless of severity.
     daemon_fastpath_deny_targets: Annotated[List[str], NoDecode] = []
+    # Signed edge-endpoint contract for the edge-containment verbs
+    # (tarpit, latency_injection, pin_session — EdgeContainmentExecutor):
+    # one operator-run endpoint Vigil calls with HMAC-signed requests.
+    # Leave either unset and the edge verbs are simply not offered — the
+    # registry registers the executor only when both are configured, and
+    # the gate never issues what the registry cannot execute.
+    daemon_fastpath_edge_endpoint_url: Optional[str] = None
+    daemon_fastpath_edge_signing_secret: Optional[str] = None
+
     # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
     # and validates them; nothing else reads them here. Origin enforcement is
     # ON by default: unregistered-key deployments get human approval instead
