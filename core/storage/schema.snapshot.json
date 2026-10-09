@@ -1405,6 +1405,132 @@
       "nullable": false
     }
   },
+  "edge_journal_receipts": {
+    "accepted_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "chain_head": {
+      "data_type": "character varying(64)",
+      "nullable": false
+    },
+    "first_seq": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "last_seq": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "node_id": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    },
+    "policy_version": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "receipt_id": {
+      "data_type": "character varying(80)",
+      "nullable": false
+    },
+    "record_count": {
+      "data_type": "integer",
+      "nullable": false
+    }
+  },
+  "edge_nodes": {
+    "enrolled_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "enrolled_by": {
+      "data_type": "character varying(100)",
+      "nullable": false
+    },
+    "last_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "node_id": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    },
+    "revocation_reason": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "revoked_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "revoked_by": {
+      "data_type": "character varying(100)",
+      "nullable": true
+    },
+    "segment_labels": {
+      "data_type": "text[]",
+      "nullable": false
+    },
+    "status": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    },
+    "token_hash": {
+      "data_type": "character varying(64)",
+      "nullable": false
+    }
+  },
+  "edge_policies": {
+    "activated_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "created_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "created_by": {
+      "data_type": "character varying(100)",
+      "nullable": false
+    },
+    "envelope": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "node_id": {
+      "data_type": "character varying(50)",
+      "nullable": false
+    },
+    "not_after": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "not_before": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "payload_hash": {
+      "data_type": "character varying(64)",
+      "nullable": false
+    },
+    "policy_version": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "revoked_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "signing_key_ids": {
+      "data_type": "text[]",
+      "nullable": false
+    },
+    "status": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    }
+  },
   "episodic_distil_failures": {
     "attempts": {
       "data_type": "integer",
