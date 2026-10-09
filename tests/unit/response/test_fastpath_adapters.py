@@ -8,6 +8,9 @@ containment. The Cloudflare adapter's vendor calls are mocked here; the REST
 helpers they wrap are pinned in tests/unit/integrations/.
 """
 
+from __future__ import annotations
+
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,7 +32,7 @@ TARGET = "203.0.113.7"
 
 
 def _action(**overrides) -> PendingAction:
-    values = dict(
+    values: dict[str, Any] = dict(
         action_id="action-1",
         action_type="rate_limit",
         title="Speculative rate_limit: " + TARGET,

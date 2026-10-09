@@ -9,6 +9,7 @@ key the service derives from type and target.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -39,7 +40,7 @@ def _config(**overrides) -> FastPathConfig:
 
 
 def _decision(target: str, **overrides) -> FastPathDecision:
-    values = dict(
+    values: dict[str, Any] = dict(
         action_type="rate_limit",
         target=target,
         ttl_seconds=600,
@@ -99,7 +100,9 @@ def _service(adapter=None, config=None):
 
 def _row(action_id: str) -> ApprovalAction:
     with unit_of_work() as session:
-        return session.get(ApprovalAction, action_id)
+        row = session.get(ApprovalAction, action_id)
+        assert row is not None
+        return row
 
 
 class TestInsertAndDispatch:
