@@ -84,10 +84,14 @@ IR_VERSION = 1
 RENDER_TARGETS = ("rego", "snort", "suricata", "iptables")
 
 # Envelope fields excluded from the content hash: they change over the policy
-# lifecycle (state, compiled_at), are derived from the content (renders), or
-# are the hash itself. Everything else — ir_version, policy_id, version,
-# match, decision, maturity — is semantic; equal hash means equal behavior.
-HASH_EXCLUDED_KEYS = frozenset({"content_hash", "renders", "state", "compiled_at"})
+# lifecycle (state, compiled_at), are derived from the content (renders), are
+# the hash itself, or are row identity rather than content (version — a
+# recompile of unchanged evidence at a bumped version reproduces the hash).
+# Everything else — ir_version, policy_id, match, decision, maturity — is
+# semantic; equal hash means equal behavior.
+HASH_EXCLUDED_KEYS = frozenset(
+    {"content_hash", "renders", "state", "compiled_at", "version"}
+)
 
 # Finding-severity vocabulary the triage prompt asks the model for and the
 # response pipeline keys on (services/daemon/probes.py SEVERITIES).
@@ -121,6 +125,14 @@ ENTITY_CONTEXT_TYPE_BY_KEY: dict[str, str] = {
     "hashes": "hash",
     "processes": "process",
     "files": "file",
+    # Legacy singular keys the daemon's enrich step still reads
+    # (services/daemon/processor.py falls back to src_ip/dst_ip/dest_ip when
+    # the plural form is absent); normalized to the same types.
+    "src_ip": "src_ip",
+    "dest_ip": "dest_ip",
+    "dst_ip": "dest_ip",
+    "hostname": "host",
+    "username": "user_account",
 }
 
 
