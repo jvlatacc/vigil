@@ -8,16 +8,22 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Mapping, Optional
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from core.auth.auth_service import AuthService
 from core.auth.current_user import get_current_user
-from core.storage.models import User
+from core.storage.models import Role, User
 from core.storage.unit_of_work import unit_of_work
 
 APPROVE_PERMISSION = "ai_decisions.approve"
+
+# Tool-call authorization. ``tools.execute`` is the baseline grant; a role's
+# map may also carry a per-server ``tools.server.<name>`` key whose value
+# overrides the baseline for that one server (see role_allows_tool_call).
+TOOL_EXECUTE_PERMISSION = "tools.execute"
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -59,3 +65,51 @@ def username_has_permission(username: str, permission: str) -> bool:
         user_id = user.user_id if user else ""
     # An unknown id holds nothing, except under DEV_MODE, which grants all.
     return AuthService.check_permission(user_id, permission)
+
+
+def tools_server_permission(server_name: str) -> str:
+    """The per-server override key for tools on ``server_name``."""
+    return f"tools.server.{server_name}"
+
+
+def role_allows_tool_call(perms: Mapping[str, bool], server_name: str) -> bool:
+    """Whether a role's permission map allows a tool call on ``server_name``.
+
+    ``tools.server.<name>`` is a scoped override: when the map carries the
+    key its value decides for that server; when absent the ``tools.execute``
+    baseline decides; when neither is present the answer is no.
+    """
+    scoped = perms.get(tools_server_permission(server_name))
+    if scoped is not None:
+        return bool(scoped)
+    return bool(perms.get(TOOL_EXECUTE_PERMISSION, False))
+
+
+def username_has_tool_permission(username: str, server_name: str) -> bool:
+    """Whether the account named ``username`` may call a tool on ``server_name``.
+
+    For paths that carry only a username (chat and MCP tool calls), through
+    the same override rule :func:`role_allows_tool_call` applies to a role.
+    """
+    with unit_of_work() as session:
+        user = session.query(User).filter(User.username == username).first()
+        user_id = user.user_id if user else ""
+    # get_user_permissions is DEV_MODE-aware the same way check_permission is.
+    return role_allows_tool_call(AuthService.get_user_permissions(user_id), server_name)
+
+
+def can_assign_role(
+    current_user: User, target_role: Role, session: Optional[Session] = None
+) -> bool:
+    """True only if ``current_user`` holds every permission ``target_role`` grants.
+
+    One escalation guard for every path that hands out privileges — user role
+    assignment and group→role mapping writes alike: a user with ``users.write``
+    may not grant, directly or through a directory-group mapping, a role
+    carrying more privileges than they themselves hold.
+    """
+    current_perms = AuthService.get_user_permissions(current_user.user_id, session)
+    for perm, granted in (target_role.permissions or {}).items():
+        if granted and not current_perms.get(perm, False):
+            return False
+    return True

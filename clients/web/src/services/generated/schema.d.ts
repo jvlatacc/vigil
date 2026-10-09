@@ -5783,6 +5783,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/role-group-mappings/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mappings
+         * @description List group→role mappings, highest priority first.
+         */
+        get: operations["get_api_role-group-mappings"];
+        put?: never;
+        /**
+         * Create Mapping
+         * @description Map one directory group onto one role.
+         */
+        post: operations["post_api_role-group-mappings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/role-group-mappings/{mapping_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Mapping
+         * @description Update a mapping's group, role, or priority.
+         */
+        put: operations["put_api_role-group-mappings_mapping_id"];
+        post?: never;
+        /**
+         * Delete Mapping
+         * @description Delete a mapping. Removes access; grants nothing.
+         */
+        delete: operations["delete_api_role-group-mappings_mapping_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -9877,6 +9925,21 @@ export interface components {
             workflow_id?: string | null;
         };
         /**
+         * CreateMappingRequest
+         * @description Create-mapping request.
+         */
+        CreateMappingRequest: {
+            /** Idp Group */
+            idp_group: string;
+            /**
+             * Priority
+             * @default 100
+             */
+            priority: number;
+            /** Role Id */
+            role_id: string;
+        };
+        /**
          * CreateUserRequest
          * @description Create user request.
          */
@@ -12282,6 +12345,18 @@ export interface components {
             case_id?: string | null;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * UpdateMappingRequest
+         * @description Update-mapping request.
+         */
+        UpdateMappingRequest: {
+            /** Idp Group */
+            idp_group?: string | null;
+            /** Priority */
+            priority?: number | null;
+            /** Role Id */
+            role_id?: string | null;
         };
         /**
          * UpdateUserRequest
@@ -22752,6 +22827,142 @@ export interface operations {
             path: {
                 session_id: string;
                 interaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_role-group-mappings": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_role-group-mappings": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "put_api_role-group-mappings_mapping_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                mapping_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_role-group-mappings_mapping_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                mapping_id: number;
             };
             cookie?: never;
         };
