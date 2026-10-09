@@ -1,0 +1,6 @@
+# Vigil JIT compiled policy: pol_307d1ed96058623d v1 (content sha256:59465c16c8b96db4d880dde6e166eb53377bc57307801e76924a586fce805029)
+# Archetype: workflow wf_hunt_cred_stuffing over 30 days
+# Match: data_source in ['okta.system_log', 'splunk']; techniques any_of ['T1110.003', 'T1110.004']; entity-context types all_of ['src_ip', 'user_account']
+# Decision: severity=high confidence=0.93 recommended_action=investigate (actions human-only)
+# Rendered for iptables by the Vigil policy compiler — generated artifact, do not edit.
+# Fidelity note: this decision carries no packet-level containment — there is no rule for iptables to hold. The Vigil evaluator decides; approved containment actions name any addresses an enforcement integration would install.
