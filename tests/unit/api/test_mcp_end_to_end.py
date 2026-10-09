@@ -23,6 +23,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from core.agents import tool_registry
 from core.auth import mcp_credential_service as credentials
 from core.cases.case_workflow_service import CaseWorkflowService
 from core.storage.models import McpCredential, Role, User
@@ -152,6 +153,11 @@ def test_a_case_closed_through_the_surface_records_the_credentials_owner(
     monkeypatch.setattr(CaseWorkflowService, "close_case", _close)
     monkeypatch.setattr(vigil, "_service_session", _session)
     monkeypatch.setattr(vigil, "add_case_activity", lambda *a, **k: None)
+    # The test is about who is recorded, not about the permission engine (the
+    # unit environment has no database for it); every bound caller may invoke.
+    monkeypatch.setattr(
+        tool_registry, "username_has_permission", lambda username, permission: True
+    )
 
     headers = {
         "Authorization": f"Bearer {issued_credential}",

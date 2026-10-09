@@ -18,6 +18,11 @@ from core.storage.models import User
 from core.storage.unit_of_work import unit_of_work
 
 APPROVE_PERMISSION = "ai_decisions.approve"
+# The tool plane's two grants (RBAC refactor): backend tools run in this
+# process, MCP tools reach the integration servers -- and Vigil's own tools
+# when they are addressed through the MCP registry or its /mcp surface.
+TOOLS_INVOKE_PERMISSION = "tools.invoke"
+MCP_USE_PERMISSION = "mcp.use"
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 

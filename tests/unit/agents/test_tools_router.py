@@ -399,6 +399,11 @@ def closes(monkeypatch):
     monkeypatch.setattr(vigil, "_service_session", _session)
     monkeypatch.setattr(vigil, "add_case_activity", lambda *a, **k: None)
     monkeypatch.setattr(internal_auth, "get_secret", lambda name: "shhh")
+    # These tests are about who is recorded, not about the permission engine;
+    # every bound caller here may invoke.
+    monkeypatch.setattr(
+        tool_registry, "username_has_permission", lambda username, permission: True
+    )
 
     registry = MCPRegistry()
     in_process.register(registry)

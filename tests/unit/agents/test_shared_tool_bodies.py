@@ -269,7 +269,9 @@ async def test_a_principal_without_the_approval_right_cannot_decide(
 
     def _holds(username, permission):
         asked.append((username, permission))
-        return False
+        # The dispatch gate asks first and this principal may run tools; the
+        # approval right is the one thing missing.
+        return permission != "ai_decisions.approve"
 
     monkeypatch.setattr(tool_registry, "username_has_permission", _holds)
 
@@ -278,5 +280,8 @@ async def test_a_principal_without_the_approval_right_cannot_decide(
 
     assert handled is True
     assert "ai_decisions.approve required" in result["error"]
-    assert asked == [("vera_viewer", "ai_decisions.approve")]
+    assert asked == [
+        ("vera_viewer", "tools.invoke"),
+        ("vera_viewer", "ai_decisions.approve"),
+    ]
     assert called == []
