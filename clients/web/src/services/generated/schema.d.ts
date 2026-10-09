@@ -4949,11 +4949,11 @@ export interface paths {
          * Discover Models
          * @description Pre-save model discovery for the Add Provider dialog.
          *
-         *     Admin-only because it makes an outbound HTTP request whose target
-         *     is influenced by the request body (``base_url``). The URL is run
+         *     settings.write-gated because it makes an outbound HTTP request whose
+         *     target is influenced by the request body (``base_url``). The URL is run
          *     through :func:`core.platform.url_safety.validate_provider_url` inside
-         *     each discovery helper, but we also require the caller to be an
-         *     authenticated admin so a stolen session is the only path to even
+         *     each discovery helper, but the route-level gate also requires the caller
+         *     to hold ``settings.write``, so a stolen session is the only path to even
          *     reach that validation.
          */
         post: operations["post_api_llm_providers_discover-models"];
@@ -4998,10 +4998,10 @@ export interface paths {
          * Test Connection
          * @description Stateless pre-save connection test for the Add Provider wizard.
          *
-         *     Admin-only and persists nothing: it probes the provider against the
-         *     credentials in the body. Same trust model as ``/discover-models`` — the
-         *     raw key is accepted in the body, but only an authenticated admin can
-         *     reach it. A static single-segment path, so it never collides with
+         *     settings.write-gated and persists nothing: it probes the provider against
+         *     the credentials in the body. Same trust model as ``/discover-models`` —
+         *     the raw key is accepted in the body, but only a ``settings.write`` holder
+         *     can reach it. A static single-segment path, so it never collides with
          *     ``/{provider_id}/test``.
          */
         post: operations["post_api_llm_providers_test-connection"];

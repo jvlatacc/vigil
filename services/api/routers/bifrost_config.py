@@ -35,7 +35,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from core.auth.auth_service import AuthService
+from core.auth.permissions import permission_gate
 from core.config import get_settings
 from core.llm.bifrost import mirror
 from core.routing import Auth, RouterMeta
@@ -44,7 +44,11 @@ from core.storage.models import User
 from services.api.middleware.auth import get_current_active_user
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+
+# Both routes hand the caller Bifrost's admin surface (status, key management
+# proxying), so the whole router sits behind settings.write — the same right
+# the llm-provider routes beside it ask for.
+router = APIRouter(dependencies=[permission_gate("settings.write")])
 
 ROUTER_META = RouterMeta(
     prefix="/api/bifrost",
@@ -126,13 +130,6 @@ def _is_masked(value: Any) -> bool:
     if isinstance(value, dict):
         return True
     return isinstance(value, str) and "*" in value
-
-
-def _require_settings_admin(current_user: User) -> None:
-    if not AuthService.check_permission(current_user.user_id, "settings.write"):
-        raise HTTPException(
-            status_code=403, detail="Permission denied: settings.write required"
-        )
 
 
 def _resolve_vertex_scope(vertex: Dict[str, Any], key_id: Optional[str]) -> None:
@@ -345,7 +342,6 @@ async def routability(
     One call answers what used to take 1 + N proxy round trips — the setup gate
     listed providers, then every provider's keys, on its critical path.
     """
-    _require_settings_admin(current_user)
     try:
         return await mirror.routability()
     except (httpx.HTTPError, ValueError) as exc:
@@ -366,8 +362,6 @@ async def proxy(
     Bifrost's status codes and error bodies pass through unchanged so the console
     can surface what the gateway actually said.
     """
-    _require_settings_admin(current_user)
-
     path = path.strip("/")
     if not _ALLOWED_PATHS.match(path):
         raise HTTPException(

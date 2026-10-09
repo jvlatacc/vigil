@@ -166,7 +166,7 @@ def _persist_orchestrator_enabled(
         description="Autonomous orchestrator settings",
         config_type="orchestrator",
         change_reason=reason
-        or f'Orchestrator {"enabled" if enabled else "disabled"} via API',
+        or f"Orchestrator {'enabled' if enabled else 'disabled'} via API",
     )
     if stored is False:
         raise RuntimeError("orchestrator.settings was not stored")
