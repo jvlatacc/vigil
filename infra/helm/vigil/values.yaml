@@ -819,6 +819,7 @@ config:
   DAEMON_CRITICAL_ACTION_FLOOR: "0.70"
   DAEMON_HIGH_ACTION_FLOOR: "0.80"
   DAEMON_FORCE_APPROVAL: "false"
+  DAEMON_ENFORCEMENT_FORCE_APPROVAL: "true"
   DAEMON_DRY_RUN: "false"
   # Honey-routing (the deceive band): default off — enabling it is a human
   # configuration act, and the floor is its own band, not the response one.
