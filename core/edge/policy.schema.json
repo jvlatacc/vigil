@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/edge/policy/v1",
+  "title": "Vigil edge containment-policy pack v1",
+  "description": "The payload of an edge-policy DSSE envelope: what a Warden node may enforce while partitioned. Parsed only after the envelope's signature has verified (core/edge/verify.py). Every field set is closed (additionalProperties: false) so an unknown field is a rejection, not a silent extra.",
+  "$ref": "#/$defs/policy",
+  "$defs": {
+    "ts": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rule_id": {"type": "string", "pattern": "^edge-[a-z0-9-]{1,64}$"},
+    "indicator": {"description": "The alert entity a rule matches on. v1 ships the IP indicator only — it is what the v1 executor can act on.", "enum": ["ip"]},
+    "action_type": {"description": "v1 ships one local executor (nftables block_ip in the vigil_warden table); the DryRun fallback takes the same type. Extending this enum is how a new executor ships.", "enum": ["block_ip"]},
+    "mitre": {"type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$"},
+    "node_selector": {"description": "A \"key:value\" segment label, e.g. \"segment:dmz\" — which nodes the pack applies to.", "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}:[A-Za-z0-9._-]{1,64}$"},
+    "protected_target": {"description": "Target classes the pre-executor guard refuses before any executor runs (self-lockout is impossible by construction).", "enum": ["self", "gateway", "control_plane", "dns_resolvers"]},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "action": {
+      "type": "object", "required": ["type", "ttl_minutes"], "additionalProperties": false,
+      "properties": {
+        "type": {"$ref": "#/$defs/action_type"},
+        "ttl_minutes": {"description": "How long the block lives on its own; hard-capped by the envelope's max_action_ttl_minutes.", "type": "integer", "minimum": 1, "maximum": 1440}
+      }
+    },
+    "match": {
+      "type": "object", "required": ["indicator"], "additionalProperties": false,
+      "properties": {
+        "indicator": {"$ref": "#/$defs/indicator"},
+        "mitre": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/mitre"}},
+        "min_local_confidence": {"description": "Local confidence a match must reach; the effective floor is max(this, the envelope's confidence_floor).", "$ref": "#/$defs/confidence"}
+      }
+    },
+    "rule": {
+      "type": "object", "required": ["rule_id", "match", "action"], "additionalProperties": false,
+      "properties": {
+        "rule_id": {"$ref": "#/$defs/rule_id"},
+        "match": {"$ref": "#/$defs/match"},
+        "action": {"$ref": "#/$defs/action"}
+      }
+    },
+    "autonomy_envelope": {
+      "description": "The hard ceiling on local enforcement, signed into the pack — not configurable at the edge, not DB-overridable. The decision engine refuses anything outside it.",
+      "type": "object",
+      "required": ["allowed_actions", "max_actions_per_hour", "max_action_ttl_minutes", "require_reversible", "confidence_floor", "allow_slm_decisions"],
+      "additionalProperties": false,
+      "properties": {
+        "allowed_actions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/action_type"}},
+        "max_actions_per_hour": {"description": "The hourly rate cap. 0 is valid: an envelope that allows nothing.", "type": "integer", "minimum": 0, "maximum": 1000},
+        "max_action_ttl_minutes": {"type": "integer", "minimum": 1, "maximum": 1440},
+        "require_reversible": {"description": "True: an irreversible action never enforces, whatever a rule says.", "type": "boolean"},
+        "confidence_floor": {"description": "Local confidence at or above which a rule match acts. NaN/Infinity are refused at JSON parse.", "$ref": "#/$defs/confidence"},
+        "allow_slm_decisions": {"description": "False (default): the local SLM ranks advisory-only; rules alone decide.", "type": "boolean"}
+      }
+    },
+    "model_manifest": {
+      "description": "Present: the local SLM this pack was built for — warden verifies the on-disk model file against this sha256 before loading it. Absent: rules-only triage. Model files are never committed or fetched here; only their identity travels.",
+      "type": "object", "required": ["name", "sha256", "format"], "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "format": {"enum": ["gguf"]}
+      }
+    },
+    "policy": {
+      "type": "object",
+      "required": ["format", "policy_version", "issued_at", "not_before", "not_after", "node_selectors", "autonomy_envelope", "protected_targets", "rules"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {"const": "vigil.edge-policy/v1"},
+        "policy_version": {"description": "Monotonic per node: a node holding vN refuses vN-1, and re-presented vN must hash to the payload bytes it already holds.", "type": "integer", "minimum": 1},
+        "issued_at": {"$ref": "#/$defs/ts"},
+        "not_before": {"$ref": "#/$defs/ts"},
+        "not_after": {"description": "Fail-closed: at this instant live actions are undone and the node drops to PASSIVE — stale authority never enforces.", "$ref": "#/$defs/ts"},
+        "node_selectors": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/node_selector"}},
+        "autonomy_envelope": {"$ref": "#/$defs/autonomy_envelope"},
+        "protected_targets": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/protected_target"}},
+        "rules": {"description": "May be empty: a pack that only ratchets the envelope down.", "type": "array", "items": {"$ref": "#/$defs/rule"}},
+        "model_manifest": {"$ref": "#/$defs/model_manifest"}
+      }
+    }
+  }
+}

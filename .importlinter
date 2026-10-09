@@ -32,6 +32,7 @@ forbidden_modules =
     core.cases
     core.chat
     core.detections
+    core.edge
     core.federation
     core.findings
     core.ingestion
@@ -53,6 +54,7 @@ source_modules =
     core.cases
     core.chat
     core.detections
+    core.edge
     core.federation
     core.findings
     core.ingestion
