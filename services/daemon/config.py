@@ -82,6 +82,11 @@ class SchedulerConfig:
     # Constant for v1, no settings knob: the sweep is cheap when no
     # routes exist and correctness says it must run regardless.
     mtd_route_sweep_interval: int = 60
+    # Canary-credential rotation (core.response.decoy_rotation), the
+    # containment invariant the spec locks. Constant for v1, same logic as
+    # the route sweep: the tick is one registry read when nothing is
+    # active, and hygiene must run regardless of the enable switch.
+    mtd_canary_rotation_interval: int = 86400
 
 
 @dataclass

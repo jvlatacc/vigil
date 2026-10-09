@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.cases.decoy_session_capture import DECOY_SESSION_DATA_SOURCE
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
@@ -122,6 +123,7 @@ class FindingProcessor:
             "queued_for_investigation": 0,
             "sanitization_flagged": 0,
             "store_dropped": 0,
+            "decoy_sessions_captured": 0,
             "fastpath_leases_issued": 0,
             "fastpath_shadow_records": 0,
             "fastpath_errors": 0,
@@ -336,7 +338,16 @@ class FindingProcessor:
             # on give-up, forget the dedup key so a source that re-reads its
             # lookback can enqueue the finding again. No data service is a
             # failed store — same path, including probes (they carry no key).
-            if not await self._store_with_retry(finding):
+            #
+            # A decoy session event takes the capture pipeline instead: its
+            # Finding, transcript evidence, and IOCs must land as one
+            # transaction (spec criterion 7), which the generic ingestion
+            # service cannot give it.
+            if finding.get("data_source") == DECOY_SESSION_DATA_SOURCE:
+                stored = await self._store_decoy_session(finding)
+            else:
+                stored = await self._store_with_retry(finding)
+            if not stored:
                 await self._drop_unstored(finding_id, dedup, dedup_key)
                 return
 
@@ -424,6 +435,15 @@ class FindingProcessor:
         if finding.get("data_source") == PROBE_DATA_SOURCE:
             return
 
+        # A decoy-session finding stops here, like a probe: the attacker it
+        # describes is already inside a decoy, and the response bands exist
+        # to protect production. Containing a decoy's visitor — blocking the
+        # very connection the deception is holding open — is the tip-off this
+        # feature exists to avoid. The session's product is the capture
+        # itself; nothing past this point may act on it.
+        if finding.get("data_source") == DECOY_SESSION_DATA_SOURCE:
+            return
+
         # Response evaluation always runs — even when enrichment is off or paused.
         try:
             await self._evaluate_for_response(finding)
@@ -500,6 +520,44 @@ class FindingProcessor:
             if attempt < _STORE_ATTEMPTS:
                 await asyncio.sleep(_STORE_RETRY_BACKOFF)
         return False
+
+    async def _store_decoy_session(self, finding: Dict[str, Any]) -> bool:
+        """Store one decoy session event atomically (the capture plane).
+
+        A replayed session is a handled event, not a failure: the unique
+        (data_source, external_id) pair dedupes it. Log lines carry ids and
+        counts only — the transcript never reaches a log.
+        """
+        from core.cases.decoy_session_capture import (
+            capture_session_event,
+            parse_session_event,
+        )
+
+        try:
+            event = parse_session_event(finding)
+        except ValueError as e:
+            logger.error(
+                "Rejected decoy session event %s: %s", finding.get("finding_id"), e
+            )
+            return False
+        try:
+            result = await asyncio.to_thread(capture_session_event, event)
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — a failed capture drops, same as the generic store
+            logger.error("Decoy session capture failed for %s: %s", event.session_id, e)
+            return False
+        if result.get("status") == "created":
+            self.stats["decoy_sessions_captured"] += 1
+            logger.info(
+                "Captured decoy session %s on %s (%d commands, %d IOCs) -> %s",
+                event.session_id,
+                event.decoy_service,
+                len(event.commands),
+                result.get("iocs_added", 0),
+                result.get("case_id"),
+            )
+        return result.get("status") in ("created", "duplicate")
 
     async def _drop_unstored(
         self,
