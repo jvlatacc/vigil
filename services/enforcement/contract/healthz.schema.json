@@ -21,7 +21,14 @@
         "additionalProperties": false,
         "properties": {
           "supported": { "type": "boolean" },
-          "reason": { "description": "Why the primitive is unavailable; omitted when supported.", "type": "string" }
+          "reason": {
+            "description": "Why the primitive is unavailable — or, with mode \"signal\", why it degraded to the fallback mechanism.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The enforcement mechanism in use: \"bpf\" for the primary mechanism, \"signal\" for the process-interdict fallback (SIGSTOP/SIGCONT) on LSM-less kernels. Omitted when the kernel does not distinguish mechanisms. A degraded mode also marks overall status \"degraded\".",
+            "type": "string"
+          }
         }
       }
     },

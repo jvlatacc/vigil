@@ -103,6 +103,17 @@ type Enforcer struct {
 	order   []string // insertion order for List
 }
 
+// Mode reports the enforcement mechanism the kernel uses for kind —
+// forwarded from the kernel's ModeReporter when it has one; empty
+// otherwise. /healthz renders it so a degraded fallback mechanism is
+// visible, never masked by a bare "supported".
+func (e *Enforcer) Mode(kind Kind) string {
+	if mr, ok := e.kernel.(ModeReporter); ok {
+		return mr.Mode(kind)
+	}
+	return ""
+}
+
 // NewEnforcer builds an Enforcer over a Kernel. defaultTTL fills requests
 // that omit ttl_seconds; it must be at least TTLFloor.
 func NewEnforcer(kernel Kernel, defaultTTL time.Duration) *Enforcer {
@@ -284,11 +295,23 @@ func fingerprint(in Input, ttl time.Duration) [sha256.Size]byte {
 	return out
 }
 
-// expiryValue is the 8-byte big-endian unix timestamp stored in map values.
+// expiryValue is the 8-byte expiry timestamp stored in map values: unix
+// seconds in the host's native byte order. Native endianness keeps one
+// encoding from the engine through the loader into the BPF programs — the
+// kernel maps hold exactly what the C side reads.
 func expiryValue(t time.Time) []byte {
 	b := make([]byte, 8)
-	binary.BigEndian.PutUint64(b, uint64(t.Unix()))
+	binary.NativeEndian.PutUint64(b, uint64(t.Unix()))
 	return b
+}
+
+// decodeExpiry inverts expiryValue. It is shared by the loader and the fake,
+// which is what lets one map-level view (mapStore) serve both.
+func decodeExpiry(b []byte) (time.Time, error) {
+	if len(b) != 8 {
+		return time.Time{}, fmt.Errorf("expiry value is %d bytes, want 8", len(b))
+	}
+	return time.Unix(int64(binary.NativeEndian.Uint64(b)), 0).UTC(), nil
 }
 
 func kernelError(op string, err error) *Error {

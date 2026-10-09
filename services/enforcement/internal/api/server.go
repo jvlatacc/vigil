@@ -22,9 +22,13 @@ const MaxRequestBytes = 64 << 10
 
 // Server is the HTTP surface around an Enforcer.
 type Server struct {
-	token   string
-	enf     *enforce.Enforcer
-	started time.Time
+	token string
+	enf   *enforce.Enforcer
+	// kernelFaked is what /healthz reports in kernel_faked: non-empty only
+	// on the faked kernel (dev/CI). An empty string means a real kernel
+	// loader, per the contract.
+	kernelFaked string
+	started     time.Time
 
 	enforcedTotal atomic.Uint64
 	replayedTotal atomic.Uint64
@@ -35,11 +39,11 @@ type Server struct {
 
 // New builds a Server. The token is required — the daemon fails closed
 // rather than serving an unauthenticated enforcement API.
-func New(token string, enf *enforce.Enforcer) (*Server, error) {
+func New(token string, enf *enforce.Enforcer, kernelFaked string) (*Server, error) {
 	if token == "" {
 		return nil, errors.New("enforcement API requires a non-empty auth token")
 	}
-	return &Server{token: token, enf: enf, started: time.Now()}, nil
+	return &Server{token: token, enf: enf, kernelFaked: kernelFaked, started: time.Now()}, nil
 }
 
 // Handler returns the routed mux. Go's method-pattern ServeMux answers 405
