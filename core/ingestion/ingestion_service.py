@@ -24,6 +24,7 @@ from core.findings.source_evidence import (
     normalize_finding_source_evidence,
     source_evidence_from_loglm_row,
 )
+from core.storage.origin_trust import ORIGIN_DEFAULT, trusted_tier
 from core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -187,8 +188,15 @@ def row_identity_key(row: Dict[str, Any], columns: tuple) -> str:
 class IngestionService:
     """Service for ingesting data from various formats into the database."""
 
-    def __init__(self):
-        """Initialize the ingestion service."""
+    def __init__(self, default_origin_trust: str = ORIGIN_DEFAULT):
+        """Initialize the ingestion service.
+
+        ``default_origin_trust`` is the tier stamped on rows the parsers
+        build with none of their own: unverified for the daemon's own
+        pipeline (its importers stamp explicitly), transport for the
+        authenticated upload jobs constructed with it.
+        """
+        self.default_origin_trust = default_origin_trust
         # Import here to avoid circular dependencies
         try:
             from core.storage.connection import get_db_manager
@@ -355,6 +363,11 @@ class IngestionService:
                     cluster_id=finding_data.get("cluster_id"),
                     severity=finding_data.get("severity"),
                     status=finding_data.get("status", "new"),
+                    # The receiver's trust verdict, or the funnel default
+                    # when no importer stamped one.
+                    origin_trust=trusted_tier(
+                        finding_data.get("origin_trust"), self.default_origin_trust
+                    ),
                 )
 
                 if finding:
@@ -402,6 +415,13 @@ class IngestionService:
                 )
                 finding_data["anomaly_score"] = _optional_float(
                     finding_data.get("anomaly_score")
+                )
+                # The receiver's trust verdict: an importer's own stamp wins;
+                # rows none of them stamped carry the funnel default, which
+                # is unverified unless a caller (the authenticated upload
+                # job) raised it.
+                finding_data["origin_trust"] = trusted_tier(
+                    finding_data.get("origin_trust"), self.default_origin_trust
                 )
             except Exception as e:
                 logger.error(

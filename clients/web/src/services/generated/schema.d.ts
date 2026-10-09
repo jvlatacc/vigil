@@ -10459,6 +10459,8 @@ export interface components {
             finding_id?: string | null;
             /** Mitre Predictions */
             mitre_predictions?: unknown | null;
+            /** Origin Trust */
+            origin_trust?: string | null;
             /** Severity */
             severity?: string | null;
             /** Status */

@@ -17,25 +17,17 @@ Signature header: ``X-Darktrace-Signature`` (hex HMAC-SHA256 of raw body).
 """
 
 import asyncio
-import hmac
 import logging
-from hashlib import sha256
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from core.config import get_settings
+from core.ingestion.webhook_origin import read_and_verify_webhook
 from core.integrations.darktrace.ingestion import DarktraceIngestionService
 from core.routing import Auth, RouterMeta
 from core.secrets import get_secret
-from core.webhook_rejections import (
-    BAD_SIGNATURE,
-    MISSING_SIGNATURE,
-    NO_SECRET,
-    SECRET_LOOKUP_FAILED,
-    record_rejection,
-    rejection_counts,
-)
+from core.webhook_rejections import rejection_counts
 
 logger = logging.getLogger(__name__)
 
@@ -107,69 +99,19 @@ def _get_console_url() -> str:
     return get_settings().darktrace_url
 
 
-def _verify_signature(raw_body: bytes, provided: str, secret: str) -> bool:
-    expected = hmac.new(secret.encode("utf-8"), raw_body, sha256).hexdigest()
-    # Strip common prefix if Darktrace wraps signature (e.g. "sha256=...").
-    clean = provided.split("=", 1)[-1].strip()
-    return hmac.compare_digest(expected, clean)
-
-
-def _reject(
-    request: Request,
-    endpoint: str,
-    reason: str,
-    status_code: int,
-    detail: str,
-    exc: Optional[BaseException] = None,
-) -> HTTPException:
-    record_rejection(
-        endpoint,
-        reason,
-        request.client.host if request.client else None,
-        exc=exc,
-    )
-    return HTTPException(status_code=status_code, detail=detail)
-
-
 async def _read_and_verify(
     request: Request, signature: Optional[str], endpoint: str
 ) -> bytes:
-    # Fetch the secret once per request: a second lookup would double-count.
-    try:
-        secret = _get_secret()
-    except Exception as exc:  # noqa: BLE001
-        raise _reject(
-            request,
-            endpoint,
-            SECRET_LOOKUP_FAILED,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Darktrace webhook secret lookup failed",
-            exc,
-        )
-    if not secret:
-        # Fail closed: without a configured secret we cannot authenticate.
-        raise _reject(
-            request,
-            endpoint,
-            NO_SECRET,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Darktrace webhook receiver not configured",
-        )
-    raw = await request.body()
-    if len(raw) > _get_max_body_bytes():
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Body exceeds {_get_max_body_bytes()} bytes",
-        )
-    if not signature or not _verify_signature(raw, signature, secret):
-        raise _reject(
-            request,
-            endpoint,
-            BAD_SIGNATURE if signature else MISSING_SIGNATURE,
-            status.HTTP_401_UNAUTHORIZED,
-            "Invalid or missing X-Darktrace-Signature",
-        )
-    return raw
+    # The shared fail-closed ritual: secret lookup, body cap, constant-time
+    # HMAC over the raw bytes, rejection telemetry on every refusal.
+    return await read_and_verify_webhook(
+        request,
+        endpoint=endpoint,
+        secret_lookup=_get_secret,
+        signature_header="X-Darktrace-Signature",
+        provided_signature=signature,
+        max_body_bytes=_get_max_body_bytes,
+    )
 
 
 def _parse_json(raw: bytes) -> Dict:
