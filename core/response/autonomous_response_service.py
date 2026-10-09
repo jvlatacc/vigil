@@ -4,10 +4,21 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from core.agents.builtins import AgentId
-from core.response.approval_service import ActionStatus, ActionType, ApprovalService
+from core.response.approval_service import (
+    KERNEL_ACTION_TYPES,
+    ActionStatus,
+    ActionType,
+    ApprovalService,
+    PendingAction,
+)
 from core.response.config import ResponseConfig
 
 logger = logging.getLogger(__name__)
+
+# An enforcement that outlives its reason is a new finding: the executor
+# refuses to dispatch a kernel action whose TTL is below the daemon's own
+# floor (contract error ttl_below_floor) instead of paying for the round trip.
+KERNEL_TTL_FLOOR_SECONDS = 60
 
 
 class AutonomousResponseService:
@@ -323,6 +334,9 @@ class AutonomousResponseService:
                         parameters=params,
                     )
 
+                elif action.action_type in KERNEL_ACTION_TYPES:
+                    result = self._execute_kernel_action(action=action)
+
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.
                     continue
@@ -420,3 +434,94 @@ class AutonomousResponseService:
         except Exception as e:  # noqa: BLE001
             logger.exception("Cloudflare action %s failed", action_type)
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Kernel enforcement executor (services/enforcement daemon)
+    # ------------------------------------------------------------------
+
+    def _execute_kernel_action(self, action: PendingAction) -> Dict[str, Any]:
+        """Execute an approved kernel action through the ebpf_xdp helpers.
+
+        The slice's module-level helpers own config resolution and the
+        idempotency_key convention (``xdp_block_ip:{ip}`` and siblings); this
+        branch supplies the approval row's ``action_id`` — so a retried
+        dispatch replays against the daemon's idempotency instead of
+        double-enforcing — the TTL from the action's ``parameters``, and the
+        reason. A success reply carries the daemon's kernel evidence, which
+        ``mark_executed`` stores verbatim; refusals and transport failures are
+        ``success: False`` results for ``mark_failed`` — never a faked success.
+        """
+        params = action.parameters or {}
+
+        # TTL rides the action's parameters — no approval_actions schema change.
+        raw_ttl = params.get("ttl_seconds")
+        if raw_ttl is not None:
+            try:
+                ttl = int(raw_ttl)
+            except (TypeError, ValueError):
+                return {
+                    "success": False,
+                    "error": "ttl_invalid",
+                    "message": f"ttl_seconds {raw_ttl!r} is not an integer",
+                }
+            if ttl < KERNEL_TTL_FLOOR_SECONDS:
+                return {
+                    "success": False,
+                    "error": "ttl_below_floor",
+                    "message": (
+                        f"ttl_seconds={ttl} is below the "
+                        f"{KERNEL_TTL_FLOOR_SECONDS}s floor"
+                    ),
+                }
+        else:
+            ttl = None  # the integration's configured default applies
+
+        # Lazy import so environments that never enable kernel enforcement do
+        # not pay for the integration package — the Cloudflare convention.
+        try:
+            from core.integrations.ebpf_xdp import tool as kernel_tool
+        except Exception as e:  # noqa: BLE001
+            return {
+                "success": False,
+                "error": f"core.integrations.ebpf_xdp.tool unavailable: {e}",
+            }
+
+        try:
+            if action.action_type == ActionType.XDP_BLOCK_IP.value:
+                return kernel_tool.xdp_block_ip(
+                    ip=params.get("ip") or action.target,
+                    reason=action.reason,
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+            if action.action_type == ActionType.SOCKET_REDIRECT.value:
+                return kernel_tool.xdp_redirect_socket(
+                    ip=params.get("ip") or action.target,
+                    reason=action.reason,
+                    port=int(params.get("port") or 0),
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+            if action.action_type == ActionType.INTERDICT_PROCESS.value:
+                raw_pid = params.get("pid") or action.target
+                try:
+                    pid = int(raw_pid)
+                except (TypeError, ValueError):
+                    return {
+                        "success": False,
+                        "error": "pid_invalid",
+                        "message": f"pid {raw_pid!r} is not an integer",
+                    }
+                return kernel_tool.xdp_interdict_process(
+                    pid=pid,
+                    reason=action.reason,
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Kernel action %s failed", action.action_type)
+            return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": f"unknown kernel action {action.action_type}",
+        }
