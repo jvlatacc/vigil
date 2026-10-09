@@ -29,6 +29,9 @@ package = false
 testpaths = ["tests"]
 # The repo root, so `services.edge` imports the way it does at runtime.
 pythonpath = ["../.."]
+# importlib (the Medic pattern): bare `tests.*` names would collide with the
+# repo root's own tests package; absolute `services.edge.*` imports cannot.
+addopts = ["--import-mode=importlib"]
 
 [tool.ruff]
 target-version = "py312"
