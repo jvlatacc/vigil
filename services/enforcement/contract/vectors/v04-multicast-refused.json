@@ -1,0 +1,21 @@
+{
+  "id": "v04-multicast-refused",
+  "description": "A multicast target is refused with invalid_target/multicast — multicast addresses are not single-host offenders.",
+  "steps": [
+    {
+      "name": "multicast target",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4420",
+          "kind": "xdp_drop",
+          "target": { "ip": "224.0.0.1" },
+          "ttl_seconds": 3600,
+          "reason": "attempt to block multicast",
+          "idempotency_key": "xdp_block_ip:224.0.0.1"
+        }
+      },
+      "expect": { "status": 422, "error": "invalid_target", "error_reason": "multicast" }
+    }
+  ]
+}
