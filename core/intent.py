@@ -108,6 +108,30 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         LONGER_TIGHTER,
     ),
     IntentField(
+        "respond.max_containment_per_tick",
+        "response.max_containment_per_tick",
+        "daemon_max_containment_per_tick",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "respond.containment_subnet_prefix",
+        "response.containment_subnet_prefix",
+        "daemon_containment_subnet_prefix",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "respond.max_containment_share_per_hour",
+        "response.max_containment_share_per_hour",
+        "daemon_max_containment_share_per_hour",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "respond.max_containment_per_subnet_hour",
+        "response.max_containment_per_subnet_hour",
+        "daemon_max_containment_per_subnet_hour",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",

@@ -40,6 +40,19 @@ respond:
   # list is tighter; rows added in Settings tighten this and never loosen it.
   # (DAEMON_NEVER_QUARANTINE)
   never_quarantine: []
+  # Blast-radius quotas on unattended containment volume; overflow waits for
+  # a person, it is never dropped. Lower is tighter on the three budgets.
+  # Containment attempts per executor tick (30 s). (DAEMON_MAX_CONTAINMENT_PER_TICK)
+  max_containment_per_tick: 3
+  # The subnet a target's blast radius is measured in: IPv4 prefix width,
+  # /64 for IPv6. Higher is tighter (a smaller subnet). (DAEMON_CONTAINMENT_SUBNET_PREFIX)
+  containment_subnet_prefix: 24
+  # Containment per rolling hour in a target's subnet, as the share of the
+  # subnet's addresses. (DAEMON_MAX_CONTAINMENT_SHARE_PER_HOUR)
+  max_containment_share_per_hour: 0.10
+  # The absolute floor on that share, so a small subnet is bounded too.
+  # (DAEMON_MAX_CONTAINMENT_PER_SUBNET_HOUR)
+  max_containment_per_subnet_hour: 10
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

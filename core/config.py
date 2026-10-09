@@ -277,6 +277,16 @@ class Settings(BaseSettings):
     # core.response.protected_targets. The environment is the floor: operator
     # rows added through Settings may tighten it and never loosen it.
     daemon_never_quarantine: Annotated[List[str], NoDecode] = []
+    # Blast-radius quotas: rolling-window caps on unattended containment
+    # volume, decided in core.response.config. Overflow waits for a person;
+    # it is never dropped. The tick window mirrors the executor's 30-second
+    # cadence; a subnet is containment_subnet_prefix wide for IPv4 and /64
+    # for IPv6; the hour cap is the share of the subnet's addresses or the
+    # absolute count, whichever is smaller.
+    daemon_max_containment_per_tick: int = 3
+    daemon_containment_subnet_prefix: int = 24
+    daemon_max_containment_share_per_hour: float = 0.10
+    daemon_max_containment_per_subnet_hour: int = 10
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
     daemon_slack_enabled: Optional[bool] = None

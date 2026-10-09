@@ -10,10 +10,16 @@ Lives in ``core/`` because ``core`` must not import ``services``;
 ``services.daemon.config`` re-exports it as part of ``DaemonConfig``.
 """
 
+import ipaddress
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from decimal import Decimal
+from ipaddress import IPv4Network, IPv6Network
+from typing import Any, List, Optional, Union
 
 from core.config import Settings, get_settings
+
+# The blast-radius subnet an address target is measured in, as a network.
+ContainmentSubnet = Union[IPv4Network, IPv6Network]
 
 
 def decision_rule(field: str, value: Any, observed: Optional[float] = None) -> str:
@@ -54,6 +60,18 @@ class ResponseConfig:
     # Operator rows in the protected_targets table can tighten this and never
     # loosen it.
     never_quarantine: List[str] = field(default_factory=list)
+    # Blast-radius quotas: rolling-window caps on unattended containment
+    # volume, decided by blast_bound_decision on counts the caller reads.
+    # At most max_containment_per_tick containment attempts in an executor
+    # tick (CONTAINMENT_TICK_SECONDS); a target's subnet is
+    # containment_subnet_prefix wide for IPv4 and /64 for IPv6; one rolling
+    # hour of containment in that subnet takes at most the share of its
+    # addresses, floored by max_containment_per_subnet_hour so a tiny subnet
+    # is bounded too. Overflow waits for a person; it is never dropped.
+    max_containment_per_tick: int = 3
+    containment_subnet_prefix: int = 24
+    max_containment_share_per_hour: float = 0.10
+    max_containment_per_subnet_hour: int = 10
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -68,6 +86,10 @@ class ResponseConfig:
             high_action_floor=s.daemon_high_action_floor,
             force_manual_approval=s.daemon_force_approval,
             never_quarantine=list(s.daemon_never_quarantine),
+            max_containment_per_tick=s.daemon_max_containment_per_tick,
+            containment_subnet_prefix=s.daemon_containment_subnet_prefix,
+            max_containment_share_per_hour=s.daemon_max_containment_share_per_hour,
+            max_containment_per_subnet_hour=s.daemon_max_containment_per_subnet_hour,
             dry_run=s.daemon_dry_run,
         )
 
@@ -130,3 +152,94 @@ def approval_requirement(
             "response.confidence_threshold", config.confidence_threshold, confidence
         )
     raise ValueError(f"Unknown reversibility: {reversibility}")
+
+
+# ---------------------------------------------------------------------------
+# Blast-radius quotas: rolling-window volume caps on unattended containment.
+# Pure functions on counts the caller reads; the SQL lives with the callers.
+# ---------------------------------------------------------------------------
+
+# The executor tick the approved-actions loop runs on (services.daemon.
+# responder re-polls every 30 seconds). The gate's rolling tick window
+# mirrors that cadence; a constant, not a knob — it follows the executor
+# rather than dialing it.
+CONTAINMENT_TICK_SECONDS = 30
+
+# IPv6 has no /24; the standard LAN analog is the subnet its blast radius
+# is measured in.
+IPV6_CONTAINMENT_PREFIX = 64
+
+
+@dataclass(frozen=True)
+class ContainmentCounts:
+    """Rolling-window containment volume a quota decision reads.
+
+    ``tick`` — containment rows in the executor-tick window ending now.
+    ``subnet_hour`` — containment rows in the target's subnet over the
+    rolling hour. ``subnet_size`` — the addresses the target's containment
+    subnet spans; 0 when the target is not an address (a hostname), so the
+    share cap cannot apply and the absolute cap governs alone.
+    """
+
+    tick: int
+    subnet_hour: int
+    subnet_size: int
+
+
+def containment_subnet(
+    target: str, cfg: "ResponseConfig"
+) -> Optional[ContainmentSubnet]:
+    """The subnet a containment target's blast radius is measured in.
+
+    IPv4 subnets are ``cfg.containment_subnet_prefix`` wide and IPv6 uses
+    the /64 analog; IPv4-mapped IPv6 normalises to its IPv4 address like
+    the responder's target extraction and the protected-target matcher.
+    ``None`` for a target that is not an address (a hostname): it counts in
+    the tick window and in no subnet. A prefix wider than the address space
+    raises — a failed read holds containment for a person rather than
+    guessing.
+    """
+    try:
+        addr = ipaddress.ip_address(str(target).strip())
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    prefix = (
+        cfg.containment_subnet_prefix
+        if isinstance(addr, ipaddress.IPv4Address)
+        else IPV6_CONTAINMENT_PREFIX
+    )
+    return ipaddress.ip_network(f"{addr}/{prefix}", strict=False)
+
+
+def blast_bound_decision(
+    counts: ContainmentCounts, cfg: ResponseConfig
+) -> Optional[str]:
+    """None = allow; a rule string (#917) = hold the row for a person.
+
+    Two rolling-window caps, in the order they bite: the executor tick's
+    containment volume, then the target subnet's rolling hour — the share
+    of the subnet's addresses, floored at one address' worth and at the
+    absolute ``max_containment_per_subnet_hour``. A subnet of unknown size
+    (a hostname target) is bounded by the absolute cap alone.
+    """
+    effective = cfg.max_containment_per_subnet_hour
+    if counts.subnet_size:
+        # The share is an operator's decimal percentage: 0.29 of 100 is 29
+        # and must not drift to 28 on the way through a float multiply.
+        share_cap = int(
+            Decimal(str(cfg.max_containment_share_per_hour)) * counts.subnet_size
+        )
+        effective = min(effective, max(share_cap, 1))
+    if counts.tick >= cfg.max_containment_per_tick:
+        return (
+            f"response.max_containment_per_tick={cfg.max_containment_per_tick}"
+            f" met ({counts.tick})"
+        )
+    if counts.subnet_hour >= effective:
+        return (
+            f"response.max_containment_per_subnet_hour={effective}"
+            f" met ({counts.subnet_hour})"
+        )
+    return None
