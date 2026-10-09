@@ -30,19 +30,135 @@ from core.integrations.mcp.child_env import ca_bundle_env
 from core.integrations.mcp.service import MCPService
 from core.secrets import get_secret
 
+# The streamable-HTTP client transport and its HTTP stack ship in the same
+# SDK install as stdio; guarded separately so a partial install degrades to
+# stdio-only instead of losing the whole module.
+try:
+    import httpx2
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared._httpx_utils import create_mcp_http_client
+
+    HTTP_TRANSPORT_AVAILABLE = True
+except ImportError:
+    httpx2 = None
+    streamable_http_client = None
+    create_mcp_http_client = None
+    HTTP_TRANSPORT_AVAILABLE = False
+
+# URL-based servers acquire tokens through the process-wide token-provider
+# registry (core.integrations.mcp.oauth) — the same lifecycle the status
+# surface and the consent routes share.
+from core.integrations.mcp.connection_state import (
+    auth_config_for,
+    ensure_provider,
+    missing_auth_secrets,
+)
+from core.integrations.mcp.oauth import parse_www_authenticate_challenge
+
 logger = logging.getLogger(__name__)
+
+
+def _response_needs_fresh_token(response) -> bool:
+    """A 401 — or a 403 whose Bearer challenge names ``insufficient_scope``
+    (RFC 6750) — is the server saying the token we sent is not usable. One
+    forced refresh is what the profile prescribes before giving up."""
+    if response.status_code == 401:
+        return True
+    if response.status_code == 403:
+        challenge = parse_www_authenticate_challenge(
+            response.headers.get("www-authenticate", "")
+        )
+        return (
+            challenge.get("scheme") == "bearer"
+            and challenge.get("error") == "insufficient_scope"
+        )
+    return False
+
+
+if httpx2 is not None:
+
+    class _ProviderBearerAuth(httpx2.Auth):
+        """A bearer header from the server's token provider on every request.
+
+        The first leg presents the cached (or freshly acquired) token; a 401
+        or an ``insufficient_scope`` 403 forces one serialized refresh and
+        retries the original request exactly once. There is no second retry
+        and no unsigned attempt: the header always comes from the provider,
+        or the request never leaves.
+        """
+
+        def __init__(self, provider) -> None:
+            self._provider = provider
+
+        async def async_auth_flow(self, request):
+            request.headers["Authorization"] = f"Bearer {await self._provider.bearer()}"
+            response = yield request
+            if _response_needs_fresh_token(response):
+                token = await self._provider.on_unauthorized()
+                request.headers["Authorization"] = f"Bearer {token}"
+                yield request
+
+else:
+    _ProviderBearerAuth = None
+
+
+class _HTTPTransportRun:
+    """One generation of an HTTP transport's owner-task lifecycle.
+
+    The SDK's ``streamable_http_client`` is an async context over anyio
+    cancel scopes, which are task-bound — exiting it from a different task
+    than the one that entered it raises. Disconnects happen in whatever task
+    asked for them, so the context is entered, lived in, and exited inside
+    one owner task; this object carries that generation's state so a late
+    owner can never reach into the next one."""
+
+    def __init__(self, url: str, http_client) -> None:
+        self.url = url
+        self.http_client = http_client
+        self.streams: Optional[tuple] = None
+        self.error: Optional[BaseException] = None
+        self.entered = asyncio.Event()
+        self.stop = asyncio.Event()
+
+
+def _is_streamable_http(server) -> bool:
+    """A server entry that connects over HTTP instead of a child process.
+
+    getattr, not an attribute: a service instance built before this module
+    gained the field reads as stdio, which is what it is."""
+    return getattr(server, "transport", "stdio") == "streamable-http"
+
+
+def _auth_config_for_server(server_name: str, server):
+    """The server's parsed OAuth config, or ``(None, safe_error)``.
+
+    The endpoint URL is the entry's own ``url``; the auth-block parser reads
+    it in-block, so it is injected before parsing. A block that already names
+    one keeps it."""
+    auth = dict(getattr(server, "auth", None) or {})
+    if not auth.get("server_url") and not auth.get("url"):
+        auth["server_url"] = getattr(server, "url", None) or ""
+    return auth_config_for(server_name, auth)
 
 
 class PersistentServerSession:
     """Manages a persistent connection to an MCP server."""
 
-    def __init__(self, server_name: str, server_params):
+    def __init__(self, server_name: str, server_params, *, url=None, provider=None):
         self.server_name = server_name
         self.server_params = server_params
+        # A URL server speaks streamable-HTTP instead of spawning a child:
+        # the bearer header rides every request from the server's token
+        # provider, and the HTTP client below is closed in _cleanup.
+        self.url = url
+        self.provider = provider
         self.session: Optional[ClientSession] = None
         self.read_stream = None
         self.write_stream = None
         self.stdio_context = None
+        self._transport_run: Optional[_HTTPTransportRun] = None
+        self._transport_task: Optional[asyncio.Task] = None
+        self._http_client = None
         self.session_context = None
         self.is_connected = False
         self.last_error: Optional[str] = None
@@ -55,11 +171,7 @@ class PersistentServerSession:
                 return True
 
             try:
-                # Create stdio client connection
-                self.stdio_context = stdio_client(self.server_params)
-                self.read_stream, self.write_stream = (
-                    await self.stdio_context.__aenter__()
-                )
+                self.read_stream, self.write_stream = await self._enter_transport()
 
                 # Create session
                 self.session_context = ClientSession(
@@ -82,6 +194,54 @@ class PersistentServerSession:
                 await self._cleanup()
                 return False
 
+    async def _enter_transport(self):
+        """Open this session's transport; returns ``(read_stream, write_stream)``.
+
+        URL servers stream over HTTP with the bearer header supplied per
+        request by the token provider's auth hook; command-style servers keep
+        the stdio child process. Both enter a context _cleanup exits."""
+        if self.url is not None:
+            if not HTTP_TRANSPORT_AVAILABLE:
+                raise RuntimeError(
+                    "the MCP SDK's streamable-HTTP transport is not available"
+                )
+            # One HTTP client per connection: the auth hook inside it is what
+            # makes every request token-bound and every 401 a one-shot retry.
+            self._http_client = create_mcp_http_client(
+                auth=_ProviderBearerAuth(self.provider)
+            )
+            run = _HTTPTransportRun(self.url, self._http_client)
+            self._transport_run = run
+            self._transport_task = asyncio.create_task(self._run_http_transport(run))
+            await run.entered.wait()
+            if run.streams is None:
+                self._transport_run = None
+                self._transport_task = None
+                raise run.error or RuntimeError(
+                    "the streamable-HTTP transport failed to start"
+                )
+            return run.streams
+        self.stdio_context = stdio_client(self.server_params)
+        return await self.stdio_context.__aenter__()
+
+    async def _run_http_transport(self, run: _HTTPTransportRun) -> None:
+        """Own the HTTP transport context for this connection's lifetime.
+
+        Entering, living in, and exiting the SDK's async-generator transport
+        inside one task keeps its anyio cancel scopes legal; on the way out
+        the SDK sends the DELETE that terminates the MCP session."""
+        try:
+            async with streamable_http_client(
+                run.url, http_client=run.http_client
+            ) as streams:
+                run.streams = streams
+                run.entered.set()
+                await run.stop.wait()
+        except Exception as exc:  # reported via run.error, not swallowed
+            run.error = exc
+        finally:
+            run.entered.set()
+
     async def disconnect(self):
         """Disconnect from the server."""
         async with self.lock:
@@ -102,9 +262,33 @@ class PersistentServerSession:
                 except Exception:
                     pass
 
+            # The HTTP leg goes after the session: its own teardown (the
+            # DELETE that terminates the MCP session) rides this client and
+            # needs it still open.
+            if self._transport_task is not None and self._transport_run is not None:
+                run, task = self._transport_run, self._transport_task
+                run.stop.set()
+                # Bounded: exiting terminates the MCP session over the
+                # network, and _cleanup holds the session lock. On timeout
+                # the wait_for cancellation unwinds the context in its own
+                # task, which is exactly where anyio requires it.
+                try:
+                    await asyncio.wait_for(task, timeout=10)
+                except Exception:
+                    pass
+
+            if self._http_client:
+                try:
+                    await self._http_client.aclose()
+                except Exception:
+                    pass
+
             self.session = None
             self.session_context = None
             self.stdio_context = None
+            self._transport_run = None
+            self._transport_task = None
+            self._http_client = None
             self.read_stream = None
             self.write_stream = None
             self.is_connected = False
@@ -124,6 +308,12 @@ class PersistentServerSession:
                 )
                 if not await self._reconnect_internal():
                     raise RuntimeError(f"Failed to connect to {self.server_name}")
+
+            # The token is settled before the request leaves: an issuer that
+            # will not answer fails the call here — typed, with the transport
+            # untouched — instead of tearing the SDK session down mid-request.
+            if self.provider is not None:
+                await self.provider.bearer()
 
             try:
                 result = await self.session.call_tool(tool_name, arguments)
@@ -161,8 +351,7 @@ class PersistentServerSession:
     async def _connect_internal(self) -> bool:
         """Internal connect (must be called with lock held)."""
         try:
-            self.stdio_context = stdio_client(self.server_params)
-            self.read_stream, self.write_stream = await self.stdio_context.__aenter__()
+            self.read_stream, self.write_stream = await self._enter_transport()
 
             self.session_context = ClientSession(self.read_stream, self.write_stream)
             self.session = await self.session_context.__aenter__()
@@ -264,40 +453,15 @@ class MCPClient:
 
         server = self.mcp_service.servers[server_name]
 
-        # Credential gate: if the server declared ${VAR} placeholders in
-        # its mcp-config.json entry and those env vars resolve empty,
-        # short-circuit without spawning a child. This is dormancy by
-        # design — per #124's conclusion, pre-configuration is not a
-        # failure. The UI's existing "Not Configured" treatment takes
-        # over once it sees connected=false + a missing_credentials list.
-        missing = self._missing_credentials_for(server)
-        if missing:
-            msg = f"missing credentials: {', '.join(missing)}"
-            self.last_errors[server_name] = msg
-            self.last_missing_credentials[server_name] = missing
-            logger.info(
-                "MCP server %s dormant — waiting on env vars: %s",
-                server_name,
-                ", ".join(missing),
-            )
+        session_holder = self._session_for(server_name, server)
+        if session_holder is None:
             return False
 
         try:
-            # Create stdio server parameters. stdio_client narrows the child
-            # environment to a six-name allowlist, so a CA bundle set in the
-            # backend's environment has to be forwarded rather than inherited.
-            server_params = StdioServerParameters(
-                command=server.command,
-                args=server.args,
-                env={**ca_bundle_env(), **(server.env or {})},
-            )
-
             if persistent:
                 # Create persistent session
                 if server_name not in self.persistent_sessions:
-                    self.persistent_sessions[server_name] = PersistentServerSession(
-                        server_name, server_params
-                    )
+                    self.persistent_sessions[server_name] = session_holder
 
                 # Connect. The session logs and swallows the spawn error;
                 # keep it on last_errors so a probe can report it.
@@ -313,10 +477,13 @@ class MCPClient:
 
             else:
                 # Temporary connection just to get tools
-                async with stdio_client(server_params) as (read_stream, write_stream):
+                read_stream, write_stream = await session_holder._enter_transport()
+                try:
                     async with ClientSession(read_stream, write_stream) as session:
                         await session.initialize()
                         tools_result = await session.list_tools()
+                finally:
+                    await session_holder._cleanup()
 
             # Cache tools
             self.tools_cache[server_name] = []
@@ -355,6 +522,81 @@ class MCPClient:
             self.last_errors[server_name] = f"{type(e).__name__}: {e}"
             logger.error(f"Failed to connect to {server_name}: {e}")
             return False
+
+    def _session_for(
+        self, server_name: str, server
+    ) -> Optional["PersistentServerSession"]:
+        """The session object for this server — streamable-HTTP with a token
+        provider for URL servers, stdio child parameters for command-style
+        ones — or None when the config cannot connect (already reported on
+        ``last_errors``). No transport is opened here."""
+        if _is_streamable_http(server):
+            if not HTTP_TRANSPORT_AVAILABLE:
+                self.last_errors[server_name] = (
+                    "the MCP SDK's streamable-HTTP transport is not available"
+                )
+                return None
+            if not server.url:
+                self.last_errors[server_name] = (
+                    "transport streamable-http needs a url in mcp-config.json"
+                )
+                return None
+            # An unparseable auth block is a config error, not a transport
+            # one — and never a fallback to an unsigned call.
+            config, auth_error = _auth_config_for_server(server_name, server)
+            if config is None:
+                self.last_errors[server_name] = (
+                    f"invalid auth block: {auth_error or 'no auth block'}"
+                )
+                return None
+            # Dormancy by design, the OAuth analogue of the env-var gate
+            # below: a server whose auth-block secrets do not resolve is
+            # "awaiting credentials", not a failed connection.
+            missing = missing_auth_secrets(config)
+            if missing:
+                msg = f"missing credentials: {', '.join(missing)}"
+                self.last_errors[server_name] = msg
+                self.last_missing_credentials[server_name] = missing
+                logger.info(
+                    "MCP server %s dormant — waiting on env vars: %s",
+                    server_name,
+                    ", ".join(missing),
+                )
+                return None
+            return PersistentServerSession(
+                server_name,
+                None,
+                url=server.url,
+                provider=ensure_provider(config),
+            )
+
+        # Credential gate: if the server declared ${VAR} placeholders in
+        # its mcp-config.json entry and those env vars resolve empty,
+        # short-circuit without spawning a child. This is dormancy by
+        # design — per #124's conclusion, pre-configuration is not a
+        # failure. The UI's existing "Not Configured" treatment takes
+        # over once it sees connected=false + a missing_credentials list.
+        missing = self._missing_credentials_for(server)
+        if missing:
+            msg = f"missing credentials: {', '.join(missing)}"
+            self.last_errors[server_name] = msg
+            self.last_missing_credentials[server_name] = missing
+            logger.info(
+                "MCP server %s dormant — waiting on env vars: %s",
+                server_name,
+                ", ".join(missing),
+            )
+            return None
+
+        # Create stdio server parameters. stdio_client narrows the child
+        # environment to a six-name allowlist, so a CA bundle set in the
+        # backend's environment has to be forwarded rather than inherited.
+        server_params = StdioServerParameters(
+            command=server.command,
+            args=server.args,
+            env={**ca_bundle_env(), **(server.env or {})},
+        )
+        return PersistentServerSession(server_name, server_params)
 
     def _missing_credentials_for(self, server) -> List[str]:
         # Resolves through get_secret, so a credential saved via the integration
@@ -512,6 +754,12 @@ class MCPClient:
         # OTEL span for transport-level MCP call
         _mcp_span = None
         _mcp_t0 = _time.monotonic()
+        server_entry = self.mcp_service.servers.get(server_name)
+        transport_name = (
+            "streamable-http"
+            if server_entry is not None and _is_streamable_http(server_entry)
+            else "stdio"
+        )
         try:
             from opentelemetry.trace import SpanKind
             from opentelemetry.trace import StatusCode as _SC
@@ -524,7 +772,7 @@ class MCPClient:
                 kind=SpanKind.CLIENT,
                 attributes={
                     "mcp.server.name": server_name,
-                    "mcp.transport": "stdio",
+                    "mcp.transport": transport_name,
                     "vigil.tool.name": tool_name,
                     "vigil.tool.input_size": len(_json.dumps(arguments, default=str)),
                 },
