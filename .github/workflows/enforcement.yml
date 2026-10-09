@@ -1,0 +1,47 @@
+name: Enforcement
+
+# The enforcement daemon is a standalone Go module with its own toolchain, so
+# it has its own workflow rather than steps in ci-cd.yml. Path-filtered: a PR
+# that doesn't touch the daemon doesn't pay for it. No repository condition:
+# nothing here needs a secret, so it runs on forks as well.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/enforcement/**"
+      - ".github/workflows/enforcement.yml"
+  pull_request:
+    paths:
+      - "services/enforcement/**"
+      - ".github/workflows/enforcement.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go checks and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: services/enforcement/go.mod
+          cache-dependency-path: services/enforcement/go.sum
+
+      - name: gofmt
+        # gofmt -l lists unformatted files; a non-empty list fails the step.
+        run: test -z "$(gofmt -l services/enforcement)" || { gofmt -l services/enforcement; exit 1; }
+
+      - name: go vet
+        working-directory: services/enforcement
+        run: go vet ./...
+
+      - name: go test
+        working-directory: services/enforcement
+        # The engine's decision logic is the security boundary; run it under
+        # the race detector — the enforcer serves concurrent requests.
+        run: go test -race ./...
