@@ -275,7 +275,7 @@ func TestSignalFallbackSuspendsAndResumesRealProcess(t *testing.T) {
 	if err := k.suspend(bk, pid, expiry); err != nil {
 		t.Fatalf("suspend: %v", err)
 	}
-	if state := procState(t, pid); state != "T" {
+	if state := pollState(t, pid, "T", 2*time.Second); state != "T" {
 		t.Fatalf("child state after SIGSTOP = %q, want T (stopped)", state)
 	}
 	entries, err := k.Entries(KindProcessInterdict)
@@ -294,14 +294,14 @@ func TestSignalFallbackSuspendsAndResumesRealProcess(t *testing.T) {
 	if err := k.resume(bk, os.Getpid()); err != nil {
 		t.Errorf("resume of unknown pid: %v", err)
 	}
-	if state := procState(t, pid); state != "T" {
+	if state := pollState(t, pid, "T", 2*time.Second); state != "T" {
 		t.Errorf("child state = %q, want T (unknown-pid resume must not have resumed it)", state)
 	}
 
 	if err := k.resume(bk, pid); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if state := procState(t, pid); state == "T" {
+	if state := pollStateNot(t, pid, "T", 2*time.Second); state == "T" {
 		t.Errorf("child state after resume = T, want a running state")
 	}
 }
@@ -345,7 +345,7 @@ func TestGracefulShutdownResumesSuspended(t *testing.T) {
 	if err := k.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if state := procState(t, pid); state == "T" {
+	if state := pollStateNot(t, pid, "T", 2*time.Second); state == "T" {
 		t.Errorf("child state after Close = T, want resumed (graceful shutdown must not leave processes frozen)")
 	}
 }
@@ -374,4 +374,42 @@ func encodeEngineKeyPID(pid int) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, uint64(pid))
 	return b
+}
+
+// pollState samples /proc state until it matches want or the timeout
+// elapses, returning the last observed state. Signal delivery is
+// asynchronous — the state change can trail kill(2) by a scheduler tick,
+// and a freshly started child may sit in D (uninterruptible) while the
+// kernel finishes exec — so a single read races the transition.
+func pollState(t *testing.T, pid int, want string, d time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		state := procState(t, pid)
+		if state == want {
+			return state
+		}
+		if time.Now().After(deadline) {
+			return state
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// pollStateNot samples /proc state until it LEAVES notWant or the timeout
+// elapses, returning the last observed state — the resume-side twin of
+// pollState (SIGCONT must be scheduled before the process runs again).
+func pollStateNot(t *testing.T, pid int, notWant string, d time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		state := procState(t, pid)
+		if state != notWant {
+			return state
+		}
+		if time.Now().After(deadline) {
+			return state
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
