@@ -654,7 +654,7 @@ async def set_user_roles(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Set user roles error: {e}")
+        logger.error("Set user roles error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to set user roles",
