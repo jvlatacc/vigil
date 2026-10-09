@@ -33,6 +33,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from jsonschema import Draft202012Validator
 
+from core.secrets import get_secret
 from core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ TRUST_ROOT_FORMAT = "vigil.edge.trust-root/v1"
 #: forever: a stolen signing key must age out like any other credential.
 MAX_BUNDLE_VALIDITY = timedelta(days=90)
 MAX_ENVELOPE_BYTES = 1 << 20  # 1 MiB, the medic precedent
+
+#: Where the control plane's Ed25519 signing key lives (a mounted Secret
+#: file). Read through the secrets manager so a rotated key takes effect
+#: without a code change.
+SIGNING_KEY_FILE_SECRET = "VIGIL_EDGE_SIGNING_KEY_FILE"
 
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -156,6 +162,31 @@ def build_trust_root(
         },
         "revoked_keyids": [],
     }
+
+
+def control_plane_trust_root() -> dict:
+    """Trust root for the control plane's own configured signing key.
+
+    The serve path re-proves a stored envelope against the same authority
+    that signs new bundles before handing it to a node. Read at call time
+    so a rotated key file takes effect without a restart; fail closed
+    when no key is configured.
+    """
+    path = get_secret(SIGNING_KEY_FILE_SECRET)
+    if not path:
+        raise SigningError(
+            f"{SIGNING_KEY_FILE_SECRET} is not configured; cannot verify bundles"
+        )
+    key = load_signing_key(path)
+    public_b64 = base64.b64encode(
+        key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+    ).decode()
+    now = utcnow()
+    return build_trust_root(
+        public_b64, version=1, issued_at=now, expires_at=now + timedelta(days=365)
+    )
 
 
 def sign_payload(payload: dict, private_key: Ed25519PrivateKey) -> dict:

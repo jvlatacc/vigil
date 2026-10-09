@@ -106,6 +106,9 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "VIGIL_EDGE_NODE_LABELS",
     "VIGIL_EDGE_OLLAMA_URL",
     "VIGIL_EDGE_TRUST_STORE",
+    # core/edge/signing.py reads the bundle-signing key path through the
+    # secrets manager (get_secret), not through Settings.
+    "VIGIL_EDGE_SIGNING_KEY_FILE",
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
