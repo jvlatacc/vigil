@@ -15,6 +15,7 @@ from core.storage.models.ai import (
     LLMInteractionLog,
     LLMProviderConfig,
 )
+from core.storage.models.audit import ToolCallAudit
 from core.storage.models.auth import McpCredential, Role, RoleGroupMapping, User
 from core.storage.models.base import Base, JSONBList, case_findings
 from core.storage.models.case import Case
@@ -126,6 +127,7 @@ __all__ = [
     "SketchMapping",
     "SystemConfig",
     "ThreatIndicator",
+    "ToolCallAudit",
     "User",
     "UserPreference",
     "WorkflowRun",
