@@ -13,6 +13,8 @@ type BPFConfig struct {
 	Interface string
 	// ObjectsDir holds the compiled CO-RE objects (build-bpf.sh output).
 	ObjectsDir string
+	// CgroupPath is a cgroupv2 directory for the LSM/sockops hooks.
+	CgroupPath string
 }
 
 // BPFKernel exists only so the !linux build has a return type; it can never

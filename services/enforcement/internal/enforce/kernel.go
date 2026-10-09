@@ -64,6 +64,19 @@ const MapPinDir = "/sys/fs/bpf/vigil"
 type Capability struct {
 	Supported bool   `json:"supported"`
 	Reason    string `json:"reason,omitempty"`
+	// Degraded marks a primitive enforced through a fallback mechanism —
+	// supported, but not the primary mechanism (the interdict kind's
+	// signal suspension when BPF LSM is unavailable). /healthz reports
+	// the daemon degraded while any primitive is degraded.
+	Degraded bool `json:"-"`
+}
+
+// ModeReporter is the optional kernel capability of reporting the
+// enforcement mechanism a kind uses — "bpf" for the primary mechanism, or
+// a degraded fallback ("signal"). Kernels that do not distinguish
+// mechanisms report nothing and /healthz omits the mode.
+type ModeReporter interface {
+	Mode(kind Kind) string
 }
 
 // Stats are the per-kind kernel reads behind /metrics: in-kernel counters and

@@ -310,3 +310,4 @@ services/enforcement/bpf/build/
 
 # Stray redis snapshot from local dev services.
 dump.rdb
+services/enforcement/enforcement

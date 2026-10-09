@@ -3,12 +3,14 @@
 package enforce
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,6 +71,11 @@ type bpfKindState struct {
 	// mechanism (the process-interdict signal fallback). Reported via
 	// /healthz primitives.
 	mode string
+	// suspended holds the signal fallback's live interdictions: pid ->
+	// suspension deadline. Only used when mode is "signal" — the primitive
+	// enforces by SIGSTOP instead of a BPF map, so its state is process
+	// memory, not kernel state, and a daemon restart loses it.
+	suspended map[int]time.Time
 }
 
 // BPFKernel implements Kernel against the host kernel via cilium/ebpf.
@@ -115,6 +122,12 @@ func NewBPFKernel(cfg BPFConfig, log *slog.Logger) (*BPFKernel, error) {
 	cache := btf.NewCache()
 	for _, kind := range AllKinds {
 		if err := k.loadKind(kind, cache); err != nil {
+			if kind == KindProcessInterdict {
+				if reason := interdictFallbackReason(err); reason != "" {
+					k.installSignalFallback(reason, log)
+					continue
+				}
+			}
 			log.Warn("primitive failed to load; degrading", "kind", kind, "err", err)
 			k.caps[kind] = Capability{Supported: false, Reason: probeReason(err, BPFObjectFiles[kind])}
 			continue
@@ -206,8 +219,10 @@ func (k *BPFKernel) attachKind(kind Kind, bk *bpfKindState) error {
 		return k.attachXDP(bk)
 	case KindSocketRedirect:
 		return k.attachSKMsg(bk)
+	case KindProcessInterdict:
+		return k.attachLSM(bk)
 	default:
-		return fmt.Errorf("no attach implementation for kind %s (its object ships with a later primitive)", kind)
+		return fmt.Errorf("no attach implementation for kind %s", kind)
 	}
 }
 
@@ -281,6 +296,44 @@ func (k *BPFKernel) attachSKMsg(bk *bpfKindState) error {
 	return nil
 }
 
+// attachLSM attaches the interdict object's two LSM programs (connect
+// denial and exec denial). Both attach as links; a collection that loaded
+// but cannot attach is a degrade, not a fallback — the signal fallback is
+// only for kernels that cannot load LSM BPF at all.
+func (k *BPFKernel) attachLSM(bk *bpfKindState) error {
+	connect := bk.coll.Programs["vigil_interdict_connect"]
+	if connect == nil {
+		return errors.New("object has no vigil_interdict_connect program")
+	}
+	exec := bk.coll.Programs["vigil_interdict_exec"]
+	if exec == nil {
+		return errors.New("object has no vigil_interdict_exec program")
+	}
+	for name, prog := range map[string]*ebpf.Program{
+		"connect": connect,
+		"exec":    exec,
+	} {
+		l, err := link.AttachLSM(link.LSMOptions{Program: prog})
+		if err != nil {
+			return fmt.Errorf("lsm %s attach: %w", name, err)
+		}
+		bk.extraLinks = append(bk.extraLinks, l)
+	}
+	bk.attachPoint = k.cgroupPath + "/lsm"
+	return nil
+}
+
+// Mode reports the enforcement mechanism a kind uses (ModeReporter):
+// "bpf" for the primary mechanism, "signal" for the interdict kind's
+// degraded fallback, empty when the kind is not loaded at all.
+func (k *BPFKernel) Mode(kind Kind) string {
+	bk, err := k.state(kind)
+	if err != nil {
+		return ""
+	}
+	return bk.mode
+}
+
 // SetSink inserts the connected sink socket at sockmap index 0 — the
 // redirect target for enrolled flows (SinkSetter).
 func (k *BPFKernel) SetSink(conn net.Conn) error {
@@ -326,6 +379,121 @@ func (k *BPFKernel) MarkDegraded(kind Kind, reason string) {
 	k.caps[kind] = Capability{Supported: false, Reason: reason}
 }
 
+// interdictFallbackReason reports why the process-interdict kind should
+// degrade to the signal fallback, or "" when the error is not an LSM
+// availability failure — a build or environment failure must degrade
+// plainly, never silently change the enforcement mechanism.
+func interdictFallbackReason(err error) string {
+	switch {
+	case errors.Is(err, unix.EPERM),
+		errors.Is(err, unix.EINVAL),
+		errors.Is(err, unix.EOPNOTSUPP),
+		errors.Is(err, unix.ENOTSUP):
+		return "BPF LSM unavailable (needs CONFIG_BPF_LSM and \"bpf\" in the kernel's lsm= parameter): " + err.Error()
+	}
+	return ""
+}
+
+// installSignalFallback arms the process-interdict signal fallback: the
+// host cannot load BPF LSM programs, so the primitive enforces by
+// SIGSTOP-ing the target PID and resuming it on release or expiry — the
+// degraded mechanism the spec designs for LSM-less kernels. The state is
+// process memory, not kernel state: a graceful shutdown resumes suspended
+// processes, but a crash cannot (documented limitation — the BPF path's
+// "kernel state survives the daemon" property is exactly what the
+// fallback trades away for availability).
+func (k *BPFKernel) installSignalFallback(reason string, log *slog.Logger) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.kinds[KindProcessInterdict] = &bpfKindState{
+		mode:        "signal",
+		attachPoint: "pid/signal",
+		suspended:   make(map[int]time.Time),
+	}
+	k.caps[KindProcessInterdict] = Capability{Supported: true, Degraded: true, Reason: reason}
+	log.Warn("process interdiction degraded to signal-based suspension",
+		"reason", reason,
+		"note", "active suspensions do not survive a daemon restart; graceful shutdown resumes them")
+}
+
+// suspend SIGSTOPs the target PID and records the suspension deadline
+// (signal mode). The SIGSTOP is sent before recording: a process that
+// exits mid-suspension leaves a stale record the reconciler's resume
+// handles quietly.
+func (k *BPFKernel) suspend(bk *bpfKindState, pid int, expiry time.Time) error {
+	if pid < 1 || pid > maxPID {
+		return fmt.Errorf("interdict key is not a PID: %d", pid)
+	}
+	if err := unix.Kill(pid, unix.SIGSTOP); err != nil {
+		return fmt.Errorf("SIGSTOP %d: %w", pid, err)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	bk.suspended[pid] = expiry
+	return nil
+}
+
+// resume SIGCONTs a suspended PID and forgets it. Missing records are
+// quiet — releases are idempotent, and a process that exited while
+// suspended is already gone.
+func (k *BPFKernel) resume(bk *bpfKindState, pid int) error {
+	k.mu.Lock()
+	_, known := bk.suspended[pid]
+	delete(bk.suspended, pid)
+	k.mu.Unlock()
+	if !known {
+		return nil
+	}
+	if err := unix.Kill(pid, unix.SIGCONT); err != nil && !errors.Is(err, unix.ESRCH) {
+		return fmt.Errorf("SIGCONT %d: %w", pid, err)
+	}
+	return nil
+}
+
+// cgroupIDOf resolves the cgroup v2 id of the cgroup containing pid —
+// the kernfs inode number bpf_get_current_cgroup_id() reports. Requires
+// cgroup v2 and a /proc that shows the target process (in containers the
+// daemon must run with the host PID namespace); cgroup v1 hosts degrade
+// the LSM primitive at startup instead.
+func cgroupIDOf(pid int) (uint64, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return 0, err
+	}
+	cgid, ok := parseCgroupV2ID(data)
+	if !ok {
+		return 0, fmt.Errorf("pid %d has no cgroup v2 entry (cgroup v1 hosts are unsupported for the LSM primitive)", pid)
+	}
+	return cgid, nil
+}
+
+// parseCgroupV2ID extracts the cgroup id from /proc/<pid>/cgroup content —
+// v2 lines read "0::<path>" with no controller fields; v1 lines name a
+// controller in field 2. Pure so the parsing rules are testable without
+// /proc.
+func parseCgroupV2ID(data []byte) (uint64, bool) {
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) == 3 && parts[0] == "0" && parts[1] == "" && parts[2] != "" {
+			var st unix.Stat_t
+			if err := unix.Stat(parts[2], &st); err != nil {
+				return 0, false
+			}
+			return st.Ino, true
+		}
+	}
+	return 0, false
+}
+
+// encodeNativeU64 renders a u64 in host byte order — what the BPF programs
+// compare when they look up a register value (bpf_get_current_cgroup_id())
+// in the map.
+func encodeNativeU64(v uint64) []byte {
+	b := make([]byte, 8)
+	binary.NativeEndian.PutUint64(b, v)
+	return b
+}
+
 func (k *BPFKernel) MapUpdate(kind Kind, key, value []byte) (string, int, error) {
 	bk, err := k.state(kind)
 	if err != nil {
@@ -338,6 +506,24 @@ func (k *BPFKernel) MapUpdate(kind Kind, key, value []byte) (string, int, error)
 	expiry, err := decodeExpiry(value)
 	if err != nil {
 		return "", 0, err
+	}
+	if bk.mode == "signal" {
+		// Signal fallback: the "map" is process memory — suspend the
+		// target PID and record the deadline for the reconciler.
+		if err := k.suspend(bk, int(binary.BigEndian.Uint64(norm)), expiry); err != nil {
+			return "", 0, err
+		}
+		return bk.attachPoint, 0, nil
+	}
+	if kind == KindProcessInterdict {
+		// cgroup-scoped LSM enforcement: the map key is the target PID's
+		// cgroup id — what the LSM programs compare against
+		// bpf_get_current_cgroup_id() — written host-native.
+		cgid, err := cgroupIDOf(int(binary.BigEndian.Uint64(norm)))
+		if err != nil {
+			return "", 0, fmt.Errorf("resolving cgroup for interdict: %w", err)
+		}
+		norm = encodeNativeU64(cgid)
 	}
 	if err := bk.mainMap.Update(norm, uint64(expiry.Unix()), ebpf.UpdateAny); err != nil {
 		return "", 0, fmt.Errorf("update %s: %w", kind.mapName(), err)
@@ -357,6 +543,21 @@ func (k *BPFKernel) Release(kind Kind, key []byte) error {
 	if err != nil {
 		return err
 	}
+	if bk.mode == "signal" {
+		return k.resume(bk, int(binary.BigEndian.Uint64(norm)))
+	}
+	if kind == KindProcessInterdict {
+		// Release re-resolves the PID: an unblock acts on the cgroup the
+		// target lives in now. If the process died, resolution fails and
+		// the release errors — the entry expires by TTL instead; the
+		// reconciler path (Evict) deletes by raw map key with no
+		// resolution, so expiry never depends on the process being alive.
+		cgid, err := cgroupIDOf(int(binary.BigEndian.Uint64(norm)))
+		if err != nil {
+			return fmt.Errorf("resolving cgroup for interdict release: %w", err)
+		}
+		norm = encodeNativeU64(cgid)
+	}
 	if err := bk.mainMap.Delete(norm); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
 		return fmt.Errorf("delete %s: %w", kind.mapName(), err)
 	}
@@ -375,6 +576,17 @@ func (k *BPFKernel) Stats(kind Kind) (Stats, error) {
 	bk, err := k.state(kind)
 	if err != nil {
 		return Stats{}, err
+	}
+	if bk.mode == "signal" {
+		// No in-kernel counter exists in signal mode — the truthful read
+		// is zero denials; occupancy is the suspended-process count.
+		k.mu.Lock()
+		occupancy := len(bk.suspended)
+		k.mu.Unlock()
+		return Stats{
+			Counters:  map[string]uint64{bpfCounterMaps[kind]: 0},
+			Occupancy: occupancy,
+		}, nil
 	}
 	var cpus []uint64
 	if err := bk.counterMap.Lookup(uint32(0), &cpus); err != nil {
@@ -412,6 +624,19 @@ func (k *BPFKernel) Entries(kind Kind) ([]MapEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	if bk.mode == "signal" {
+		// Signal fallback: the entries live in process memory; keys are
+		// the engine's big-endian PID encoding, so Evict round-trips.
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		out := []MapEntry{}
+		for pid, deadline := range bk.suspended {
+			b := make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(pid))
+			out = append(out, MapEntry{Key: b, Expiry: deadline})
+		}
+		return out, nil
+	}
 	it := bk.mainMap.Iterate()
 	out := []MapEntry{}
 	key := make([]byte, bk.keySize)
@@ -431,9 +656,26 @@ func (k *BPFKernel) Entries(kind Kind) ([]MapEntry, error) {
 	return out, nil
 }
 
-// Evict implements mapStore; eviction at map level is a Release.
+// Evict implements mapStore. For the interdict kind the reconciler hands
+// back the raw map key — a cgroup id (BPF mode) or a PID (signal mode) —
+// which must be evicted directly, never re-resolved from the engine's
+// target encoding: expiry must not depend on the process being alive.
+// For the other kinds eviction is a plain Release (keys are identical).
 func (k *BPFKernel) Evict(kind Kind, key []byte) error {
-	return k.Release(kind, key)
+	if kind != KindProcessInterdict {
+		return k.Release(kind, key)
+	}
+	bk, err := k.state(kind)
+	if err != nil {
+		return err
+	}
+	if bk.mode == "signal" {
+		return k.resume(bk, int(binary.BigEndian.Uint64(key)))
+	}
+	if err := bk.mainMap.Delete(key); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+		return fmt.Errorf("delete %s: %w", kind.mapName(), err)
+	}
+	return nil
 }
 
 // Reconcile refreshes the datapath clock and evicts expired entries. main
@@ -479,6 +721,18 @@ func (k *BPFKernel) Close() error {
 	defer k.mu.Unlock()
 	var errs []error
 	for kind, bk := range k.kinds {
+		if bk.coll == nil {
+			// Signal fallback state: resume suspended processes — a
+			// graceful shutdown must not leave them frozen. A crash
+			// cannot resume; that limitation is documented at install.
+			for pid := range bk.suspended {
+				delete(bk.suspended, pid)
+				if err := unix.Kill(pid, unix.SIGCONT); err != nil && !errors.Is(err, unix.ESRCH) {
+					errs = append(errs, fmt.Errorf("%s: resuming pid %d: %w", kind, pid, err))
+				}
+			}
+			continue
+		}
 		if bk.link != nil {
 			if err := bk.link.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("%s: closing link: %w", kind, err))

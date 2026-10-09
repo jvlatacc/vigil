@@ -3,12 +3,20 @@
 package enforce
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // mapKeyFor is the loader's key normalizer: engine-minimal keys in, fixed
@@ -108,4 +116,237 @@ func TestExpiredEntriesBoundary(t *testing.T) {
 	if string(got[0].Key) != "expires-exactly-now" || string(got[1].Key) != "long-gone" {
 		t.Errorf("expired keys = %v, want the exactly-now and long-gone entries", got)
 	}
+}
+
+// TestInterdictFallbackReasonClassifiesLSMFailures pins the fallback
+// classifier: kernel LSM-availability errnos degrade to the signal
+// fallback; anything else must surface as a plain load failure.
+func TestInterdictFallbackReasonClassifiesLSMFailures(t *testing.T) {
+	classified := []error{unix.EPERM, unix.EINVAL, unix.EOPNOTSUPP, unix.ENOTSUP}
+	for _, err := range classified {
+		wrapped := fmt.Errorf("load program: %w", err)
+		if got := interdictFallbackReason(wrapped); got == "" {
+			t.Errorf("interdictFallbackReason(%v) = \"\", want an LSM-unavailable reason", wrapped)
+		}
+	}
+	unclassified := []error{
+		errors.New("boom"),
+		os.ErrNotExist,
+		fmt.Errorf("open %s: %w", "/tmp/x", os.ErrPermission),
+		unix.ESRCH,
+	}
+	for _, err := range unclassified {
+		if got := interdictFallbackReason(err); got != "" {
+			t.Errorf("interdictFallbackReason(%v) = %q, want \"\" (plain failure must not degrade)", err, got)
+		}
+	}
+}
+
+// TestParseCgroupV2IDExtractsInode covers the /proc/<pid>/cgroup parser
+// against real directory inodes (v2), cgroup-v1 layouts, and garbage.
+func TestParseCgroupV2ID(t *testing.T) {
+	dir := t.TempDir()
+	want := inodeOf(t, dir)
+
+	cases := []struct {
+		name    string
+		content string
+		wantID  uint64
+		wantOK  bool
+	}{
+		{"v2 entry", fmt.Sprintf("0::%s\n", dir), want, true},
+		{"v2 entry without trailing newline", fmt.Sprintf("0::%s", dir), want, true},
+		{"v1 layout has no v2 line", "12:pids:/user.slice\n11:cpuset:/\n", 0, false},
+		{"v2 path missing on disk", "0::/nonexistent-vigil-test-path\n", 0, false},
+		{"garbage", "hello\nworld\n", 0, false},
+		{"empty", "", 0, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseCgroupV2ID([]byte(tc.content))
+			if ok != tc.wantOK || (ok && got != tc.wantID) {
+				t.Errorf("parseCgroupV2ID = (%d, %v), want (%d, %v)", got, ok, tc.wantID, tc.wantOK)
+			}
+		})
+	}
+}
+
+// inodeOf is the test's own inode lookup (same mechanism the parser
+// relies on: the kernfs inode number is the cgroup id).
+func inodeOf(t *testing.T, path string) uint64 {
+	t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return st.Ino
+}
+
+// signalFallbackKernel is a BPFKernel with no loaded collections: exactly
+// the state installSignalFallback arms on an LSM-less host.
+func signalFallbackKernel() *BPFKernel {
+	return &BPFKernel{
+		iface: "eth0",
+		kinds: map[Kind]*bpfKindState{},
+		caps:  map[Kind]Capability{},
+	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// TestSignalFallbackReportsDegradedMode checks the observable state after
+// the fallback arms: the kind enforces through "signal" mode, stays
+// supported-but-degraded with a reason, and reports zero denials with the
+// truthful empty occupancy.
+func TestSignalFallbackReportsDegradedMode(t *testing.T) {
+	k := signalFallbackKernel()
+	k.installSignalFallback("unit-test: LSM unavailable", discardLogger())
+
+	if got := k.Mode(KindProcessInterdict); got != "signal" {
+		t.Errorf("Mode = %q, want signal", got)
+	}
+	capability := k.Capability(KindProcessInterdict)
+	if !capability.Supported || !capability.Degraded || capability.Reason == "" {
+		t.Errorf("Capability = %+v, want supported degraded with a reason", capability)
+	}
+	stats, err := k.Stats(KindProcessInterdict)
+	if err != nil {
+		t.Fatalf("Stats: %v", err)
+	}
+	if got := stats.Counters["denied_ops"]; got != 0 {
+		t.Errorf("denied_ops = %d, want 0 (no in-kernel counter exists in signal mode)", got)
+	}
+	if stats.Occupancy != 0 {
+		t.Errorf("occupancy = %d, want 0", stats.Occupancy)
+	}
+	entries, err := k.Entries(KindProcessInterdict)
+	if err != nil {
+		t.Fatalf("Entries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("entries = %d, want 0", len(entries))
+	}
+}
+
+// TestSignalFallbackSuspendsAndResumesRealProcess exercises the fallback
+// against a child process we own: SIGSTOP must freeze it (state T),
+// release must resume it, and unknown releases must be quiet.
+func TestSignalFallbackSuspendsAndResumesRealProcess(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start a child process here: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	pid := cmd.Process.Pid
+
+	k := signalFallbackKernel()
+	k.installSignalFallback("unit-test", discardLogger())
+	bk := k.kinds[KindProcessInterdict]
+
+	expiry := fixedNow.Add(time.Hour)
+	if err := k.suspend(bk, pid, expiry); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	if state := procState(t, pid); state != "T" {
+		t.Fatalf("child state after SIGSTOP = %q, want T (stopped)", state)
+	}
+	entries, err := k.Entries(KindProcessInterdict)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("Entries = (%d, %v), want 1 suspended entry", len(entries), err)
+	}
+	if !bytes.Equal(entries[0].Key, encodeEngineKeyPID(pid)) {
+		t.Errorf("entry key = % x, want the engine's big-endian PID encoding % x", entries[0].Key, encodeEngineKeyPID(pid))
+	}
+	if !entries[0].Expiry.Equal(expiry) {
+		t.Errorf("entry expiry = %v, want %v (the reconciler evicts by this deadline)", entries[0].Expiry, expiry)
+	}
+
+	// Releasing an unknown pid is quiet and must not signal our own
+	// (running) test process.
+	if err := k.resume(bk, os.Getpid()); err != nil {
+		t.Errorf("resume of unknown pid: %v", err)
+	}
+	if state := procState(t, pid); state != "T" {
+		t.Errorf("child state = %q, want T (unknown-pid resume must not have resumed it)", state)
+	}
+
+	if err := k.resume(bk, pid); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if state := procState(t, pid); state == "T" {
+		t.Errorf("child state after resume = T, want a running state")
+	}
+}
+
+// TestSignalFallbackSuspendRefusesNonPIDs pins target validation: a key
+// that is not a PID is refused before any signal is sent.
+func TestSignalFallbackSuspendRefusesNonPIDs(t *testing.T) {
+	k := signalFallbackKernel()
+	k.installSignalFallback("unit-test", discardLogger())
+	bk := k.kinds[KindProcessInterdict]
+	for _, pid := range []int{0, -1, maxPID + 1} {
+		if err := k.suspend(bk, pid, fixedNow.Add(time.Hour)); err == nil {
+			t.Errorf("suspend(pid=%d) = nil, want refusal", pid)
+		}
+	}
+	if len(bk.suspended) != 0 {
+		t.Errorf("suspended = %d entries, want 0 (refusals must not record)", len(bk.suspended))
+	}
+}
+
+// TestGracefulShutdownResumesSuspended pins the shutdown contract: Close
+// resumes every process the fallback froze.
+func TestGracefulShutdownResumesSuspended(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot start a child process here: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	pid := cmd.Process.Pid
+
+	k := signalFallbackKernel()
+	k.installSignalFallback("unit-test", discardLogger())
+	bk := k.kinds[KindProcessInterdict]
+	if err := k.suspend(bk, pid, fixedNow.Add(time.Hour)); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+
+	if err := k.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if state := procState(t, pid); state == "T" {
+		t.Errorf("child state after Close = T, want resumed (graceful shutdown must not leave processes frozen)")
+	}
+}
+
+// procState reads /proc/<pid>/stat's state letter (field 3, after the
+// parenthesized comm which may itself contain spaces).
+func procState(t *testing.T, pid int) string {
+	t.Helper()
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		t.Fatalf("reading /proc/%d/stat: %v", pid, err)
+	}
+	s := string(data)
+	idx := strings.LastIndex(s, ")")
+	if idx < 0 || idx+2 >= len(s) {
+		t.Fatalf("unexpected stat format: %q", s)
+	}
+	return strings.TrimSpace(s[idx+2:])
+}
+
+// encodeEngineKeyPID is the engine's PID target encoding (big-endian u64)
+// — the same bytes mapKeyFor passes through for the interdict kind.
+func encodeEngineKeyPID(pid int) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint64(b, uint64(pid))
+	return b
 }

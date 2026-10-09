@@ -103,6 +103,17 @@ type Enforcer struct {
 	order   []string // insertion order for List
 }
 
+// Mode reports the enforcement mechanism the kernel uses for kind —
+// forwarded from the kernel's ModeReporter when it has one; empty
+// otherwise. /healthz renders it so a degraded fallback mechanism is
+// visible, never masked by a bare "supported".
+func (e *Enforcer) Mode(kind Kind) string {
+	if mr, ok := e.kernel.(ModeReporter); ok {
+		return mr.Mode(kind)
+	}
+	return ""
+}
+
 // NewEnforcer builds an Enforcer over a Kernel. defaultTTL fills requests
 // that omit ttl_seconds; it must be at least TTLFloor.
 func NewEnforcer(kernel Kernel, defaultTTL time.Duration) *Enforcer {
