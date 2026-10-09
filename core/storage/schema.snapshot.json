@@ -250,6 +250,10 @@
       "data_type": "jsonb",
       "nullable": true
     },
+    "expires_at": {
+      "data_type": "timestamp with time zone",
+      "nullable": true
+    },
     "idempotency_key": {
       "data_type": "text",
       "nullable": true
