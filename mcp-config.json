@@ -51,8 +51,9 @@
 
     "sentinelone": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/Sentinel-One/purple-mcp.git@v0.7.0", "purple-mcp", "--mode", "stdio"],
+      "args": ["--from", "git+https://github.com/Sentinel-One/purple-mcp.git@07d4992089b10affff6163f296b1f6cb5734539f", "purple-mcp", "--mode", "stdio"],
       "env": {
+        "_security_note": "git ref pinned to the full commit SHA that tag v0.7.0 resolved to (2026-06-26, the latest upstream tag) — tags are server-side mutable, commit SHAs are not.",
         "PURPLEMCP_CONSOLE_TOKEN": "${SENTINELONE_API_TOKEN}",
         "PURPLEMCP_CONSOLE_BASE_URL": "${SENTINELONE_CONSOLE_URL}"
       }
@@ -144,7 +145,8 @@
       "command": "uv",
       "args": ["--directory", "${HOME}/mcp-servers/joesandboxMCP", "run", "main.py"],
       "env": {
-        "_setup_note": "Clone first: git clone https://github.com/joesecurity/joesandboxMCP.git ~/mcp-servers/joesandboxMCP && cd ~/mcp-servers/joesandboxMCP && uv venv && uv pip install -e .",
+        "_setup_note": "Clone first: git clone https://github.com/joesecurity/joesandboxMCP.git ~/mcp-servers/joesandboxMCP && cd ~/mcp-servers/joesandboxMCP && git checkout d4c50a7b1368a43a245d7ead5f47feacccb7e015 && uv venv && uv pip install -e .",
+        "_security_note": "The clone is pinned: joesecurity/joesandboxMCP publishes no tags, so the checkout SHA (default-branch HEAD on 2026-10-09, last commit 2025-07-10) is the pin. Re-verify the SHA upstream before moving it — the pins ratchet requires a full 40-hex commit in this note.",
         "JBXAPIKEY": "${JOE_SANDBOX_API_KEY}",
         "ACCEPTTAC": "TRUE"
       }

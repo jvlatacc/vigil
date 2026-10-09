@@ -2,7 +2,7 @@
 # `uv tool install` per line, at the exact specs it pins.
 # tests/unit/_ratchets/test_mcp_runtime_pins.py keeps the two in step.
 falcon-mcp==0.19.0
-git+https://github.com/Sentinel-One/purple-mcp.git@v0.7.0
+git+https://github.com/Sentinel-One/purple-mcp.git@07d4992089b10affff6163f296b1f6cb5734539f
 pagerduty-mcp==1.1.0
 google-secops-mcp==0.7.1 --with mcp==1.29.1
 gti-mcp==0.1.3 --with mcp==1.29.1
