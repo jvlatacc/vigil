@@ -654,6 +654,133 @@ def create_containment_actions(conn):
 
 
 # ---------------------------------------------------------------------------
+# digital-twin tables (twin_devices / twin_processes / twin_connections)
+# ---------------------------------------------------------------------------
+
+
+@migration("Create digital-twin tables")
+def create_digital_twin_tables(conn):
+    """The digital twin's device/process/connection tables.
+
+    create_all builds them on fresh installs; this step carries them to
+    upgraded databases, which create_all never alters (and
+    create_missing_tables above normally covers first — this step keeps the
+    twin's DDL explicit and self-sufficient, the same belt as
+    containment_actions). The guards mirror the house pattern: the existence
+    checks run before any DDL, so an unprivileged role fails nothing on a
+    database that is already current. 42_digital_twin.sql builds them on
+    Helm; this step covers a database that init SQL never reached.
+    """
+    if not _table_exists(conn, "twin_devices"):
+        conn.execute(text("""
+            CREATE TABLE twin_devices (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                device_key VARCHAR(255) NOT NULL,
+                hostname TEXT,
+                ip_address VARCHAR(45),
+                mac_address VARCHAR(32),
+                serial_number VARCHAR(64),
+                device_type VARCHAR(30) NOT NULL DEFAULT 'unknown',
+                os_info TEXT,
+                source VARCHAR(50) NOT NULL,
+                first_seen TIMESTAMP NOT NULL DEFAULT now(),
+                last_seen TIMESTAMP NOT NULL DEFAULT now(),
+                attributes JSONB
+            );
+        """))
+    if not _table_exists(conn, "twin_processes"):
+        conn.execute(text("""
+            CREATE TABLE twin_processes (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                process_key VARCHAR(255) NOT NULL,
+                device_id UUID NOT NULL REFERENCES twin_devices (id) ON DELETE CASCADE,
+                pid INTEGER NOT NULL,
+                name VARCHAR(255) NOT NULL,
+                "user" VARCHAR(100),
+                command TEXT,
+                started_at TIMESTAMP,
+                source VARCHAR(50) NOT NULL,
+                first_seen TIMESTAMP NOT NULL DEFAULT now(),
+                last_seen TIMESTAMP NOT NULL DEFAULT now(),
+                attributes JSONB
+            );
+        """))
+    if not _table_exists(conn, "twin_connections"):
+        conn.execute(text("""
+            CREATE TABLE twin_connections (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                connection_key VARCHAR(255) NOT NULL,
+                device_id UUID NOT NULL REFERENCES twin_devices (id) ON DELETE CASCADE,
+                process_id UUID REFERENCES twin_processes (id) ON DELETE SET NULL,
+                connection_type VARCHAR(16) NOT NULL,
+                protocol VARCHAR(16),
+                local_ip VARCHAR(45),
+                local_port INTEGER,
+                remote_ip VARCHAR(45),
+                remote_port INTEGER,
+                state VARCHAR(30),
+                direction VARCHAR(10),
+                source VARCHAR(50) NOT NULL,
+                started_at TIMESTAMP,
+                first_seen TIMESTAMP NOT NULL DEFAULT now(),
+                last_seen TIMESTAMP NOT NULL DEFAULT now(),
+                attributes JSONB,
+                CONSTRAINT ck_twin_connections_connection_type
+                    CHECK (connection_type IN ('socket', 'stream', 'session'))
+            );
+        """))
+    for name, index_ddl in (
+        (
+            "uniq_twin_devices_device_key",
+            "CREATE UNIQUE INDEX uniq_twin_devices_device_key"
+            " ON twin_devices (device_key)",
+        ),
+        (
+            "idx_twin_devices_ip_address",
+            "CREATE INDEX idx_twin_devices_ip_address" " ON twin_devices (ip_address)",
+        ),
+        (
+            "idx_twin_devices_mac_address",
+            "CREATE INDEX idx_twin_devices_mac_address"
+            " ON twin_devices (mac_address)",
+        ),
+        (
+            "idx_twin_devices_serial_number",
+            "CREATE INDEX idx_twin_devices_serial_number"
+            " ON twin_devices (serial_number)",
+        ),
+        (
+            "uniq_twin_processes_process_key",
+            "CREATE UNIQUE INDEX uniq_twin_processes_process_key"
+            " ON twin_processes (process_key)",
+        ),
+        (
+            "idx_twin_processes_device_pid",
+            "CREATE INDEX idx_twin_processes_device_pid"
+            " ON twin_processes (device_id, pid)",
+        ),
+        (
+            "uniq_twin_connections_connection_key",
+            "CREATE UNIQUE INDEX uniq_twin_connections_connection_key"
+            " ON twin_connections (connection_key)",
+        ),
+        (
+            "idx_twin_connections_device_type",
+            "CREATE INDEX idx_twin_connections_device_type"
+            " ON twin_connections (device_id, connection_type)",
+        ),
+        (
+            "idx_twin_connections_remote_ip",
+            "CREATE INDEX idx_twin_connections_remote_ip"
+            " ON twin_connections (remote_ip)",
+        ),
+    ):
+        if _index_exists(conn, name):
+            continue
+        conn.execute(text(index_ddl + ";"))
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
