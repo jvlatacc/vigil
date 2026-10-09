@@ -433,6 +433,173 @@ _INTEL_TOOLS: Dict[str, Callable[[Args], Any]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Decoy-session intel — the read side of the MTD capture plane.
+#
+# The capture pipeline (core.cases.decoy_session_capture) writes one Finding
+# (data_source="vigil-decoy", the session id as its finding_id) and one
+# CaseEvidence transcript per session; the two are joined by the evidence
+# name the capture pipeline builds deterministically. Rows are shaped with an
+# explicit allowlist, so the transcript's bulk ``raw`` capture stays in the
+# evidence row — the analyst's drill-down — and never leaves the store here.
+#
+# The read is principal-scoped: decoy transcripts are evidence (attacker-typed
+# credentials ride in them as payload), so a call with nobody bound — a hunt —
+# is refused rather than answered. approve_action's rule, on a read.
+# ---------------------------------------------------------------------------
+
+# The listing ceiling, mirroring propose_feed_hunts' cap.
+_DECOY_SESSIONS_MAX_LIMIT = 200
+
+
+def _decoy_transcript_key(decoy_service: str, session_id: str) -> str:
+    """The evidence name the capture pipeline gives one session's transcript.
+
+    Mirrors ``decoy_session_capture``'s ``f"decoy {service} session {id}"`` —
+    that module is the definition site; the capture-wire test pins the
+    agreement.
+    """
+    return f"decoy {decoy_service} session {session_id}"
+
+
+def _decoy_session_row(finding: Any, transcript: Optional[Any]) -> Args:
+    """One captured decoy session, shaped for the analyst. Pure."""
+    meta = finding.source_metadata or {}
+    row: Args = {
+        "session_id": finding.finding_id,
+        "decoy_service": meta.get("decoy_service"),
+        "attacker_entity_key": meta.get("attacker_entity_key"),
+        "session_start": meta.get("session_start"),
+        "session_end": meta.get("session_end"),
+        "routing_action_id": meta.get("routing_action_id"),
+        "severity": finding.severity,
+        "mitre_predictions": [
+            {"technique_id": p.technique_id, "confidence": p.confidence}
+            for p in (getattr(finding, "mitre_prediction_rows", None) or [])
+        ],
+    }
+    if transcript is not None:
+        results = transcript.analysis_results or {}
+        row.update(
+            {
+                "auth_attempts": results.get("auth_attempts"),
+                "commands": results.get("commands"),
+                "files_dropped": results.get("files_dropped"),
+                "mitre_names": results.get("mitre_names"),
+                "evidence_id": transcript.evidence_id,
+            }
+        )
+    return row
+
+
+def _captured_decoy_sessions(
+    db: Any,
+    *,
+    session_id: Optional[str] = None,
+    decoy_service: Optional[str] = None,
+    limit: int = 20,
+) -> Args:
+    """Query and shape the captured sessions. ``db`` is a SQLAlchemy session.
+
+    Identity and window come from the Findings; what the attacker did comes
+    from the matching transcripts, found by name. A session whose transcript
+    row is missing still returns — with its ATT&CK predictions and no activity
+    — because a half-joined answer names its gap instead of hiding the session.
+    """
+    from core.cases.decoy_session_capture import (
+        DECOY_EVIDENCE_TYPE,
+        DECOY_SESSION_DATA_SOURCE,
+    )
+    from core.storage.models import CaseEvidence, Finding
+
+    has_more = False
+    if session_id:
+        finding = db.get(Finding, session_id)
+        if finding is None or finding.data_source != DECOY_SESSION_DATA_SOURCE:
+            return {
+                "returned": 0,
+                "has_more": False,
+                "limit": limit,
+                "sessions": [],
+            }
+        findings = [finding]
+    else:
+        query = db.query(Finding).filter(
+            Finding.data_source == DECOY_SESSION_DATA_SOURCE
+        )
+        if decoy_service:
+            # source_metadata is JSONB; the path access is Postgres-native.
+            query = query.filter(
+                Finding.source_metadata["decoy_service"].as_string() == decoy_service
+            )
+        # One row past the limit is the honest has_more, not a second count.
+        found = query.order_by(Finding.timestamp.desc()).limit(limit + 1).all()
+        has_more = len(found) > limit
+        findings = found[:limit]
+
+    by_name: Dict[str, str] = {}
+    for finding in findings:
+        service = (finding.source_metadata or {}).get("decoy_service")
+        if service:
+            by_name[_decoy_transcript_key(service, finding.finding_id)] = (
+                finding.finding_id
+            )
+    transcripts: Dict[str, Any] = {}
+    if by_name:
+        rows = (
+            db.query(CaseEvidence)
+            .filter(
+                CaseEvidence.evidence_type == DECOY_EVIDENCE_TYPE,
+                CaseEvidence.name.in_(list(by_name)),
+            )
+            .all()
+        )
+        transcripts = {by_name[row.name]: row for row in rows if row.name in by_name}
+
+    sessions = [
+        _decoy_session_row(finding, transcripts.get(finding.finding_id))
+        for finding in findings
+    ]
+    return {
+        "returned": len(sessions),
+        "has_more": has_more,
+        "limit": limit,
+        "sessions": sessions,
+    }
+
+
+def query_decoy_sessions(
+    *,
+    session_id: Optional[str] = None,
+    decoy_service: Optional[str] = None,
+    limit: int = 20,
+) -> Args:
+    """Read decoy sessions captured by the MTD capture plane, newest first.
+
+    Read-only, and principal-scoped: decoy transcripts are evidence, so a
+    call with no principal bound is refused — an unattributed read of captured
+    attacker activity is exactly what attribution exists to prevent.
+    """
+    if current_caller() is None:
+        logger.warning("query_decoy_sessions refused an unattributed caller")
+        return {"error": "Decoy sessions cannot be read: no principal is bound"}
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        return {"error": f"limit must be an integer, got {limit!r}"}
+    limit = max(1, min(limit, _DECOY_SESSIONS_MAX_LIMIT))
+
+    from core.storage.unit_of_work import unit_of_work
+
+    with unit_of_work() as session:
+        return _captured_decoy_sessions(
+            session,
+            session_id=session_id,
+            decoy_service=decoy_service,
+            limit=limit,
+        )
+
+
 # Episodic memory (#732). One mapping and not a list of rows, so
 # tools_router._rows does not slice the Sightings, Verdicts and Gaps into rows of
 # their own and lose which list each came from. The import is deferred as the
@@ -557,6 +724,7 @@ _OWNED = frozenset(
         "approve_action",
         "reject_action",
         "get_approval_stats",
+        "query_decoy_sessions",
     }
 )
 
