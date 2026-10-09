@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import lazyload, noload, selectinload
@@ -22,6 +22,7 @@ from core.storage.models import (
     Case,
     Finding,
     FindingMitrePrediction,
+    case_findings,
 )
 from core.storage.schemas import FindingSchema
 from core.time import utcnow
@@ -57,6 +58,36 @@ def _numeric_prediction_items(mitre_predictions: Any) -> List[tuple[str, float]]
             continue
         items.append((str(key), float(value)))
     return items
+
+
+def _wazuh_finding_predicates(
+    *,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    timestamp_start: Optional[datetime] = None,
+    timestamp_end: Optional[datetime] = None,
+) -> list:
+    """Predicates selecting Wazuh-origin findings under the enumeration filters.
+
+    Shared by the page, count, case-EXISTS, and summary queries so all four
+    answer the same question. The vendor lives in source_metadata (the #24
+    provenance column): a Wazuh ingest stamps vendor='wazuh', while
+    Kibana-native alerts and rows stored before that column keep no such key
+    — and JSONB equality never matches NULL, so those are excluded here.
+    """
+    predicates = [Finding.source_metadata["vendor"].astext == "wazuh"]
+    if severity:
+        predicates.append(Finding.severity == severity)
+    if status:
+        predicates.append(Finding.status == status)
+    if rule_id:
+        predicates.append(Finding.source_metadata["rule_id"].astext == rule_id)
+    if timestamp_start is not None:
+        predicates.append(Finding.timestamp >= timestamp_start)
+    if timestamp_end is not None:
+        predicates.append(Finding.timestamp <= timestamp_end)
+    return predicates
 
 
 def _set_mitre_prediction_rows(finding: Finding, mitre_predictions: Any) -> None:
@@ -483,6 +514,168 @@ class DatabaseService:
                 "total": int(total or 0),
                 "by_severity": grouped(Finding.severity),
                 "by_data_source": grouped(Finding.data_source),
+            }
+
+    # ==== Wazuh-origin enumeration (the enumerate_wazuh_findings tool) ====
+    # All four queries share _wazuh_finding_predicates, so the page, the case
+    # section, and the summary always answer the same question. Filters run in
+    # SQL: nothing here reads rows into Python to count or group them.
+
+    @default_on_error(list)
+    def find_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Finding]:
+        """Wazuh-origin findings under the enumeration filters, newest first."""
+        with self.db_manager.session_scope() as session:
+            query = (
+                select(Finding)
+                .options(*_FINDING_READ_OPTIONS)
+                .where(
+                    *_wazuh_finding_predicates(
+                        severity=severity,
+                        status=status,
+                        rule_id=rule_id,
+                        timestamp_start=timestamp_start,
+                        timestamp_end=timestamp_end,
+                    )
+                )
+                .order_by(Finding.timestamp.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            findings = session.execute(query).scalars().all()
+            for finding in findings:
+                session.expunge(finding)
+            return findings
+
+    @default_on_error(0)
+    def count_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+    ) -> int:
+        """Count of Wazuh-origin findings under the enumeration filters."""
+        with self.db_manager.session_scope() as session:
+            stmt = (
+                select(func.count())
+                .select_from(Finding)
+                .where(
+                    *_wazuh_finding_predicates(
+                        severity=severity,
+                        status=status,
+                        rule_id=rule_id,
+                        timestamp_start=timestamp_start,
+                        timestamp_end=timestamp_end,
+                    )
+                )
+            )
+            return session.execute(stmt).scalar() or 0
+
+    @default_on_error(lambda: {"total": 0, "cases": []})
+    def cases_containing_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Cases whose finding set includes a Wazuh-origin finding under the
+        enumeration filters.
+
+        One correlated EXISTS over case_findings (the _finding_source_exists
+        shape, generalized past data_source), applied under the same predicates
+        as the findings page — a case qualifies wherever it links a matching
+        finding, not only on the current page. Returns ``{"total": n,
+        "cases": [...]}``: ``total`` counts every qualifying case in SQL,
+        ``cases`` is the capped page of rows.
+        """
+        with self.db_manager.session_scope() as session:
+            matches = (
+                select(Finding.finding_id)
+                .select_from(case_findings)
+                .join(Finding, Finding.finding_id == case_findings.c.finding_id)
+                .where(
+                    case_findings.c.case_id == Case.case_id,
+                    *_wazuh_finding_predicates(
+                        severity=severity,
+                        status=status,
+                        rule_id=rule_id,
+                        timestamp_start=timestamp_start,
+                        timestamp_end=timestamp_end,
+                    ),
+                )
+            )
+            qualifying = select(Case).where(exists(matches))
+            total = session.execute(
+                select(func.count()).select_from(Case).where(exists(matches))
+            ).scalar()
+            cases = (
+                session.execute(
+                    qualifying.order_by(Case.created_at.desc()).limit(limit)
+                )
+                .scalars()
+                .all()
+            )
+            for case in cases:
+                session.expunge(case)
+            return {"total": int(total or 0), "cases": cases}
+
+    @default_on_error(None)
+    def summarize_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """``{total, by_severity, by_status}`` over Wazuh-origin findings under
+        the enumeration filters.
+
+        The summarize_findings shape scoped to vendor='wazuh': counted and
+        grouped in SQL, so ``total`` is honest however many rows there are.
+        ``None`` means the query failed.
+        """
+        with self.db_manager.session_scope() as session:
+            criteria = _wazuh_finding_predicates(
+                severity=severity,
+                status=status,
+                rule_id=rule_id,
+                timestamp_start=timestamp_start,
+                timestamp_end=timestamp_end,
+            )
+
+            def grouped(column) -> Dict[str, int]:
+                counts: Dict[str, int] = {}
+                stmt = select(column, func.count()).where(*criteria).group_by(column)
+                for value, count in session.execute(stmt).all():
+                    key = value or "unknown"
+                    counts[key] = counts.get(key, 0) + int(count)
+                return counts
+
+            total = session.execute(
+                select(func.count()).select_from(Finding).where(*criteria)
+            ).scalar()
+            return {
+                "total": int(total or 0),
+                "by_severity": grouped(Finding.severity),
+                "by_status": grouped(Finding.status),
             }
 
     @default_on_error(False)

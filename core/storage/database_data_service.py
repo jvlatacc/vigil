@@ -341,6 +341,122 @@ class DatabaseDataService:
                 return summary
         return {"total": 0, "by_status": {}, "by_priority": {}}
 
+    # ==== Wazuh-origin enumeration (the enumerate_wazuh_findings tool) ====
+    # Demo data carries no Wazuh provenance, so the demo answers are honest
+    # zeros — an empty enumeration is a result, not an error.
+
+    def find_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict]:
+        if self._demo_mode and self._demo_service:
+            return []
+        if self._db_available:
+            try:
+                findings = self._db_service.find_wazuh_findings(
+                    severity=severity,
+                    status=status,
+                    rule_id=rule_id,
+                    timestamp_start=timestamp_start,
+                    timestamp_end=timestamp_end,
+                    limit=limit,
+                    offset=offset,
+                )
+                return FindingSchema.dump_many(findings)
+            except Exception as e:
+                logger.error(f"Error enumerating Wazuh findings from DB: {e}")
+                return []
+        return []
+
+    def count_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+    ) -> int:
+        if self._demo_mode and self._demo_service:
+            return 0
+        if self._db_available:
+            try:
+                return self._db_service.count_wazuh_findings(
+                    severity=severity,
+                    status=status,
+                    rule_id=rule_id,
+                    timestamp_start=timestamp_start,
+                    timestamp_end=timestamp_end,
+                )
+            except Exception as e:
+                logger.error(f"Error counting Wazuh findings in DB: {e}")
+                return 0
+        return 0
+
+    def cases_containing_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        if self._demo_mode and self._demo_service:
+            return {"total": 0, "cases": []}
+        if self._db_available:
+            try:
+                result = self._db_service.cases_containing_wazuh_findings(
+                    severity=severity,
+                    status=status,
+                    rule_id=rule_id,
+                    timestamp_start=timestamp_start,
+                    timestamp_end=timestamp_end,
+                    limit=limit,
+                )
+                return {
+                    "total": result["total"],
+                    "cases": CaseSchema.dump_many(result["cases"]),
+                }
+            except Exception as e:
+                logger.error(f"Error enumerating Wazuh cases from DB: {e}")
+                return {"total": 0, "cases": []}
+        return {"total": 0, "cases": []}
+
+    def summarize_wazuh_findings(
+        self,
+        *,
+        severity: Optional[str] = None,
+        status: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        timestamp_start: Optional[datetime] = None,
+        timestamp_end: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        if self._demo_mode and self._demo_service:
+            return {"total": 0, "by_severity": {}, "by_status": {}}
+        if self._db_available:
+            try:
+                summary = self._db_service.summarize_wazuh_findings(
+                    severity=severity,
+                    status=status,
+                    rule_id=rule_id,
+                    timestamp_start=timestamp_start,
+                    timestamp_end=timestamp_end,
+                )
+                if summary is not None:
+                    return summary
+            except Exception as e:
+                logger.error(f"Error summarizing Wazuh findings in DB: {e}")
+        return {"total": 0, "by_severity": {}, "by_status": {}}
+
     def get_case(self, case_id: str) -> Optional[Dict]:
         if self._demo_mode and self._demo_service:
             return self._demo_service.get_case(case_id)
