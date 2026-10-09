@@ -326,3 +326,36 @@ def check_policy_version(
             ]
         )
     return VersionCheck()
+
+
+def load_policy_pack(
+    data: bytes,
+    root: dict,
+    *,
+    now: datetime,
+    state: VersionState | None = None,
+) -> ParsedPolicy:
+    """The one-call path a policy sync uses: verify, parse, then version-gate.
+
+    Envelope verification (``verify.verify_envelope``) runs on the raw bytes —
+    a tampered, forged, or wrong-typed pack is refused before its payload is
+    parsed — then the payload goes through ``parse_policy`` and, when the node
+    already holds a pack, ``check_policy_version``. A refusal anywhere is a
+    ``ParsedPolicy`` with rejection classes; the safe path and the refusing
+    path are the same function, so a caller cannot skip a gate by accident.
+    """
+    from core.edge import EDGE_POLICY
+    from core.edge.verify import verify_envelope
+
+    verified = verify_envelope(data, root, expected={EDGE_POLICY}, now=now)
+    if not verified.ok:
+        return ParsedPolicy(errors=verified.errors)
+    if verified.payload is None:  # pragma: no cover - verify_envelope guarantees this
+        return ParsedPolicy(errors=[("S-INTERNAL", "verified payload missing")])
+    parsed = parse_policy(verified.payload, now=now)
+    if not parsed.ok or parsed.pack is None:
+        return parsed
+    version = check_policy_version(state, parsed.pack.version_state())
+    if not version.ok:
+        return ParsedPolicy(errors=version.errors)
+    return parsed
