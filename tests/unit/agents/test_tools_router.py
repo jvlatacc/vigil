@@ -23,9 +23,93 @@ BOUNDS = {"max_rows": 2, "timeout_ms": 500}
 AUTH = {"Authorization": "Bearer shhh"}
 
 
+# Tool calls are audited and permission-checked against real storage now, so a
+# bare app needs a store: SQLite, the same grounding test_mcp_credentials.py
+# uses. Nestor's role holds the baseline grant, so the principal tests below
+# exercise an allowed call; the RBAC-specific cases live in
+# test_tools_router_rbac.py, which builds its own store per scenario.
+def _sqlite_store(*tables, users=()):
+    from sqlalchemy import BigInteger, create_engine
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.ext.compiler import compiles
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    from core.auth.permissions import TOOL_EXECUTE_PERMISSION
+    from core.storage.models import Role, ToolCallAudit, User
+    from core.storage.models.base import Base
+
+    @compiles(JSONB, "sqlite")
+    def _jsonb_is_json_on_sqlite(type_, compiler, **kw):  # pragma: no cover
+        return "JSON"
+
+    @compiles(BigInteger, "sqlite")
+    def _bigint_is_integer_on_sqlite(type_, compiler, **kw):  # pragma: no cover
+        return "INTEGER"
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine, tables=[*tables, ToolCallAudit.__table__])
+    session = sessionmaker(bind=engine)()
+    if users:
+        for role_id in {u[2] for u in users}:
+            permissions = (
+                {TOOL_EXECUTE_PERMISSION: True} if role_id == "r-yes" else {}
+            )
+            session.add(
+                Role(
+                    role_id=role_id,
+                    name=role_id,
+                    description="",
+                    permissions=permissions,
+                )
+            )
+        for username, user_id, role_id in users:
+            session.add(
+                User(
+                    user_id=user_id,
+                    username=username,
+                    email=f"{username}@example.com",
+                    password_hash="x",
+                    full_name=username.title(),
+                    role_id=role_id,
+                    is_active=True,
+                )
+            )
+        session.commit()
+    return session
+
+
+def _ground_audit_and_permission_store(monkeypatch, session=None, users=None):
+    """Point the audit writer and the permission lookups at one SQLite store."""
+    from core.audit import tool_calls
+    from core.auth import auth_service, permissions
+    from core.storage.models import Role, User
+
+    if session is None:
+        session = _sqlite_store(
+            Role.__table__,
+            User.__table__,
+            users=users if users is not None else (("nestor", "u-nestor", "r-yes"),),
+        )
+
+    @contextmanager
+    def _this_store(_=None):
+        yield session
+
+    monkeypatch.setattr(tool_calls, "unit_of_work", _this_store)
+    monkeypatch.setattr(permissions, "unit_of_work", _this_store)
+    monkeypatch.setattr(auth_service, "unit_of_work", _this_store)
+    return session
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(internal_auth, "get_secret", lambda name: "shhh")
+    _ground_audit_and_permission_store(monkeypatch)
     app = FastAPI()
     # The provider reads the instance the owner put on app.state (#659); a bare
     # app has none, and every request would fail before reaching the gate.
@@ -399,6 +483,7 @@ def closes(monkeypatch):
     monkeypatch.setattr(vigil, "_service_session", _session)
     monkeypatch.setattr(vigil, "add_case_activity", lambda *a, **k: None)
     monkeypatch.setattr(internal_auth, "get_secret", lambda name: "shhh")
+    _ground_audit_and_permission_store(monkeypatch)
 
     registry = MCPRegistry()
     in_process.register(registry)

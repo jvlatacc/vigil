@@ -25,7 +25,7 @@ from sqlalchemy.pool import StaticPool
 
 from core.auth import mcp_credential_service as credentials
 from core.cases.case_workflow_service import CaseWorkflowService
-from core.storage.models import McpCredential, Role, User
+from core.storage.models import McpCredential, Role, ToolCallAudit, User
 from core.storage.models.base import Base
 from tools.mcp import vigil
 
@@ -48,11 +48,26 @@ def issued_credential():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(
-        engine, tables=[Role.__table__, User.__table__, McpCredential.__table__]
+        engine,
+        tables=[
+            Role.__table__,
+            User.__table__,
+            McpCredential.__table__,
+            ToolCallAudit.__table__,
+        ],
     )
     session = sessionmaker(bind=engine)()
     session.add(
-        Role(role_id="r-analyst", name="analyst", description="", permissions={})
+        Role(
+            role_id="r-analyst",
+            name="analyst",
+            description="",
+            # The tool the test drives answers to the tool-execution grant now
+            # (tool-call RBAC); without it the gate refuses the call before it
+            # runs, and what this test is about -- who the tool sees -- never
+            # gets asked.
+            permissions={"tools.execute": True},
+        )
     )
     session.add(
         User(
@@ -73,7 +88,11 @@ def issued_credential():
     def _this_store(_=None):
         yield session
 
-    with patch("core.auth.mcp_credential_service.unit_of_work", _this_store):
+    with patch("core.auth.mcp_credential_service.unit_of_work", _this_store), patch(
+        "core.auth.permissions.unit_of_work", _this_store
+    ), patch("core.auth.auth_service.unit_of_work", _this_store), patch(
+        "core.audit.tool_calls.unit_of_work", _this_store
+    ):
         yield minted.token
 
     session.close()
