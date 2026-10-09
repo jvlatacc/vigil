@@ -42,6 +42,8 @@ func NewFakeKernel(interfaceName string) *FakeKernel {
 		Interface:  interfaceName,
 		MaxEntries: 65536,
 		Caps:       make(map[Kind]Capability),
+		AttachErr:  make(map[Kind]error),
+		UpdateErr:  make(map[Kind]error),
 		attached:   make(map[Kind]string),
 		slots:      make(map[Kind]int),
 		entries:    make(map[Kind]map[string]bool),

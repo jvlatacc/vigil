@@ -59,36 +59,39 @@ func parseTarget(kind Kind, ipRaw string, port, pid int) (Target, *Error) {
 // validate refuses targets that must never be enforced against. It mirrors
 // the Python side's _actionable_ip — loopback/multicast/etc. — so a target
 // Vigil's Responder would not act on is also refused at the kernel gate.
+// Precedence: forbidden-field mismatches first (they say the caller used the
+// wrong kind's target shape), then range errors, then missing required
+// fields, then address-class refusals.
 func (t Target) validate(kind Kind) *Error {
 	switch kind {
 	case KindXDPDrop, KindSocketRedirect:
-		if !t.IP.IsValid() {
-			return targetError(ReasonMissingIP, "")
-		}
-		if t.Port < 0 || t.Port > 65535 {
-			return targetError(ReasonBadPort, fmt.Sprintf("%d", t.Port))
-		}
 		if t.PID != 0 {
 			return targetError(ReasonPIDNotAllowed, fmt.Sprintf("%d", t.PID))
 		}
 		if kind == KindXDPDrop && t.Port != 0 {
 			return targetError(ReasonPortNotAllowed, fmt.Sprintf("%d", t.Port))
 		}
+		if t.Port < 0 || t.Port > 65535 {
+			return targetError(ReasonBadPort, fmt.Sprintf("%d", t.Port))
+		}
+		if !t.IP.IsValid() {
+			return targetError(ReasonMissingIP, "")
+		}
 		if err := refuseNonRoutable(t.IP); err != nil {
 			return err
 		}
 	case KindProcessInterdict:
-		if t.PID == 0 {
-			return targetError(ReasonMissingPID, "")
-		}
-		if t.PID < 1 || t.PID > maxPID {
-			return targetError(ReasonBadPID, fmt.Sprintf("%d", t.PID))
-		}
 		if t.IP.IsValid() {
 			return targetError(ReasonIPNotAllowed, t.IP.String())
 		}
 		if t.Port != 0 {
 			return targetError(ReasonPortNotAllowed, fmt.Sprintf("%d", t.Port))
+		}
+		if t.PID == 0 {
+			return targetError(ReasonMissingPID, "")
+		}
+		if t.PID < 1 || t.PID > maxPID {
+			return targetError(ReasonBadPID, fmt.Sprintf("%d", t.PID))
 		}
 	default:
 		return &Error{Code: ErrCodeUnsupportedKind, Message: "unknown kind: " + string(kind)}

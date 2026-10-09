@@ -55,7 +55,28 @@ func (s *Server) Handler() http.Handler {
 	// carries secrets. Everything that can move the kernel sits behind auth.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	// Catch-all so no reply escapes the error contract's closed shape —
+	// ServeMux's default 404 is plain text. Registering it shadows Go's
+	// automatic 405 for known paths, so wrong-method hits on known routes
+	// are reproduced here.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if knownRoutePath(r.URL.Path) {
+			writeError(w, http.StatusMethodNotAllowed, enforce.ErrCodeInvalidRequest,
+				"method not allowed on this route",
+				map[string]any{"method": r.Method, "path": r.URL.Path})
+			return
+		}
+		writeError(w, http.StatusNotFound, enforce.ErrCodeUnknownAction,
+			"no such route", map[string]any{"path": r.URL.Path})
+	})
 	return mux
+}
+
+// knownRoutePath reports whether the path is a registered route — used by
+// the catch-all to distinguish wrong-method (405) from no-such-route (404).
+func knownRoutePath(path string) bool {
+	return path == "/v1/actions" || path == "/healthz" || path == "/metrics" ||
+		strings.HasPrefix(path, "/v1/actions/")
 }
 
 // auth gates the /v1 subtree on the shared secret. A missing header and a

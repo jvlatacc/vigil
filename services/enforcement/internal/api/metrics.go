@@ -26,20 +26,22 @@ type primitive struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
-// handleHealthz implements GET /healthz. Status is "ok" while at least one
-// primitive is supported and "degraded" when all are unavailable.
+// handleHealthz implements GET /healthz. Status is "ok" only while every
+// primitive is supported; any unsupported primitive marks the daemon
+// "degraded" — per-primitive degradation must be visible, never masked
+// (spec: the daemon degrades per primitive instead of failing whole).
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	prims := make(map[string]primitive, 3)
-	anySupported := false
+	allSupported := true
 	for _, kind := range enforce.Kinds() {
 		capability := s.enf.Capability(kind)
 		prims[string(kind)] = primitive{Supported: capability.Supported, Reason: capability.Reason}
-		if capability.Supported {
-			anySupported = true
+		if !capability.Supported {
+			allSupported = false
 		}
 	}
 	status := "ok"
-	if !anySupported {
+	if !allSupported {
 		status = "degraded"
 	}
 	writeJSON(w, http.StatusOK, healthzDoc{
@@ -58,6 +60,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
 	seen := map[string]bool{}
+	occupancy := []string{} // one labeled sample per kind, written once below
 	for _, kind := range enforce.Kinds() {
 		stats, err := s.enf.Stats(kind)
 		if err != nil {
@@ -80,9 +83,14 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(&b, "%s{kind=\"%s\"} %d\n", series, kind, stats.Counters[name])
 		}
-		fmt.Fprintf(&b, "# HELP vigil_enforcement_map_entries Kernel map entries in use.\n")
-		fmt.Fprintf(&b, "# TYPE vigil_enforcement_map_entries gauge\n")
-		fmt.Fprintf(&b, "vigil_enforcement_map_entries{kind=\"%s\"} %d\n", kind, stats.Occupancy)
+		occupancy = append(occupancy, fmt.Sprintf("vigil_enforcement_map_entries{kind=%q} %d\n", kind, stats.Occupancy))
+	}
+	// One HELP/TYPE block per metric name: a repeated definition is a
+	// Prometheus scrape error, so all kinds' samples share one block.
+	fmt.Fprintf(&b, "# HELP vigil_enforcement_map_entries Kernel map entries in use.\n")
+	fmt.Fprintf(&b, "# TYPE vigil_enforcement_map_entries gauge\n")
+	for _, line := range occupancy {
+		b.WriteString(line)
 	}
 	fmt.Fprintf(&b, "# HELP vigil_enforcement_actions_enforced Enforcement actions applied.\n")
 	fmt.Fprintf(&b, "# TYPE vigil_enforcement_actions_enforced counter\n")
