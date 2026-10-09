@@ -57,6 +57,7 @@ from core.storage.models.episodic import (
 )
 from core.storage.models.exclusion import IpExclusion
 from core.storage.models.finding import Finding, FindingMitrePrediction
+from core.storage.models.mcp_oauth import OAuthConnection
 from core.storage.models.workflow import (
     IN_FLIGHT_INVESTIGATION_STATUSES,
     LIVE_CASE_STATES,
@@ -121,6 +122,7 @@ __all__ = [
     "LLMInteractionLog",
     "LLMProviderConfig",
     "McpCredential",
+    "OAuthConnection",
     "Role",
     "SLAPolicy",
     "SharedIOC",

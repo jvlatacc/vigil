@@ -60,10 +60,15 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
 ('role-viewer', 'Viewer', 'Read-only access to findings and cases', '{
     "findings.read": true,
     "cases.read": true,
+    "detections.read": false,
+    "detections.write": false,
     "integrations.read": false,
     "users.read": false,
     "settings.read": false,
     "ai_chat.use": false,
+    "tools.invoke": false,
+    "mcp.use": false,
+    "mcp.admin": false,
     "ai_decisions.approve": false
 }', true),
 ('role-analyst', 'Analyst', 'Full access to findings and cases, limited integrations', '{
@@ -74,12 +79,17 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "cases.write": true,
     "cases.delete": false,
     "cases.assign": false,
+    "detections.read": false,
+    "detections.write": false,
     "integrations.read": true,
     "integrations.write": false,
     "users.read": false,
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": false,
     "ai_decisions.approve": false
 }', true),
 ('role-senior-analyst', 'Senior Analyst', 'Full analyst access plus approval rights', '{
@@ -90,12 +100,17 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "cases.write": true,
     "cases.delete": false,
     "cases.assign": true,
+    "detections.read": false,
+    "detections.write": false,
     "integrations.read": true,
     "integrations.write": true,
     "users.read": true,
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": false,
     "ai_decisions.approve": true
 }', true),
 ('role-manager', 'Manager', 'User management and all integrations', '{
@@ -106,6 +121,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "cases.write": true,
     "cases.delete": true,
     "cases.assign": true,
+    "detections.read": true,
+    "detections.write": true,
     "integrations.read": true,
     "integrations.write": true,
     "users.read": true,
@@ -114,6 +131,9 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": true,
     "ai_decisions.approve": true
 }', true),
 ('role-admin', 'Admin', 'Full system access', '{
@@ -124,6 +144,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "cases.write": true,
     "cases.delete": true,
     "cases.assign": true,
+    "detections.read": true,
+    "detections.write": true,
     "integrations.read": true,
     "integrations.write": true,
     "users.read": true,
@@ -132,9 +154,60 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": true,
     "ai_decisions.approve": true
 }', true)
 ON CONFLICT (role_id) DO NOTHING;
+
+-- The INSERT above is skipped for a role that already exists (ON CONFLICT
+-- DO NOTHING), so an upgraded deployment would keep permission maps that lack
+-- every key this vocabulary gains -- and a gate naming one of the new
+-- permissions would deny every user on that role. The merge adds exactly
+-- these keys, and only to system roles: their maps are code-defined (no API
+-- mutates them), so restamping the canonical values cannot clobber an
+-- operator's edit. Custom roles are never touched.
+UPDATE roles SET permissions = permissions || '{
+    "detections.read": false,
+    "detections.write": false,
+    "tools.invoke": false,
+    "mcp.use": false,
+    "mcp.admin": false
+}'::jsonb
+WHERE role_id = 'role-viewer' AND is_system_role;
+UPDATE roles SET permissions = permissions || '{
+    "detections.read": false,
+    "detections.write": false,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": false
+}'::jsonb
+WHERE role_id = 'role-analyst' AND is_system_role;
+UPDATE roles SET permissions = permissions || '{
+    "detections.read": false,
+    "detections.write": false,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": false
+}'::jsonb
+WHERE role_id = 'role-senior-analyst' AND is_system_role;
+UPDATE roles SET permissions = permissions || '{
+    "detections.read": true,
+    "detections.write": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": true
+}'::jsonb
+WHERE role_id = 'role-manager' AND is_system_role;
+UPDATE roles SET permissions = permissions || '{
+    "detections.read": true,
+    "detections.write": true,
+    "tools.invoke": true,
+    "mcp.use": true,
+    "mcp.admin": true
+}'::jsonb
+WHERE role_id = 'role-admin' AND is_system_role;
 
 -- No default admin is seeded. The row that used to live here carried a bcrypt
 -- hash matching no password, so it could never be signed into — it only made

@@ -552,6 +552,8 @@ class AuthService:
                 "cases.write": True,
                 "cases.delete": True,
                 "cases.assign": True,
+                "detections.read": True,
+                "detections.write": True,
                 "integrations.read": True,
                 "integrations.write": True,
                 "users.read": True,
@@ -560,6 +562,9 @@ class AuthService:
                 "settings.read": True,
                 "settings.write": True,
                 "ai_chat.use": True,
+                "tools.invoke": True,
+                "mcp.use": True,
+                "mcp.admin": True,
                 "ai_decisions.approve": True,
             }
 
