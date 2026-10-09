@@ -1,0 +1,82 @@
+name: Integrations
+
+# Vendor integration slices live under core/integrations/, with their executor
+# surface in core/response/ and wiring in mcp-config.json / env.example.
+# ci-cd.yml gates PRs to main/develop only, so release-branch child PRs that
+# touch these paths would otherwise have no lane until the promotion PR.
+# Path-filtered with no branch filter, mirroring enforcement.yml/medic.yml:
+# no secrets are needed (external-service tests are excluded by marker), so
+# the lane runs on this remote as well as the canonical repo.
+on:
+  pull_request:
+    paths:
+      - "core/integrations/**"
+      - "core/response/**"
+      - "mcp-config.json"
+      - "env.example"
+      - ".github/workflows/integrations.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint Integrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Same gates as ci-cd.yml lint-backend. mypy stays advisory there and is
+      # omitted here: this lane gates on what gates there.
+      - name: Run flake8
+        run: flake8 services/ core/
+
+      - name: Run black
+        run: black --check --extend-exclude '^/services/medic/contracts/' services/ core/
+
+      - name: Run isort
+        run: isort --check-only services/ core/
+
+      # The layering contracts in .importlinter. No continue-on-error, as there.
+      - name: Run import-linter
+        run: lint-imports
+
+  test:
+    name: Unit Tests - Integrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+
+      # Same suite as ci-cd.yml test-unit-backend: the #415 ratchets gate here,
+      # external-service (PostgreSQL) tests are excluded by marker.
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ tests/security/ -m "not external_service" -v \
+            --cov=services --cov=core --cov-report=xml --cov-report=term
+        env:
+          TESTING: "true"

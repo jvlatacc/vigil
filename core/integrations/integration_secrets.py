@@ -91,6 +91,15 @@ _ENV_VAR_OVERRIDES: Mapping[str, Mapping[str, str]] = {
     # env fallback for server_url keeps that name so an env-only deployment with
     # nothing saved in Settings still constructs the client.
     "splunk": {"server_url": "SPLUNK_URL"},
+    # The enforcement daemon (services/enforcement) reads the very same names
+    # from the host environment, and env.example/mcp-config.json document them:
+    # VIGIL_ENFORCEMENT_URL / VIGIL_ENFORCEMENT_TOKEN, not the canonical
+    # EBPF_XDP_* — one shared secret must have one name on both sides of the
+    # ADR-0014 channel.
+    "ebpf-xdp": {
+        "enforcement_url": "VIGIL_ENFORCEMENT_URL",
+        "enforcement_token": "VIGIL_ENFORCEMENT_TOKEN",
+    },
 }
 
 

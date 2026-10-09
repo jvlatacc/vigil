@@ -351,6 +351,17 @@
         "_setup_note": "Cloudflare WAF, Zero Trust Gateway, and Access response actions plus read-only IP/domain threat lookups. Configure api_token (and optional account_id, zone_id) in Settings → Integrations. Tools are no-ops until the integration is enabled.",
         "_note": "Cloudforce One threat-intel feeds are ingested separately by daemon/threat_feed_poller.py and enrich findings via daemon/processor.py — no MCP tool surface required for v1."
       }
+    },
+
+    "ebpf-xdp": {
+      "command": "python3",
+      "args": ["core/integrations/ebpf_xdp/tool.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "_setup_note": "Kernel enforcement (eBPF/XDP): talks to the per-host services/enforcement daemon over its loopback-only bearer-token API. Both env placeholders are required — with either unset the server stays dormant-by-design (no enforcer on this host). Values may also be saved in Settings → Integrations (ebpf-xdp); the daemon reads the same VIGIL_ENFORCEMENT_* names.",
+        "VIGIL_ENFORCEMENT_URL": "${VIGIL_ENFORCEMENT_URL}",
+        "VIGIL_ENFORCEMENT_TOKEN": "${VIGIL_ENFORCEMENT_TOKEN}"
+      }
     }
   }
 }
