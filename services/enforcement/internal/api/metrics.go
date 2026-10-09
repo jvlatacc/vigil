@@ -24,19 +24,27 @@ type healthzDoc struct {
 type primitive struct {
 	Supported bool   `json:"supported"`
 	Reason    string `json:"reason,omitempty"`
+	// Mode is the enforcement mechanism (omitted when the kernel does not
+	// distinguish mechanisms): "bpf", or a degraded fallback ("signal").
+	Mode string `json:"mode,omitempty"`
 }
 
 // handleHealthz implements GET /healthz. Status is "ok" only while every
-// primitive is supported; any unsupported primitive marks the daemon
-// "degraded" — per-primitive degradation must be visible, never masked
-// (spec: the daemon degrades per primitive instead of failing whole).
+// primitive is supported through its primary mechanism; any unsupported
+// or degraded primitive marks the daemon "degraded" — per-primitive
+// degradation must be visible, never masked (spec: the daemon degrades
+// per primitive instead of failing whole).
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	prims := make(map[string]primitive, 3)
 	allSupported := true
 	for _, kind := range enforce.Kinds() {
 		capability := s.enf.Capability(kind)
-		prims[string(kind)] = primitive{Supported: capability.Supported, Reason: capability.Reason}
-		if !capability.Supported {
+		prims[string(kind)] = primitive{
+			Supported: capability.Supported,
+			Reason:    capability.Reason,
+			Mode:      s.enf.Mode(kind),
+		}
+		if !capability.Supported || capability.Degraded {
 			allSupported = false
 		}
 	}
@@ -47,7 +55,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, healthzDoc{
 		Status:          status,
 		UptimeSeconds:   int64(time.Since(s.started) / time.Second),
-		Kernel:          "faked",
+		Kernel:          s.kernelFaked,
 		Primitives:      prims,
 		ActionsEnforced: s.enforcedTotal.Load(),
 		ActionsReleased: s.releasedTotal.Load(),
