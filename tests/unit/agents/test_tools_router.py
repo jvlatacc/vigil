@@ -293,7 +293,7 @@ class TestWhichSystemAnswered:
         async def _no_backend_tool(name, args, **kwargs):
             return None, False
 
-        async def _served(name, args, seconds, registry):
+        async def _served(name, args, seconds, registry, **kwargs):
             return [{"host": "we8105desk"}], True
 
         monkeypatch.setattr(tools_router, "execute_backend_tool", _no_backend_tool)
@@ -314,7 +314,7 @@ def _no_backend(monkeypatch):
 
 
 def _mcp(monkeypatch, result=None, handled=True, error=None):
-    async def fake(name, args, timeout_s, registry):
+    async def fake(name, args, timeout_s, registry, **kwargs):
         if error is not None:
             raise error
         return result, handled
@@ -525,3 +525,37 @@ class TestPrincipal:
         assert answer["ok"] is True
         assert recorded == ["nestor"]
         assert current_caller() is None
+
+
+class TestTheRunRideAlong:
+    # A run that names itself is checked against the initiator stamped on the
+    # row. The request carries the id -- never a name -- so the router's whole
+    # job is to pass it through to the dispatch.
+    def test_run_id_reaches_the_dispatch(self, client, monkeypatch):
+        seen: dict = {}
+
+        async def _capture(tool, args, **kwargs):
+            seen.update(kwargs)
+            return [], True
+
+        monkeypatch.setattr(tools_router, "execute_backend_tool", _capture)
+        body = {
+            "tool": "list_findings",
+            "args": {},
+            "bounds": BOUNDS,
+            "run_id": "run-9",
+        }
+        response = client.post("/internal/tools/invoke", json=body, headers=AUTH)
+        assert response.status_code == 200
+        assert seen["run_id"] == "run-9"
+
+    def test_a_caller_that_names_no_run_passes_none(self, client, monkeypatch):
+        seen: dict = {}
+
+        async def _capture(tool, args, **kwargs):
+            seen.update(kwargs)
+            return [], True
+
+        monkeypatch.setattr(tools_router, "execute_backend_tool", _capture)
+        assert _invoke(client).status_code == 200
+        assert seen["run_id"] is None

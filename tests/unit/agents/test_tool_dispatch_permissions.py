@@ -150,7 +150,9 @@ class TestMcpDispatch:
 
         assert handled is True
         assert rows == [{"ok": True}]
-        assert client.calls == [("crowdstrike", "isolate_host", {"host": "10.0.0.5"}, 5.0)]
+        assert client.calls == [
+            ("crowdstrike", "isolate_host", {"host": "10.0.0.5"}, 5.0)
+        ]
 
     async def test_a_denial_happens_before_any_transport(self, grants, monkeypatch):
         _holding(grants)  # nothing
@@ -204,6 +206,139 @@ class TestMcpDispatch:
             )
 
         assert (result, handled) == (None, False)
+        assert grants["asked"] == []
+
+
+# --- The run-stamped half: a headless run authorizes against its initiator ---
+
+
+class TestRunStampedDispatch:
+    async def test_a_run_whose_initiator_lacks_the_permission_is_denied(
+        self, grants, monkeypatch
+    ):
+        # The run names itself; the person who started it holds nothing, so the
+        # dispatch refuses exactly as a bound viewer's would.
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: "viewer")
+        _holding(grants)  # nothing
+        ran = []
+
+        def fake(args):
+            ran.append(args)
+            return {}
+
+        monkeypatch.setattr(tool_registry, "_case_records", fake)
+
+        with pytest.raises(ToolDenied) as raised:
+            await execute_backend_tool("case_records", {}, run_id="run-1")
+
+        assert ran == []  # nothing executed: no database, no side effects
+        assert raised.value.tool_name == "case_records"
+        assert raised.value.permission == "tools.invoke"
+        assert raised.value.caller == "viewer"
+
+    async def test_a_run_whose_initiator_holds_the_permission_executes(
+        self, grants, monkeypatch
+    ):
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: "analyst")
+        _holding(grants, "tools.invoke")
+        ran = []
+
+        def fake(args):
+            ran.append(args)
+            return {"ok": True}
+
+        monkeypatch.setattr(tool_registry, "_case_records", fake)
+
+        result, handled = await execute_backend_tool("case_records", {}, run_id="run-1")
+
+        assert handled is True
+        assert ran == [{}]
+        assert grants["asked"] == [("analyst", "tools.invoke")]
+
+    async def test_a_run_that_names_no_person_passes_unchecked(
+        self, grants, monkeypatch
+    ):
+        # The orchestrator's schedules and an unnamed start have no person
+        # behind them: run_initiator answers None, and the dispatch passes as
+        # it did before runs carried an initiator at all.
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: None)
+        _holding(grants)  # nothing -- the check must not even be asked
+        ran = []
+
+        def fake(args):
+            ran.append(args)
+            return {"ok": True}
+
+        monkeypatch.setattr(tool_registry, "_case_records", fake)
+
+        result, handled = await execute_backend_tool("case_records", {}, run_id="run-1")
+
+        assert handled is True
+        assert ran == [{}]
+        assert grants["asked"] == []
+
+    async def test_a_bound_caller_outranks_the_run_stamp(self, grants, monkeypatch):
+        # The person bound to the call is who the check answers for; the run's
+        # stamp is read only when nobody is bound.
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: "admin")
+        _holding(grants)  # nothing -- viewer is bound, admin is never asked
+        ran = []
+
+        def fake(args):
+            ran.append(args)
+            return {}
+
+        monkeypatch.setattr(tool_registry, "_case_records", fake)
+
+        with acting_as("viewer"), pytest.raises(ToolDenied) as raised:
+            await execute_backend_tool("case_records", {}, run_id="run-1")
+
+        assert raised.value.caller == "viewer"
+        assert grants["asked"] == [("viewer", "tools.invoke")]
+
+    async def test_an_mcp_tool_is_gated_mcp_use_against_the_initiator(
+        self, grants, monkeypatch
+    ):
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: "viewer")
+        _holding(grants)  # nothing
+
+        import core.integrations.mcp.client as client_module
+
+        def no_client():
+            raise AssertionError("the client was reached on a denied dispatch")
+
+        monkeypatch.setattr(client_module, "process_mcp_client", no_client)
+
+        registry = _Registry(["crowdstrike"], ["crowdstrike_isolate_host"])
+        with pytest.raises(ToolDenied) as raised:
+            await execute_mcp_tool(
+                "crowdstrike_isolate_host", {}, 5.0, registry, run_id="run-1"
+            )
+
+        assert raised.value.permission == "mcp.use"
+        assert raised.value.caller == "viewer"
+
+    async def test_an_mcp_run_that_names_no_person_reaches_the_server(
+        self, grants, monkeypatch
+    ):
+        monkeypatch.setattr(tool_registry, "run_initiator", lambda run_id: None)
+        _holding(grants)  # nothing -- the check must not even be asked
+        client = _Client()
+
+        import core.integrations.mcp.client as client_module
+
+        monkeypatch.setattr(client_module, "process_mcp_client", lambda: client)
+
+        rows, handled = await execute_mcp_tool(
+            "crowdstrike_isolate_host",
+            {},
+            5.0,
+            _Registry(["crowdstrike"], ["crowdstrike_isolate_host"]),
+            run_id="run-1",
+        )
+
+        assert handled is True
+        assert client.calls != []
         assert grants["asked"] == []
 
 

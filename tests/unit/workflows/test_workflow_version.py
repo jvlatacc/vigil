@@ -87,13 +87,22 @@ class TestAgentRunPath:
             side_effect=versions or (lambda self, wid: 1),
             autospec=True,
         ):
-            agent_runs_router._begin_run_row("r-1", request)
+            agent_runs_router._begin_run_row(
+                "r-1", request, triggered_by="a-test-admin"
+            )
         return runs.begin_run.call_args.kwargs
 
     def test_named_workflow_stores_its_version(self):
         kwargs = self._begin("workflow:incident-response")
         assert kwargs["workflow_id"] == "incident-response"
         assert kwargs["workflow_version"] == 1
+
+    def test_the_run_row_carries_the_caller_as_initiator(self):
+        # Headless dispatch authorizes this run's tool calls against the
+        # username stamped here; the placeholder "api" would name nobody.
+        assert (
+            self._begin("workflow:incident-response")["triggered_by"] == "a-test-admin"
+        )
 
     def test_bare_run_kind_stores_none(self):
         assert self._begin("")["workflow_version"] is None
