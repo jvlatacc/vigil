@@ -58,6 +58,11 @@ class _Service:
         # declares none, so its rows decide on their own merits.
         return ProtectedTargetRules()
 
+    def breaker_hold(self):
+        # The executor honors the breaker each tick; the fake declares it
+        # armed, so its rows decide on their own merits.
+        return None
+
 
 def _row(action_id, *, requires_approval, approved_by):
     from core.response.approval_service import PendingAction

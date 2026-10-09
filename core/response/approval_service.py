@@ -23,6 +23,19 @@ from opentelemetry.metrics import Observation
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from core.response.breaker import (
+    AUTO_RESUME,
+    BREAKER_CONFIG_KEY,
+    BREAKER_FAILURE_SAMPLE,
+    STATE_TRIPPED,
+    BreakerCounts,
+    BreakerState,
+    breaker_decision,
+    opened_state,
+    parse_state,
+    resume_due,
+    tripped_state,
+)
 from core.response.config import (
     CONTAINMENT_TICK_SECONDS,
     ContainmentCounts,
@@ -97,6 +110,115 @@ def _containment_counts(target: str, cfg: ResponseConfig) -> ContainmentCounts:
         subnet_hour=subnet_hour,
         subnet_size=subnet.num_addresses if subnet else 0,
     )
+
+
+def _breaker_counts(target: str) -> BreakerCounts:
+    """The storm signature around the decision being made, read per decision.
+
+    Two queries over ``approval_actions`` — the same read-not-accumulate
+    restart-safety the quota counts use. Every containment row that is not
+    a person's rejection is volume (a failed attempt is still pressure);
+    the failure sample is the last BREAKER_FAILURE_SAMPLE containment
+    execution attempts, by executed_at. The decision being made is counted
+    already: the row that completes a signature is the first one held.
+    Raises on a failed read; the caller treats the measurement as
+    best-effort, and the quota beside it fails closed on the same store.
+    """
+    now = utcnow()
+    with get_db_manager().session_scope() as session:
+        hour_rows = session.execute(
+            select(ApprovalActionRow.target).where(
+                ApprovalActionRow.action_type.in_(CONTAINMENT_ACTION_TYPES),
+                ApprovalActionRow.created_at >= now - timedelta(hours=1),
+                ApprovalActionRow.status != ActionStatus.REJECTED.value,
+            )
+        ).all()
+        sample = session.execute(
+            select(ApprovalActionRow.status)
+            .where(
+                ApprovalActionRow.action_type.in_(CONTAINMENT_ACTION_TYPES),
+                ApprovalActionRow.status.in_(
+                    (ActionStatus.EXECUTED.value, ActionStatus.FAILED.value)
+                ),
+            )
+            .order_by(ApprovalActionRow.executed_at.desc().nullslast())
+            .limit(BREAKER_FAILURE_SAMPLE)
+        ).all()
+    targets = {str(row_target).strip() for (row_target,) in hour_rows if row_target}
+    if target and str(target).strip():
+        targets.add(str(target).strip())
+    return BreakerCounts(
+        volume_hour=len(hour_rows) + 1,
+        distinct_targets_hour=len(targets),
+        failures=sum(1 for (status,) in sample if status == ActionStatus.FAILED.value),
+        attempts=len(sample),
+    )
+
+
+def read_breaker_state() -> BreakerState:
+    """The stored breaker state; raises on a failed read (the caller fails closed)."""
+    raw = get_config_service().read_system_config(BREAKER_CONFIG_KEY)
+    return parse_state(raw)
+
+
+def write_breaker_state(
+    state: BreakerState, config_service: Optional[Any] = None
+) -> bool:
+    """Persist the breaker state and log the transition exactly once.
+
+    The log rides the successful write, so a transition is announced by the
+    one caller that made it — whatever process that is, as the reset comes
+    from the API — mirroring the hourly-cost gate's once-per-transition
+    pattern. ``config_service`` is the caller-stamped store (the reset
+    endpoint passes the signed-in operator so the audit row names them); a
+    daemon caller lets it default. ``False`` on a failed write; the caller
+    holds containment.
+    """
+    service = config_service if config_service is not None else get_config_service()
+    saved = service.set_system_config(
+        BREAKER_CONFIG_KEY,
+        state.to_payload(),
+        config_type="response",
+        description="Containment circuit breaker state",
+    )
+    if not saved:
+        logger.error("Cannot save the containment breaker state; holding containment")
+        return False
+    if state.state == STATE_TRIPPED:
+        logger.warning("Containment circuit breaker TRIPPED: %s", state.reason)
+    elif state.reset_by == AUTO_RESUME:
+        logger.info("Containment circuit breaker OPENED (auto-resume cooldown elapsed)")
+    else:
+        logger.info("Containment circuit breaker OPENED (reset by %s)", state.reset_by)
+    return True
+
+
+def breaker_state_hold(cfg: ResponseConfig) -> Optional[str]:
+    """The persisted breaker's verdict for a containment row, or None to allow.
+
+    Read at each decision like the stored approval flag, so a trip binds
+    every process at once and a reset frees them without a restart. A
+    failed or unreadable read holds containment for a person: an unreadable
+    breaker must not read as an armed one. An auto-resume whose cooldown
+    has elapsed is persisted — and logged — before the row is released.
+    """
+    try:
+        state = read_breaker_state()
+        if state.state == STATE_TRIPPED and resume_due(state, cfg, utcnow()):
+            opened = opened_state(state, AUTO_RESUME, utcnow())
+            if not write_breaker_state(opened):
+                return decision_rule("response.breaker_state", "resume_write_failed")
+            state = opened
+        if state.state == STATE_TRIPPED:
+            return decision_rule("response.breaker_state", "tripped")
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "Cannot read the containment breaker state; holding containment "
+            "for a person: %s",
+            e,
+        )
+        return decision_rule("response.breaker_state", "read_failed")
 
 
 APPROVAL_CONFIG_KEY = "approval.force_manual_approval"
@@ -306,6 +428,41 @@ class ApprovalService:
             logger.error("Cannot count containment volume; holding for a person: %s", e)
             return decision_rule("response.containment_counts_read", "failed")
 
+    def breaker_hold(self) -> Optional[str]:
+        """The persisted breaker's verdict for a containment row about to
+        execute, or None.
+
+        State only: the executor honors a trip (and an unreadable state)
+        but does not measure storms — the gate is where rows are counted.
+        """
+        return breaker_state_hold(self.config)
+
+    def breaker_trip_hold(self, target: str) -> Optional[str]:
+        """The breaker's verdict for a containment row at the gate, or None.
+
+        The persisted state first (fail-closed); then, armed, the storm
+        signature is measured and a trip is persisted — and logged — before
+        the row is held, so a storm's next row anywhere reads the tripped
+        state even from another process. The counts read is best-effort: a
+        failed read cannot measure a storm, and the quota read beside it
+        already fails closed on the same store.
+        """
+        held = breaker_state_hold(self.config)
+        if held is not None:
+            return held
+        try:
+            counts = _breaker_counts(target)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Cannot measure containment volume for the breaker: %s", e)
+            return None
+        rule = breaker_decision(counts, self.config)
+        if rule is None:
+            return None
+        trip = tripped_state(counts, rule, self.config, utcnow())
+        if not write_breaker_state(trip):
+            return decision_rule("response.breaker_state", "write_failed")
+        return rule
+
     # ------------------------------------------------------------------
     # CRUD — DB-backed
     # ------------------------------------------------------------------
@@ -417,6 +574,16 @@ class ApprovalService:
         if action_type.value in CONTAINMENT_ACTION_TYPES and not forced:
             quota = self.containment_quota_hold(target)
             forced = quota is not None
+
+        # The breaker is the storm tripwire beneath the quotas: when the
+        # shape of containment demand looks like a DoS, auto-approval of
+        # containment suspends until a person resets it. A row already held
+        # for another reason does not pay the state read — the outcome
+        # would not change.
+        breaker = None
+        if action_type.value in CONTAINMENT_ACTION_TYPES and not forced:
+            breaker = self.breaker_trip_hold(target)
+            forced = breaker is not None
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
@@ -426,6 +593,8 @@ class ApprovalService:
             rule = invariant
         elif quota is not None:
             rule = quota
+        elif breaker is not None:
+            rule = breaker
         if annotate_rule:
             reason = f"{reason}; {rule}" if reason else rule
 

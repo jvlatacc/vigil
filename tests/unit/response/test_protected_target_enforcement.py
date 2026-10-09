@@ -109,6 +109,11 @@ class _RulesService:
     def protected_target_rules(self):
         return self._rules
 
+    def breaker_hold(self):
+        # The executor honors the breaker each tick; the fake declares it
+        # armed, so its rows decide on their own merits.
+        return None
+
     def mark_executed(self, action_id, result):
         self.executed.append(action_id)
 

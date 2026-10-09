@@ -58,6 +58,23 @@ respond:
   # loosened by it. (DAEMON_TOOL_RISK_OVERRIDES; Settings UI lands with the
   # Limits & autonomy card)
   tool_risk_overrides: []
+  # Anti-spoofing circuit breaker: suspend auto-approval of containment while
+  # the shape of the demand looks like a storm — tripped, containment rows
+  # wait for a person until an operator resets it. Lower is tighter.
+  # Containment rows in a rolling hour before the breaker trips.
+  # (DAEMON_BREAKER_VOLUME_THRESHOLD)
+  breaker_volume_threshold: 10
+  # Distinct containment targets in a rolling hour before the breaker trips —
+  # the rotating-spoofed-IP signature a per-target idempotency key misses.
+  # (DAEMON_BREAKER_DISTINCT_TARGETS)
+  breaker_distinct_targets: 8
+  # Failed share of the last 5 containment executions that trips the breaker.
+  # (DAEMON_BREAKER_FAILURE_RATE)
+  breaker_failure_rate: 0.50
+  # Minutes after a trip before the breaker resumes on its own. 0 (the
+  # default) is manual reset only: resuming machine-speed containment after
+  # an anomaly is a promoting decision. (DAEMON_BREAKER_AUTO_RESUME_MINUTES)
+  breaker_auto_resume_minutes: 0
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

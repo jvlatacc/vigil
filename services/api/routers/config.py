@@ -34,7 +34,12 @@ from core.integrations.integration_secrets import (
 )
 from core.intent import intent_file
 from core.llm.defaults import DEFAULT_MODEL
-from core.response.approval_service import APPROVAL_CONFIG_KEY
+from core.response.approval_service import (
+    APPROVAL_CONFIG_KEY,
+    read_breaker_state,
+    write_breaker_state,
+)
+from core.response.breaker import STATE_TRIPPED, opened_state
 from core.response.protected_targets import (
     ORIGIN_ENV,
     ORIGIN_OPERATOR,
@@ -1973,6 +1978,91 @@ def remove_protected_target(
             status_code=503, detail="Could not remove the protected target"
         ) from e
     return _protected_targets_response()
+
+
+# ---- Containment circuit breaker ----
+# The storm tripwire's state lives in system_config under
+# response.breaker_state. Reading it is a settings read; ending a trip is a
+# settings-write by a named person — the gate and the executor read the same
+# row at each decision, so a reset frees every process at once.
+
+
+class ResponseBreakerState(BaseModel):
+    """The breaker as stored: state, the rule that tripped it, the counts
+    that completed the signature, and who ended the trip."""
+
+    state: str
+    reason: Optional[str] = None
+    tripped_at: Optional[str] = None
+    counts: Dict[str, Any] = Field(default_factory=dict)
+    auto_resume_at: Optional[str] = None
+    reset_at: Optional[str] = None
+    reset_by: Optional[str] = None
+
+
+def _breaker_response(state) -> ResponseBreakerState:
+    return ResponseBreakerState(
+        state=state.state,
+        reason=state.reason,
+        tripped_at=state.tripped_at,
+        counts=dict(state.counts),
+        auto_resume_at=state.auto_resume_at,
+        reset_at=state.reset_at,
+        reset_by=state.reset_by,
+    )
+
+
+@router.get("/response-breaker", response_model=ResponseBreakerState)
+def get_response_breaker():
+    """Read the containment breaker's state without inserting a default row.
+
+    A failed read is a 503, not "open": reporting an armed breaker while the
+    stored state may be tripped would invite exactly the containment the
+    breaker exists to stop.
+    """
+    try:
+        state = read_breaker_state()
+    except Exception as e:
+        logger.error("Error reading the containment breaker state: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Could not read the containment breaker state"
+        ) from e
+    return _breaker_response(state)
+
+
+@router.post(
+    "/response-breaker/reset",
+    dependencies=_SETTINGS_WRITE,
+    response_model=ResponseBreakerState,
+)
+def reset_response_breaker(
+    current_user: User = Depends(get_current_active_user),
+):
+    """Open a tripped breaker — a person's action: the trip ends when they
+    say so, not when the daemon feels rested. An armed breaker is returned
+    as-is: no write, no second OPENED log, no new audit row.
+
+    The write is stamped with the signed-in operator, so the config audit
+    trail names who resumed automatic containment.
+    """
+    try:
+        state = read_breaker_state()
+        if state.state == STATE_TRIPPED:
+            opened = opened_state(state, str(current_user.user_id), utcnow())
+            if not write_breaker_state(opened, _for_user(current_user)):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not save the containment breaker reset",
+                )
+            state = opened
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error resetting the containment breaker: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Could not reset the containment breaker"
+        ) from e
+    return _breaker_response(state)
 
 
 # ---- Darktrace webhook receiver config ----

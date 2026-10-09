@@ -76,6 +76,20 @@ class ResponseConfig:
     # may call directly despite the destructive-verb gate (core.llm.tool_risk).
     # A shorter list is tighter; chat is never loosened by it.
     tool_risk_overrides: List[str] = field(default_factory=list)
+    # Anti-spoofing circuit breaker: suspend auto-approval of containment
+    # while the shape of the demand looks like a storm — rolling-hour
+    # volume, distinct-target churn (the rotating-spoofed-IP signature a
+    # per-target idempotency key misses), or the failure rate of the last
+    # five containment executions. Lower is tighter on all three. The state
+    # is persisted (response.breaker_state) and fail-closed; the decision
+    # is core.response.breaker.
+    breaker_volume_threshold: int = 10
+    breaker_distinct_targets: int = 8
+    breaker_failure_rate: float = 0.50
+    # Minutes after a trip before the breaker resumes on its own. 0 (the
+    # default) is manual reset only: resuming machine-speed containment
+    # after an anomaly is a promoting decision, and promoting is yours.
+    breaker_auto_resume_minutes: int = 0
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -95,6 +109,10 @@ class ResponseConfig:
             max_containment_share_per_hour=s.daemon_max_containment_share_per_hour,
             max_containment_per_subnet_hour=s.daemon_max_containment_per_subnet_hour,
             tool_risk_overrides=list(s.daemon_tool_risk_overrides),
+            breaker_volume_threshold=s.daemon_breaker_volume_threshold,
+            breaker_distinct_targets=s.daemon_breaker_distinct_targets,
+            breaker_failure_rate=s.daemon_breaker_failure_rate,
+            breaker_auto_resume_minutes=s.daemon_breaker_auto_resume_minutes,
             dry_run=s.daemon_dry_run,
         )
 

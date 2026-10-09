@@ -33,6 +33,7 @@ GATED_ROUTES = [
     ("POST", "/api/config/secrets/reinit", {}, "settings.write"),
     ("POST", "/api/config/secrets/migrate-to-encrypted", None, "settings.write"),
     ("POST", "/api/config/force-manual-approval", {"enabled": True}, "settings.write"),
+    ("POST", "/api/config/response-breaker/reset", None, "settings.write"),
     ("POST", "/api/config/integrations", {"integrations": {}}, "integrations.write"),
     ("POST", "/api/config/darktrace", {}, "integrations.write"),
     ("POST", "/api/orchestrator/enable", None, "settings.write"),

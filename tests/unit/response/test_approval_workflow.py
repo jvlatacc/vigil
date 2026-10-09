@@ -140,7 +140,11 @@ class TestConfidenceThresholds:
 
     def test_a_failed_read_does_not_fall_back_to_act(self):
         """The stored flag was Act on the previous read; an error still holds the action."""
-        reads = iter([{"enabled": False}, RuntimeError("db down")])
+        # A containment decision reads the breaker's state after the flag; its
+        # open payload rides between the flag reads here.
+        reads = iter(
+            [{"enabled": False}, {"state": "open"}, RuntimeError("db down")]
+        )
 
         def read(key):
             value = next(reads)

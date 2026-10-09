@@ -293,6 +293,19 @@ class Settings(BaseSettings):
     # shorter list is tighter.
     # TODO(PR6): Settings UI field for this allow-list.
     daemon_tool_risk_overrides: Annotated[List[str], NoDecode] = []
+    # Anti-spoofing circuit breaker: suspends auto-approval of containment
+    # while the shape of the demand looks like a storm — rolling-hour
+    # volume, distinct-target churn, or the failure rate of the last five
+    # containment executions. Tripped, containment rows wait for a person
+    # until an operator resets it (core.response.breaker). Lower is tighter
+    # on the three thresholds.
+    daemon_breaker_volume_threshold: int = 10
+    daemon_breaker_distinct_targets: int = 8
+    daemon_breaker_failure_rate: float = 0.50
+    # Minutes after a trip before the breaker resumes on its own; 0 (the
+    # default) is manual reset only. Resuming machine-speed containment
+    # after an anomaly is a promoting decision, and promoting is yours.
+    daemon_breaker_auto_resume_minutes: int = 0
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
     daemon_slack_enabled: Optional[bool] = None
