@@ -454,6 +454,28 @@ def test_a_phase_tool_the_deployment_lacks_is_dropped_and_recorded():
     assert "get_finding" in ids and "acme_edr_lookup" not in ids
 
 
+# The policy refuses a direct-action name before the deployment question even
+# arises: the grant can never arm a call the invoke gate would kill, and the
+# phase says why the tool is missing rather than arming a blind run.
+def test_a_phase_tool_the_policy_refuses_is_dropped_and_recorded():
+    playbook, config_text = resolve(
+        "phase-fixture", workflows=_compose_with("get_finding", "acme_edr_isolate")
+    )
+    [phase] = yaml.safe_load(playbook)["phases"]
+    assert "get_finding" in phase["tools"] and "acme_edr_isolate" not in phase["tools"]
+    assert phase["unavailable"] == [
+        {
+            "tool": "acme_edr_isolate",
+            "reason": (
+                "the invoke policy refuses acme_edr_isolate without a person; "
+                "queue it through create_approval_action"
+            ),
+        }
+    ]
+    ids = [t["id"] for t in yaml.safe_load(config_text)["tools"]]
+    assert "get_finding" in ids and "acme_edr_isolate" not in ids
+
+
 def test_a_phase_whose_tools_are_all_present_records_nothing_unavailable():
     playbook, _ = resolve("phase-fixture", workflows=_compose_with("get_finding"))
     [phase] = yaml.safe_load(playbook)["phases"]

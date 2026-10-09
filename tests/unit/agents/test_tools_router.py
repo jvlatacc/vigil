@@ -49,8 +49,17 @@ def _raises(monkeypatch, error):
     monkeypatch.setattr(tools_router, "execute_backend_tool", fake)
 
 
-def _invoke(client, tool="list_findings", args=None, bounds=None, headers=AUTH):
+def _invoke(
+    client,
+    tool="list_findings",
+    args=None,
+    bounds=None,
+    headers=AUTH,
+    principal=None,
+):
     body = {"tool": tool, "args": args or {}, "bounds": bounds or BOUNDS}
+    if principal is not None:
+        body["principal"] = principal
     return client.post("/internal/tools/invoke", json=body, headers=headers)
 
 
@@ -494,3 +503,54 @@ class TestPrincipal:
         assert answer["ok"] is True
         assert recorded == ["nestor"]
         assert current_caller() is None
+
+
+class TestToolRiskPolicy:
+    # The invoke boundary is where a run's own tool call is checked: the same
+    # direct-action taxonomy chat refuses one level up, with a person or the
+    # operator's allow-list as the only releases. Backend tools are Vigil's
+    # own and guarded where they are defined, so the gate reads the MCP side.
+
+    def _serve_mcp(self, monkeypatch, rows):
+        async def _no_backend(name, args, **kwargs):
+            return None, False
+
+        async def _served(name, args, seconds, registry):
+            return rows, True
+
+        monkeypatch.setattr(tools_router, "execute_backend_tool", _no_backend)
+        monkeypatch.setattr(tools_router, "execute_mcp_tool", _served)
+        monkeypatch.setattr(
+            MCPRegistry, "get_active_servers", lambda self: ["cloudflare"]
+        )
+
+    # Nothing is dispatched: the refusal happens before the ladder runs, so no
+    # stub would ever be called even if one were set.
+    def test_a_destructive_call_with_no_person_is_refused(self, client):
+        body = _invoke(client, tool="cf_waf_block_ip").json()
+        assert body["ok"] is False
+        failure = body["failure"]
+        assert failure["kind"] == "refused"
+        assert "create_approval_action" in failure["detail"]
+        assert failure["rule"] == "agent.tool_risk_no_person=cf_waf_block_ip"
+
+    def test_a_destructive_call_with_a_bound_person_runs(self, client, monkeypatch):
+        self._serve_mcp(monkeypatch, [{"ip": "203.0.113.5"}])
+        response = _invoke(
+            client, tool="cf_waf_block_ip", principal=tool_principal.mint("nestor")
+        )
+        assert response.json()["rows"] == [{"ip": "203.0.113.5"}]
+
+    def test_the_operators_allow_list_releases_the_call(self, client, monkeypatch):
+        self._serve_mcp(monkeypatch, [{"ip": "203.0.113.5"}])
+        monkeypatch.setattr(
+            tools_router, "current_overrides", lambda: ("cf_waf_block_ip",)
+        )
+        response = _invoke(client, tool="cf_waf_block_ip")
+        assert response.json()["rows"] == [{"ip": "203.0.113.5"}]
+
+    def test_a_name_the_taxonomy_does_not_claim_is_untouched(
+        self, client, monkeypatch
+    ):
+        self._serve_mcp(monkeypatch, [{"finding": 1}])
+        assert _invoke(client, tool="get_finding").json()["rowCount"] == 1
