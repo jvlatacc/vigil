@@ -72,6 +72,9 @@ class HeartbeatRequest(BaseModel):
     bundle_version: Optional[int] = Field(default=None, ge=0)
     autonomy_tier: Optional[str] = Field(default=None, max_length=16)
     lease_state: Optional[str] = Field(default=None, max_length=32)
+    # The node's durable-ack watermark (reconciliation exchange: acked_upto
+    # in, commit_watermark back). Persisted for the drift signal.
+    acked_upto: Optional[int] = Field(default=None, ge=0)
 
 
 class EdgeEventBatch(BaseModel):
@@ -180,6 +183,7 @@ def heartbeat(
             bundle_version=body.bundle_version,
             autonomy_tier=body.autonomy_tier,
             lease_state=body.lease_state,
+            acked_upto=body.acked_upto,
         )
     except (NodeNotEnrolled, AuthenticationFailed):
         # Revoked between authentication and heartbeat: the node is gone.

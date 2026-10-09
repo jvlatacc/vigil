@@ -90,6 +90,7 @@ def import_events(node: EdgeNode, events: list[dict]) -> EventImportResult:
 
     source = finding_source_for(node.node_id)
     approvals = ApprovalService()
+    committed_sequences: list[int] = []
     for event in events:
         event_id, reason = _validate_event(event)
         if reason is not None:
@@ -105,7 +106,37 @@ def import_events(node: EdgeNode, events: list[dict]) -> EventImportResult:
             # and the failure is reported per event rather than swallowed.
             logger.warning("Edge event %s failed import: %s", event_id, e)
             result.rejected.append({"event_id": event_id, "reason": "import_failed"})
+            continue
+        sequence = event.get("local_sequence")
+        if isinstance(sequence, int) and not isinstance(sequence, bool):
+            committed_sequences.append(sequence)
+    # The watermark advances only here — after every per-event session has
+    # committed and before the response is built, so an acked event is a
+    # committed event. A max, never a subtraction: gaps (evicted or
+    # rejected records) resolve on replay, they do not hold the watermark.
+    _advance_commit_watermark(node, committed_sequences)
     return result
+
+
+def _advance_commit_watermark(node: EdgeNode, sequences: list[int]) -> None:
+    """Move the node's commit_watermark to the highest sequence in this
+    batch, durably. Monotonic max: never ahead of what actually committed,
+    never behind what the node already uploaded."""
+    if not sequences:
+        return
+    candidate = max(sequences)
+    try:
+        with get_db_manager().session_scope() as session:
+            row = session.get(EdgeNode, node.node_id)
+            if row is None or (
+                row.commit_watermark is not None and row.commit_watermark >= candidate
+            ):
+                return
+            row.commit_watermark = candidate
+    except SQLAlchemyError as exc:
+        # A lagging watermark never blocks the ack: the events committed and
+        # the next batch re-advances the max.
+        logger.warning("commit watermark update failed for %s: %s", node.node_id, exc)
 
 
 def finding_source_for(node_id: str) -> str:
@@ -151,6 +182,11 @@ def _validate_event(event: Any) -> tuple[str, Optional[str]]:
         return event_id, "payload must be a JSON object"
     if len(json.dumps(payload, default=str).encode()) > MAX_EVENT_PAYLOAD_BYTES:
         return event_id, f"payload exceeds {MAX_EVENT_PAYLOAD_BYTES} bytes"
+    sequence = event.get("local_sequence")
+    if sequence is not None and (
+        isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0
+    ):
+        return event_id, "local_sequence must be a non-negative integer"
     if event["kind"] == ACTION:
         action = event.get("action")
         if not isinstance(action, dict):

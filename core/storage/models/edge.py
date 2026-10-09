@@ -44,6 +44,13 @@ class EdgeNode(Base):
     last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_boot_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     last_bundle_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Reconciliation watermarks (T3). commit_watermark: the highest
+    # local_sequence durably imported for this node — a monotonic max the
+    # event importer maintains, never ahead of a durable commit.
+    # last_acked_seq: the node's own durable-ack watermark from its last
+    # heartbeat. The difference is committed-but-unacknowledged work.
+    commit_watermark: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_acked_seq: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     revoked_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     revoke_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
