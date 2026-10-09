@@ -270,6 +270,28 @@ class Settings(BaseSettings):
     daemon_high_action_floor: float = 0.80
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
+    # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
+    # and validates them; nothing else reads them here. Origin enforcement is
+    # ON by default: unregistered-key deployments get human approval instead
+    # of auto-execution — registering keys restores machine speed.
+    daemon_containment_quotas_enabled: bool = True
+    # Quota scope derives from the target IP at this prefix length (0-32); a
+    # /24 yields 254 usable hosts, so 5%/min means 12 actions per minute.
+    daemon_subnet_scope_prefix: int = 24
+    daemon_containment_quota_subnet_pct_per_min: float = 5.0
+    daemon_containment_quota_global_per_min: int = 30
+    # The hourly ceiling is the breaker trip, not just a pend.
+    daemon_containment_quota_global_per_hour: int = 200
+    # While the breaker is open every action waits for a person; it opens for
+    # this long, then auto-closes. It also trips on protected-asset probes or
+    # unverified-origin floods inside a 10-minute window.
+    daemon_breaker_cooldown_seconds: int = 900
+    daemon_breaker_invariant_probe_trip: int = 3
+    daemon_breaker_origin_flood_trip: int = 10
+    # Boot seed of never-quarantine invariants: JSON array of objects.
+    daemon_protected_assets: Annotated[List[dict], NoDecode] = []
+    # Ed25519 origin trust roots: JSON array of objects.
+    daemon_trusted_origins: Annotated[List[dict], NoDecode] = []
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
@@ -350,6 +372,23 @@ class Settings(BaseSettings):
     def _split_csv(cls, v: Any) -> Any:
         if isinstance(v, str):
             return [p.strip() for p in v.split(",") if p.strip()]
+        return v
+
+    @field_validator(
+        "daemon_protected_assets",
+        "daemon_trusted_origins",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_list(cls, v: Any) -> Any:
+        # NoDecode hands the raw env string over: parse it here so a malformed
+        # seed fails validation (and boot, via validate_settings_or_exit)
+        # instead of reaching a reader as a string that reads as empty. A
+        # blank value means no seed, matching _blank_is_unset's leniency.
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            return json.loads(v)
         return v
 
     @field_validator(
