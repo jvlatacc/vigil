@@ -42,7 +42,8 @@ def test_direct_action_tools_are_destructive(name):
         "virustotal_get_ip_report",
         "shodan_search_host",
         "splunk_query",
-        # ``execute`` is not a destructive verb: ART is dropped by id so this stays.
+        # ``execute`` is not a destructive verb token, so the token reading
+        # keeps this: the gate's classification decides reachability (below).
         "splunk-selfhosted_splunk_execute",
     ],
 )
@@ -69,7 +70,10 @@ def test_chat_cannot_reach_destructive_mcp_but_reaches_the_rest():
 
 
 @pytest.mark.unit
-def test_chat_cannot_reach_art_execute_but_reaches_splunk_execute():
+def test_chat_cannot_reach_art_execute_or_splunk_execute():
+    # ``execute`` rides the dispatch gate's fail-closed pattern now: an
+    # execute-shaped call queues for a person, and chat -- which cannot resume
+    # a parked approval -- does not reach it either. (Was: only ART, by id.)
     reachable = _reachable(
         [
             _mcp("atomic_red_team_execute"),
@@ -77,7 +81,7 @@ def test_chat_cannot_reach_art_execute_but_reaches_splunk_execute():
             _mcp("splunk-selfhosted_splunk_execute"),
         ]
     )
-    assert reachable == {"splunk-selfhosted_splunk_execute"}
+    assert reachable == set()
 
 
 @pytest.mark.unit

@@ -261,6 +261,77 @@ Non-negotiables: set `DEV_MODE=false`, generate a real `JWT_SECRET_KEY`, change
 the default database password, terminate TLS in front of the API, and never
 commit a credential.
 
+### Integration opt-outs Vigil ships off
+
+Three integration capabilities ship disabled. Each is a per-deployment
+decision to make deliberately, and each is enforced in code, not convention:
+
+- **Page-extension connector origins — `EXTENSION_CONNECTOR_ALLOWLIST`.**
+  A comma-separated list of the origins (`https://host[:port]`) a
+  page-extension connector may live on. Entries are canonicalized before
+  matching — scheme and host case-insensitively, an explicit port is part
+  of the origin, and a malformed entry is dropped rather than trusted — so
+  a typo narrows the list, it never widens it. When the allowlist is set, a
+  connector whose `connectorUrl` is not on it is refused at session mint.
+  When it is unset — the shipped default — the trust gate applies the
+  scheme rule alone (`https`, or `http` on loopback), and the
+  Content-Security-Policy is what keeps a configured connector's bundle out
+  of the browser until its origin is listed. If connectors are configured
+  while the allowlist is empty, the backend says so at startup.
+
+- **MCP child environments — `required_env_vars`.** Spawned MCP servers do
+  not inherit the backend's environment. A child receives the MCP SDK's
+  default variables, the CA-bundle variables, `VIGIL_DIR` and `PYTHONPATH`,
+  and the `env` its own `mcp-config.json` entry declares — nothing else. If
+  a server legitimately needs a variable from the backend environment that
+  is not in that set, name it in that entry's `required_env_vars` (or
+  reference it as `${VAR}` in the entry's `env` or `args`). That list is
+  the only door from the backend environment to a child process, so read it
+  as the credentials you are handing that server.
+
+- **PagerDuty write tools — `--enable-write-tools`.** The shipped
+  `pagerduty` entry runs read-only: `create_incident`, `manage_incidents`,
+  `add_responders` and the other write tools are not registered, and a
+  mutating call queues at Vigil's approval gate instead of executing. To
+  let the integration write to PagerDuty directly, re-add
+  `--enable-write-tools` to the entry's `args` in `mcp-config.json` — the
+  same disabled-by-default posture as `atomic-red-team`. Keep it off unless
+  a deployment needs it.
+
+### Supply-chain pins and verified publishers (October 2026)
+
+Every runtime-fetched MCP server in `mcp-config.json` pins an exact artifact,
+and `tests/unit/_ratchets/test_mcp_runtime_pins.py` enforces it: exact npm/PyPI
+versions, Docker image digests, and — since the E8/E9 hardening — a full
+40-hex commit SHA for every git ref and for local `uv --directory` clones.
+Tags are rejected as pins because they are server-side mutable.
+
+Publishers were verified against the registries in October 2026:
+
+- **Official:** `falcon-mcp` (CrowdStrike), `google-secops-mcp` / `gti-mcp` /
+  `scc-mcp` (Google SecOps Team, `google/mcp-security`),
+  `awslabs.well-architected-security-mcp-server` (AWS Labs), and
+  `pagerduty-mcp` (built from PagerDuty's own `PagerDuty/pagerduty-mcp-server`
+  — its `pyproject.toml` is PyPI's `pagerduty-mcp`; the similarly named PyPI
+  package `pagerduty-mcp-server` is an unrelated community project, do not
+  swap them).
+- **Community, named maintainers:** `security-detections-mcp` (`mhaggis`),
+  `@pebbletek/cribl-mcp` (`aby@pebbletek.ai`, `pebbletek/cribl-mcp`).
+- **Community, pseudonymous:** `@burtthecoder/mcp-virustotal` and
+  `@burtthecoder/mcp-shodan` (maintainer `burtmacklin`, code under the
+  `w0h1v` GitHub account). The exact-version pins are the control; re-verify
+  before moving one.
+- **Third-party vendor, not Okta itself:** `mcp/okta-mcp-fctr` is Fctr's
+  (`fctr.io`) Okta MCP server, listed in Docker's MCP Catalog with source
+  `fctr-id/okta-mcp-server`. It is not an Okta-published image; the digest
+  pin is the control.
+
+`mcp-remote` stays on `0.1.49`: past the `0.1.16` fix for CVE-2025-6514, and
+past the `0.1.39` remediation level reported for the 2026 SSRF/transport
+advisories (CVE-2026-51994…52001, whose upstream version metadata is
+incomplete). Jumping minor lines (0.8.x, 0.14.x) is a separate decision; the
+durable fix is retiring `mcp-remote` for an in-process streamable-HTTP client.
+
 ---
 
 ## Security in Development

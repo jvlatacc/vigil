@@ -99,6 +99,51 @@ def _text_of(result: Dict[str, Any]) -> str:
     return error if isinstance(error, str) else "the server reported an error"
 
 
+# The reason every queued row carries. Constant so the approvals screen can
+# group on it and the tests can pin the wording.
+APPROVAL_REASON = "mutating integration tool requires human approval"
+
+
+def _approval_service():
+    """The queue a mutating call parks on. Module-level so tests can stub it."""
+    from core.response.approval_service import ApprovalService
+
+    return ApprovalService()
+
+
+# A row a person can act on says what was asked: the tool's full name (server
+# prefix included) and its arguments go on the row as parameters. The caller's
+# identity goes on created_by -- the agent's own name never stands in for the
+# person behind the session, and where no principal is bound (a hunt) the row
+# records the system, not "agent". human_only holds the row for a person
+# whatever any confidence band says: the gate's classification is
+# deterministic, so there is no confidence to compare.
+def _queue_for_approval(
+    tool_name: str, server: str, tool: str, args: Dict[str, Any]
+) -> Dict[str, Any]:
+    from core.integrations.mcp.surface import current_caller
+    from core.response.approval_service import ActionType
+
+    action = _approval_service().create_action(
+        action_type=ActionType.CUSTOM,
+        title=f"Run integration tool {tool_name}",
+        description=(
+            f"The {server} integration '{tool}' was called under the approval "
+            "gate. Nothing has run: dispatch waits for a person to approve "
+            "this action."
+        ),
+        target=tool_name,
+        confidence=1.0,
+        reason=APPROVAL_REASON,
+        evidence=[f"server: {server}", f"tool: {tool}"],
+        created_by=current_caller() or "system",
+        human_only=True,
+        annotate_rule=False,
+        parameters={"tool": tool_name, "arguments": args},
+    )
+    return {"queued_for_approval": action.action_id, "tool": tool_name}
+
+
 # Returns (rows, handled). handled is False only when no active server carries
 # the name, which is the caller's cue to report it as the defect it is -- a tool
 # nothing implements is not a gap in visibility.
@@ -120,6 +165,18 @@ async def execute_mcp_tool(
         return None, False
 
     from core.integrations.mcp.surface import VIGIL_SERVER
+
+    # The approval gate (E2): a mutating integration tool never dispatches on
+    # the caller's say-so. Classification is the slice descriptor's declaration
+    # where one covers the server and the fail-closed name pattern otherwise;
+    # chat's reachable-set filter reads the same answer, so both boundaries
+    # agree. Vigil's own tools are not integration calls -- their approval and
+    # permission stories live in the backend tool registry.
+    if server != VIGIL_SERVER:
+        from core.integrations._base.descriptor import tool_requires_approval
+
+        if tool_requires_approval(server, tool):
+            return _queue_for_approval(tool_name, server, tool, args), True
 
     if server == VIGIL_SERVER:
         # Vigil's own tools are functions in this process. Reaching them by

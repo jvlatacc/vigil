@@ -5324,7 +5324,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List All Credentials
+         * @description Every user's MCP credentials. The admin view offboarding needs.
+         *
+         *     Tokens are hashes at rest and were shown once at mint; this list carries
+         *     ids, labels, owners and revocation state, never a token or its hash.
+         */
+        get: operations["get_api_mcp_surface_credentials"];
         put?: never;
         /**
          * Mint Credential
@@ -5352,7 +5359,11 @@ export interface paths {
         post?: never;
         /**
          * Revoke Credential
-         * @description Withdraw a credential. What it could reach, it can no longer reach.
+         * @description Withdraw a credential — yours, or anyone's on the admin path.
+         *
+         *     An administrator retiring a leaver's standing access must not need the
+         *     leaver's cooperation, so the self-only rule of the earlier route is
+         *     superseded here; the audit row records who pulled it.
          */
         delete: operations["delete_api_mcp_surface_credentials_credential_id"];
         options?: never;
@@ -22485,6 +22496,39 @@ export interface operations {
                 "application/json": components["schemas"]["SurfaceToggle"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_mcp_surface_credentials: {
+        parameters: {
+            query?: {
+                include_revoked?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

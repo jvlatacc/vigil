@@ -9,8 +9,10 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import asyncio
+import ipaddress
 import json
 import logging
+from typing import Optional
 
 import httpx
 import mcp.server.stdio
@@ -18,6 +20,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
+from core.integrations._base.tool_errors import classified_error
 from core.integrations._base.tool_result import run_tool
 
 logger = logging.getLogger(__name__)
@@ -25,6 +28,50 @@ logger = logging.getLogger(__name__)
 
 def result(data):
     return [types.TextContent(type="text", text=json.dumps(data, indent=2))]
+
+
+# The lookup target leaves the host in the query string, so a bogon target
+# would disclose an internal address to the provider and the answer is worth-
+# less anyway. Named explicitly, mirroring core/platform/url_safety.py: the
+# metadata addresses get their own line because that is the failure that
+# matters for a SOC tool, even though both are link-local.
+_METADATA_ADDRESSES = (
+    ipaddress.ip_address("169.254.169.254"),
+    ipaddress.ip_address("fd00:ec2::254"),
+)
+
+
+def bogon_reason(ip: str) -> Optional[str]:
+    """Why this lookup target must not leave the host; None when it may.
+
+    Refuses RFC1918, loopback, link-local (the cloud metadata service
+    included), multicast, reserved and unspecified ranges before any outbound
+    call, plus non-literal inputs: the tool is ``geolocate_ip`` and resolving a
+    hostname here would add a DNS-rebinding surface the caller never asked
+    for.
+    """
+    try:
+        addr = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return "lookup target must be a literal IPv4 or IPv6 address"
+    # ::ffff:10.0.0.1 connects as real IPv4, so it faces the same checks.
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    if addr in _METADATA_ADDRESSES:
+        return "cloud metadata addresses are not looked up"
+    if addr.is_loopback:
+        return "loopback addresses are not looked up"
+    if addr.is_private:
+        return "private (RFC1918) addresses are not looked up"
+    if addr.is_link_local:
+        return "link-local addresses are not looked up"
+    if addr.is_multicast:
+        return "multicast addresses are not looked up"
+    if addr.is_reserved:
+        return "reserved addresses are not looked up"
+    if addr.is_unspecified:
+        return "unspecified addresses are not looked up"
+    return None
 
 
 async def handle_list_tools():
@@ -54,24 +101,37 @@ async def handle_call_tool(name: str, arguments: dict | None):
     args = arguments or {}
 
     def lookup_ip(ip):
+        # Refusal happens before any outbound call: the query itself is the
+        # disclosure.
+        reason = bogon_reason(ip)
+        if reason is not None:
+            return {"ip": ip, "error": reason}
         try:
-            resp = httpx.get(f"http://ip-api.com/json/{ip}", timeout=10)
+            # ipwho.is, not ip-api.com: the hardening standard is HTTPS-only,
+            # and ip-api's free tier serves plain HTTP by design — its own
+            # docs say SSL needs the paid tier. ipwho.is is keyless HTTPS
+            # with the same shape of answer (country/region/city/isp/org/
+            # lat/lon), remapped below to the tool's original keys.
+            resp = httpx.get(f"https://ipwho.is/{ip}", timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("status") == "success":
+                if data.get("success") is True:
+                    conn = data.get("connection") or {}
                     return {
                         "ip": ip,
                         "country": data.get("country"),
-                        "region": data.get("regionName"),
+                        "region": data.get("region"),
                         "city": data.get("city"),
-                        "isp": data.get("isp"),
-                        "org": data.get("org"),
-                        "lat": data.get("lat"),
-                        "lon": data.get("lon"),
+                        "isp": conn.get("isp"),
+                        "org": conn.get("org"),
+                        "lat": data.get("latitude"),
+                        "lon": data.get("longitude"),
                     }
             return {"ip": ip, "error": "Lookup failed"}
         except Exception as e:
-            return {"ip": ip, "error": str(e)}
+            # str(e) can carry the provider URL or a proxy error body — the
+            # agent channel gets a classified string, the log keeps the detail.
+            return {"ip": ip, "error": classified_error("ip-geolocation", name, e)}
 
     if name == "geolocate_ip":
         ip = args.get("ip")

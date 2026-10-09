@@ -13,6 +13,7 @@ darktrace's became dead scaffolding before #557 removed it.
 from __future__ import annotations
 
 import importlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -96,6 +97,13 @@ class IntegrationDescriptor:
     # own alert id and the vendor documents the URL; cite the doc beside it.
     # Evidence refs win when they are links.
     console_link_template: Optional[str] = None
+    # Tools that change the world -- isolate a host, quarantine a device, run
+    # an attack technique. Declared here, the vendor's source of truth, because
+    # the fail-closed name pattern can only read what a name says:
+    # ``manage_incidents`` changes incident state and no suffix reveals it.
+    # Names are the vendor's own tool ids (the registry prefixes the server),
+    # and the dispatch gate queues every match for human approval (area B).
+    mutating_tools: Tuple[str, ...] = ()
 
     @property
     def secret_fields(self) -> Tuple[str, ...]:
@@ -150,3 +158,68 @@ def get_descriptor(integration_id: str) -> Optional[IntegrationDescriptor]:
 def iter_descriptors() -> Tuple[IntegrationDescriptor, ...]:
     _discover()
     return tuple(_REGISTRY.values())
+
+
+# The fail-closed fallback when a descriptor declares nothing: a tool whose
+# name ends in a direct-action verb changes the world whether or not a
+# descriptor vouches for it. Suffix-anchored so a read-only lead wins
+# (get_isolation_status, list_blocked_ips) -- the same reading chat's token
+# list makes, and the same side to err on: a spurious queue costs a person's
+# click, a missed one is an ungated detonation.
+MUTATING_TOOL_PATTERN = re.compile(
+    r"_(isolate|unisolate|quarantine|block|delete|remove|execute|terminate|"
+    r"kill|reset|revoke|purge|escalate)$"
+)
+
+
+def descriptor_for_server(server: Optional[str]) -> Optional[IntegrationDescriptor]:
+    """The vendor descriptor whose MCP servers carry ``server``, if any."""
+    _discover()
+    return next((d for d in _REGISTRY.values() if server in d.mcp_server_names), None)
+
+
+def declared_requires_approval(server: Optional[str], tool: str) -> Optional[bool]:
+    """Whether the server's descriptor declares this tool mutating.
+
+    ``None`` means undeclared -- not safe: the caller falls back to the name
+    pattern.
+    """
+    descriptor = descriptor_for_server(server)
+    if descriptor is None or tool not in descriptor.mutating_tools:
+        return None
+    return True
+
+
+def tool_requires_approval(server: Optional[str], tool: str) -> bool:
+    """Whether dispatching this MCP tool must first queue for approval.
+
+    The descriptor decides where one covers the server; everything else fails
+    closed to the name pattern, read against the server-prefixed name the
+    registry and chat both see (``{server}_{tool}``), so a bare-verb tool id
+    -- ``quarantine`` on its own -- is still caught under its prefix.
+    """
+    if declared_requires_approval(server, tool) is not None:
+        return True
+    prefixed = f"{server}_{tool}" if server else tool
+    return bool(MUTATING_TOOL_PATTERN.search(prefixed))
+
+
+def flat_name_requires_approval(name: str) -> bool:
+    """``tool_requires_approval`` from a registry tool id alone.
+
+    Chat reaches tools by name only, with no server list to split against,
+    so the server prefix is matched against the names descriptors declare --
+    longest first, the same reading ``split_tool_name`` gives the live
+    servers. A name no descriptor claims is classified whole.
+    """
+    _discover()
+    servers = sorted(
+        {s for d in _REGISTRY.values() for s in d.mcp_server_names},
+        key=len,
+        reverse=True,
+    )
+    for server in servers:
+        prefix = f"{server}_"
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return tool_requires_approval(server, name[len(prefix) :])
+    return tool_requires_approval(None, name)

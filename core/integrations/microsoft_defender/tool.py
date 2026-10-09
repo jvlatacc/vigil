@@ -20,6 +20,7 @@ from mcp.server.models import InitializationOptions
 
 from core.integrations._base.aad_token import TokenError, fetch_client_credentials_token
 from core.integrations._base.config import resolve
+from core.integrations._base.tool_errors import classified_error
 from core.integrations._base.tool_result import run_tool
 from core.integrations.microsoft_defender.descriptor import MICROSOFT_DEFENDER
 
@@ -141,7 +142,9 @@ async def handle_call_tool(name: str, arguments: dict | None):
 
         return result({"error": f"Unknown tool: {name}"})
     except Exception as e:
-        return result({"error": str(e)})
+        # str(e) carries the upstream URL and response body — the agent
+        # channel gets a classified string; the detail is logged, not returned.
+        return result({"error": classified_error("microsoft-defender", name, e)})
 
 
 async def _on_list_tools(_ctx, _params):

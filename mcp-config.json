@@ -32,6 +32,7 @@
       "args": ["-y", "mcp-remote@0.1.49", "${LOGLM_MCP_URL}", "--header", "Authorization: Bearer ${LOGLM_MCP_TOKEN}"],
       "env": {
         "_security_note": "mcp-remote pinned to 0.1.49 (CVE-2025-6514 is fixed in 0.1.16+). Stay on 0.1.x; do not jump to 0.8.x.",
+        "_token_note": "The bearer token reaches the child's environment via its ${LOGLM_MCP_TOKEN} reference in args (required_env_vars opt-in) and must NOT be declared in this env block: a declared value enters argv interpolation, which would put the composed 'Authorization: Bearer <token>' on the command line where /proc/<pid>/cmdline exposes it to every same-UID process. mcp-remote 0.1.49 expands ${VAR} in --header values from its own environment at runtime, so argv keeps the placeholder literal.",
         "LOGLM_MCP_URL": "${LOGLM_MCP_URL}"
       }
     },
@@ -50,8 +51,9 @@
 
     "sentinelone": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/Sentinel-One/purple-mcp.git@v0.7.0", "purple-mcp", "--mode", "stdio"],
+      "args": ["--from", "git+https://github.com/Sentinel-One/purple-mcp.git@07d4992089b10affff6163f296b1f6cb5734539f", "purple-mcp", "--mode", "stdio"],
       "env": {
+        "_security_note": "git ref pinned to the full commit SHA that tag v0.7.0 resolved to (2026-06-26, the latest upstream tag) — tags are server-side mutable, commit SHAs are not.",
         "PURPLEMCP_CONSOLE_TOKEN": "${SENTINELONE_API_TOKEN}",
         "PURPLEMCP_CONSOLE_BASE_URL": "${SENTINELONE_CONSOLE_URL}"
       }
@@ -81,8 +83,10 @@
       "args": ["core/integrations/splunk/tool.py"],
       "cwd": "${workspaceFolder}",
       "env": {
-        "_setup_note": "Self-hosted Splunk via REST API. Configure in Settings (server URL such as https://splunk.example.com:8089, username, password). The tool reads via resolve(), which also accepts SPLUNK_URL, SPLUNK_USERNAME and SPLUNK_PASSWORD from the environment; there is no required env placeholder, so the server is not treated as dormant until those values exist. Port 8089 uses HTTPS by default."
-      }
+        "_setup_note": "Self-hosted Splunk via REST API. Configure in Settings (server URL such as https://splunk.example.com:8089, username, password). The tool reads via resolve(), which also accepts SPLUNK_URL, SPLUNK_USERNAME and SPLUNK_PASSWORD from the environment; there is no required env placeholder, so the server is not treated as dormant until those values exist. Port 8089 uses HTTPS by default.",
+        "_security_note": "required_env_vars is the deny-by-default opt-in: the child's resolver reads SPLUNK_* from its own environment, and this list is the only channel through which those four names (and only those) are forwarded from the backend environment or the secret store."
+      },
+      "required_env_vars": ["SPLUNK_URL", "SPLUNK_USERNAME", "SPLUNK_PASSWORD", "SPLUNK_VERIFY_SSL"]
     },
 
     "elastic": {
@@ -104,8 +108,9 @@
     },
 
     "pagerduty": {
+      "_security_note": "Write tools (create_incident, manage_incidents, add_responders and 19 more) are a per-deployment opt-in: re-add --enable-write-tools to expose them. They ship off so a mutating call queues at Vigil's approval gate, the same disabled-by-default posture as atomic-red-team.",
       "command": "uvx",
-      "args": ["pagerduty-mcp==1.1.0", "--enable-write-tools"],
+      "args": ["pagerduty-mcp==1.1.0"],
       "env": {
         "PAGERDUTY_USER_API_KEY": "${PAGERDUTY_API_KEY}",
         "PAGERDUTY_API_HOST": "https://api.pagerduty.com"
@@ -114,13 +119,16 @@
 
     "okta": {
       "command": "docker",
-      "args": ["run", "-i", "--rm",
+      "args": ["run", "-i", "--rm", "--read-only", "--cap-drop=ALL",
         "-e", "OKTA_DOMAIN=${OKTA_DOMAIN}",
         "-e", "OKTA_API_TOKEN=${OKTA_API_TOKEN}",
         "mcp/okta-mcp-fctr@sha256:8d6cd51e1836802e18bfc12ae772962f4ce3fdec667f472eec66bba811e4a27c"
       ],
       "env": {
-        "_setup_note": "Docker Hub only publishes latest for this image; the digest pins the multi-arch index so launch does not float."
+        "_setup_note": "Docker Hub only publishes latest for this image; the digest pins the multi-arch index so launch does not float.",
+        "_security_note": "A container has no other credential channel than -e args, so these two names are declared here to resolve for argv interpolation — the one accepted argv-bearing pattern (the values never enter the container's own argv). Standard servers take credentials via this env block into the child's environment instead; see the loglm entry. The container runs with a read-only root filesystem and all Linux capabilities dropped; if a future image needs scratch space, add a --tmpfs mount rather than dropping --read-only.",
+        "OKTA_DOMAIN": "${OKTA_DOMAIN}",
+        "OKTA_API_TOKEN": "${OKTA_API_TOKEN}"
       }
     },
 
@@ -137,7 +145,8 @@
       "command": "uv",
       "args": ["--directory", "${HOME}/mcp-servers/joesandboxMCP", "run", "main.py"],
       "env": {
-        "_setup_note": "Clone first: git clone https://github.com/joesecurity/joesandboxMCP.git ~/mcp-servers/joesandboxMCP && cd ~/mcp-servers/joesandboxMCP && uv venv && uv pip install -e .",
+        "_setup_note": "Clone first: git clone https://github.com/joesecurity/joesandboxMCP.git ~/mcp-servers/joesandboxMCP && cd ~/mcp-servers/joesandboxMCP && git checkout d4c50a7b1368a43a245d7ead5f47feacccb7e015 && uv venv && uv pip install -e .",
+        "_security_note": "The clone is pinned: joesecurity/joesandboxMCP publishes no tags, so the checkout SHA (default-branch HEAD on 2026-10-09, last commit 2025-07-10) is the pin. Re-verify the SHA upstream before moving it — the pins ratchet requires a full 40-hex commit in this note.",
         "JBXAPIKEY": "${JOE_SANDBOX_API_KEY}",
         "ACCEPTTAC": "TRUE"
       }
