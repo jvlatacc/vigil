@@ -417,11 +417,24 @@ class FindingProcessor:
             self.stats["errors"] += 1
 
     def _deception_service(self):
-        """The deception signal service, built on first recon-shaped finding."""
-        if self._deception_signal_service is None:
-            from core.deception.signals import DeceptionSignalService
+        """The deception signal service, rebuilt when the knobs change.
 
-            self._deception_signal_service = DeceptionSignalService()
+        The Settings › Deception write lands in a system_config row and
+        :meth:`DeceptionConfig.from_settings` picks it up on its short
+        cache, so when the merged config differs from the cached service's
+        the service is rebuilt — enable/allowlist/window changes are live
+        without a daemon restart. Test doubles injected into
+        ``_deception_signal_service`` are honored verbatim.
+        """
+        from core.deception.config import DeceptionConfig
+        from core.deception.signals import DeceptionSignalService
+
+        config = DeceptionConfig.from_settings()
+        current = self._deception_signal_service
+        if current is None or (
+            isinstance(current, DeceptionSignalService) and current.config != config
+        ):
+            self._deception_signal_service = DeceptionSignalService(config=config)
         return self._deception_signal_service
 
     def _deception_signal(self, finding: Dict[str, Any]) -> bool:

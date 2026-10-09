@@ -1,15 +1,14 @@
 """Deception API endpoints (feature 5).
 
 The operator surface over the lease registry: posture status, the lease
-list, an operator release, and the kill-switch toggle. Authenticated like
-every router (``Auth.REQUIRED``); the ``deception.read``/``deception.manage``
-permission keys arrive with the console work that uses them — until those
-keys are seeded, an authenticated session is the gate, which matches the
-spine's inert defaults (the posture is off and the backend is dry-run).
+list, an operator release, the kill-switch toggle, the Settings ›
+Deception knobs, and the captured-probe log. Authenticated like every
+router (``Auth.REQUIRED``); reads demand ``deception.read`` and writes
+``deception.manage`` — the keys the role seed grants (06_auth_tables.sql).
 
 Kept unversioned (out of ``core/api/v1/``): the shape will churn as the
-Deception screen lands, and the versioned contract snapshot would freeze it
-prematurely — the v1 README's own tie-breaker.
+Deception screen matures, and the versioned contract snapshot would freeze
+it prematurely — the v1 README's own tie-breaker.
 """
 
 import logging
@@ -17,10 +16,18 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.auth.current_user import get_current_user
-from core.deception.config import KILL_SWITCH_CONFIG_KEY, DeceptionConfig
+from core.auth.permissions import permission_gate
+from core.deception.config import (
+    KILL_SWITCH_CONFIG_KEY,
+    SETTINGS_CONFIG_KEY,
+    VALID_BACKENDS,
+    DeceptionConfig,
+    allowlist_errors,
+    clear_settings_cache,
+)
 from core.deception.leases import DeceptionLeaseService
 from core.routing import Auth, RouterMeta
 from core.storage.models import User
@@ -75,7 +82,7 @@ class LeaseRelease(BaseModel):
     reason: Optional[str] = None
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[permission_gate("deception.read")])
 async def deception_status():
     """The posture summary: knobs, kill-switch state, lease counts."""
     config = DeceptionConfig.from_settings()
@@ -107,11 +114,12 @@ async def deception_status():
         "min_observations": config.min_observations,
         "window_seconds": config.window_seconds,
         "kill_switch_active": switch_active,
+        "allowlist": config.allowlist,
         "lease_counts": counts,
     }
 
 
-@router.get("/leases")
+@router.get("/leases", dependencies=[permission_gate("deception.read")])
 async def list_leases(status: Optional[str] = None, limit: int = 200):
     """Lease rows newest-first, optionally filtered by status."""
     if limit < 1 or limit > 500:
@@ -122,7 +130,10 @@ async def list_leases(status: Optional[str] = None, limit: int = 200):
     return {"leases": [_lease_to_dict(row) for row in rows], "count": len(rows)}
 
 
-@router.post("/leases/{lease_id}/release")
+@router.post(
+    "/leases/{lease_id}/release",
+    dependencies=[permission_gate("deception.manage")],
+)
 async def release_lease(lease_id: str, body: Optional[LeaseRelease] = None):
     """Operator release: unsteer now, record the rollback and the reason."""
     service = DeceptionLeaseService(config=DeceptionConfig.from_settings())
@@ -134,7 +145,7 @@ async def release_lease(lease_id: str, body: Optional[LeaseRelease] = None):
     return result
 
 
-@router.post("/kill-switch")
+@router.post("/kill-switch", dependencies=[permission_gate("deception.manage")])
 async def set_kill_switch(
     toggle: KillSwitchToggle,
     current_user: User = Depends(get_current_user),
@@ -159,3 +170,106 @@ async def set_kill_switch(
             status_code=500, detail="failed to store the kill-switch state"
         )
     return {"enabled": bool(toggle.enabled)}
+
+
+class DeceptionSettingsWrite(BaseModel):
+    """The Settings › Deception form, stored as one system_config row.
+
+    Bounds mirror the steering semantics: a lease TTL a renewal can reach
+    within the max duration, a corroboration window at least a minute wide,
+    a floor anywhere in the confidence range. The backend ships as dry_run;
+    ``controller`` is selectable here but build_backend refuses it until the
+    decoy-controller service is configured — the status names that.
+    """
+
+    enabled: bool
+    backend: str
+    honey_route_floor: float = Field(ge=0.0, le=1.0)
+    ttl_seconds: int = Field(ge=30, le=86400)
+    max_duration_seconds: int = Field(ge=300, le=604800)
+    min_observations: int = Field(ge=1, le=100)
+    window_seconds: int = Field(ge=60, le=86400)
+    allowlist: str = ""
+
+
+@router.post("/settings", dependencies=[permission_gate("deception.manage")])
+async def update_settings(
+    body: DeceptionSettingsWrite,
+    current_user: User = Depends(get_current_user),
+):
+    """Store the honey-routing knobs; they apply without a daemon restart."""
+    if body.backend not in VALID_BACKENDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"backend must be one of: {', '.join(VALID_BACKENDS)}",
+        )
+    if body.max_duration_seconds < body.ttl_seconds:
+        raise HTTPException(
+            status_code=422,
+            detail="max_duration_seconds must be at least ttl_seconds",
+        )
+    bad = allowlist_errors(body.allowlist)
+    if bad:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "unparseable allowlist entries (IPs or CIDRs expected): "
+                + ", ".join(bad)
+            ),
+        )
+
+    from core.storage.config_service import get_config_service
+
+    value = {
+        "enabled": body.enabled,
+        "backend": body.backend,
+        "honey_route_floor": body.honey_route_floor,
+        "ttl_seconds": body.ttl_seconds,
+        "max_duration_seconds": body.max_duration_seconds,
+        "min_observations": body.min_observations,
+        "window_seconds": body.window_seconds,
+        "allowlist": body.allowlist,
+    }
+    ok = get_config_service(user_id=str(current_user.user_id)).set_system_config(
+        key=SETTINGS_CONFIG_KEY,
+        value=value,
+        description="Deception honey-routing settings",
+        config_type="deception",
+        change_reason="Updated via Settings UI",
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to store the settings")
+    clear_settings_cache()
+    merged = DeceptionConfig.from_settings()
+    return {
+        "enabled": merged.enabled,
+        "backend": merged.backend,
+        "honey_route_floor": merged.honey_route_floor,
+        "ttl_seconds": merged.ttl_seconds,
+        "max_duration_seconds": merged.max_duration_seconds,
+        "min_observations": merged.min_observations,
+        "window_seconds": merged.window_seconds,
+        "allowlist": merged.allowlist,
+    }
+
+
+@router.get("/probes", dependencies=[permission_gate("deception.read")])
+async def list_probes(source_ip: Optional[str] = None, limit: int = 200):
+    """Recent recon observations newest-first — the captured-intel panel."""
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=422, detail="limit must be 1-500")
+    from core.deception.signals import DeceptionSignalService
+
+    service = DeceptionSignalService(config=DeceptionConfig.from_settings())
+    rows = service.list_probes(source_ip=source_ip, limit=limit)
+    probes = [
+        {
+            "probe_id": row.probe_id,
+            "source_ip": row.source_ip,
+            "finding_id": row.finding_id,
+            "evidence": row.evidence,
+            "created_at": _iso(row.created_at),
+        }
+        for row in rows
+    ]
+    return {"probes": probes, "count": len(probes)}

@@ -9,6 +9,7 @@ import SystemSection from './SystemSection'
 import FederationSection from './FederationSection'
 import UsersSection from './UsersSection'
 import AutoInvestigateSection from './AutoInvestigateSection'
+import DeceptionSection from './DeceptionSection'
 import DeveloperSection from './DeveloperSection'
 import AiConfigSection from './AiConfigSection'
 import ServicesSection from './ServicesSection'
@@ -27,6 +28,7 @@ type NavKey =
   | 'federation'
   | 'sla'
   | 'autoinvestigate'
+  | 'deception'
   | 'data'
   | 'system'
 
@@ -92,6 +94,7 @@ const NAV: NavDef[] = [
   { key: 'federation', label: 'Alert collection', desc: 'Pull alerts from your SIEM and EDR tools on a schedule, so agents can start on them without anyone forwarding them.', icon: 'graph', Component: FederationSection },
   { key: 'sla', label: 'SLA policies', desc: 'How fast a case must get a first response and be resolved, by severity.', icon: 'clock', Component: SlaPoliciesSection },
   { key: 'autoinvestigate', label: 'Limits & autonomy', desc: 'How much Vigil may do without you: whether agents start on their own, how many run at once, and what they may spend.', icon: 'bolt', Component: AutoInvestigateSection },
+  { key: 'deception', label: 'Deception', desc: 'The honey-routing posture: enable it, choose the steering backend, set the confidence floor and lease bounds, and list sources that must never be steered.', icon: 'shield', Component: DeceptionSection },
   { key: 'data', label: 'Data & uploads', desc: 'Bring data in without a live connector, and manage the detection rules applied to it.', icon: 'upload', Component: DataUploadsSection },
   { key: 'system', label: 'System', desc: 'Service health, system information, general options and users.', icon: 'wrench', Component: SystemTabs },
 ]

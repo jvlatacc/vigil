@@ -72,6 +72,23 @@ GATED_ROUTES = [
     ),
     ("POST", "/api/workflows/w-1/execute", {}, "ai_chat.use"),
     ("POST", "/api/claude/chat/stream", {"messages": []}, "ai_chat.use"),
+    ("POST", "/api/deception/kill-switch", {"enabled": True}, "deception.manage"),
+    ("POST", "/api/deception/leases/lease-x/release", None, "deception.manage"),
+    (
+        "POST",
+        "/api/deception/settings",
+        {
+            "enabled": True,
+            "backend": "dry_run",
+            "honey_route_floor": 0.8,
+            "ttl_seconds": 3600,
+            "max_duration_seconds": 86400,
+            "min_observations": 3,
+            "window_seconds": 3600,
+            "allowlist": "",
+        },
+        "deception.manage",
+    ),
 ]
 
 

@@ -61,6 +61,12 @@ class ResponseConfig:
     @classmethod
     def from_settings(cls, settings: Optional[Settings] = None) -> "ResponseConfig":
         s = settings or get_settings()
+        # The honey knobs' single layer lives in DeceptionConfig (env, then
+        # the Settings › Deception row); reading it here keeps the decision
+        # band and the console's view of it from drifting apart.
+        from core.deception.config import DeceptionConfig
+
+        deception = DeceptionConfig.from_settings(s)
         return cls(
             auto_response_enabled=s.daemon_auto_response,
             confidence_threshold=s.daemon_confidence_threshold,
@@ -68,9 +74,9 @@ class ResponseConfig:
             monitor_threshold=s.daemon_monitor_threshold,
             critical_action_floor=s.daemon_critical_action_floor,
             high_action_floor=s.daemon_high_action_floor,
-            honey_route_enabled=s.daemon_deception_enabled,
-            honey_route_floor=s.daemon_honey_route_floor,
-            honey_route_ttl_seconds=s.daemon_honey_route_ttl,
+            honey_route_enabled=deception.enabled,
+            honey_route_floor=deception.honey_route_floor,
+            honey_route_ttl_seconds=deception.ttl_seconds,
             force_manual_approval=s.daemon_force_approval,
             dry_run=s.daemon_dry_run,
         )
