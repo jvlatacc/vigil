@@ -1417,19 +1417,62 @@ def get_approval_action(action_id: str) -> str:
     return _call(tool_registry.get_approval_action, action_id=action_id)
 
 
+# A decision on a run-bound action does what the /api/v1 approvals router does
+# (core/api/v1/approvals_router.py): record and commit it, then ask the agent
+# layer to pick the parked run back up (core.workflows.run_resume.resume_run)
+# instead of leaving it for the parked-run sweeper. Best-effort by contract --
+# the decision is already recorded and stands whatever the wakeup does, so a
+# failed or unavailable enqueue is reported as "skipped: <reason>", never
+# raised, and the sweeper stays as the fallback.
+async def _decide_and_resume(decide, verb, action_id):
+    from core.workflows.run_resume import resume_run
+
+    result = decide()
+    if not isinstance(result, dict) or "error" in result:
+        # Nothing was decided (unknown action, no principal, no right); the
+        # registry's error shape already says which.
+        return result
+    run_id = result.get("workflow_run_id")
+    if not run_id:
+        result["run_resume"] = "skipped: action is not bound to a workflow run"
+        return result
+    try:
+        resume = await resume_run(
+            run_id, action_id, result.get("approved_by") or caller()
+        )
+    except Exception as exc:  # noqa: BLE001 -- the decision must not fail on the wakeup
+        logger.error("resume after %s of %s failed: %s", verb, action_id, exc)
+        resume = {"success": False, "error": str(exc)}
+    if resume.get("success"):
+        result["run_resume"] = "enqueued"
+    else:
+        result["run_resume"] = f"skipped: {resume.get('error') or 'resume failed'}"
+    return result  # serialized by _acall, like every other tool body
+
+
 @mcp.tool()
-def approve_action(action_id: str) -> str:
+async def approve_action(action_id: str) -> str:
     """Approve a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.approve_action, action_id=action_id)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.approve_action(action_id=action_id),
+        verb="approve",
+        action_id=action_id,
+    )
 
 
 @mcp.tool()
-def reject_action(
+async def reject_action(
     action_id: str,
     reason: str,
 ) -> str:
     """Reject a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.reject_action, action_id=action_id, reason=reason)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.reject_action(action_id=action_id, reason=reason),
+        verb="reject",
+        action_id=action_id,
+    )
 
 
 # --- Agent runs --------------------------------------------------------------
