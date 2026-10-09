@@ -12,6 +12,7 @@ export type ConsoleScreenKey =
   | 'workflows'
   | 'autoops'
   | 'health'
+  | 'deception'
   | 'settings'
 
 /** A nav item carrying a gate only renders when the gate is satisfied. */
@@ -35,6 +36,7 @@ export const NAV: [IconName, string, ConsoleScreenKey | null, NavGate?][] = [
   ['flow', 'Agents & workflows', 'workflows'],
   ['bot', 'Auto Ops', 'autoops'],
   ['chart', 'Health', 'health'],
+  ['shield', 'Deception', 'deception'],
   ['gear', 'Settings', 'settings'],
 ]
 
@@ -105,5 +107,6 @@ export const TITLES: Record<ConsoleScreenKey, [string, string]> = {
   workflows: ['Agents & workflows', 'How Vigil works a case. Workflows are the plays, agents do the work, skills are what agents know how to do, and tool permissions decide what they may change on their own.'],
   autoops: ['Auto Ops', 'Autonomous operations — master orchestrator and sub-agent investigations'],
   health: ['Health', 'Operational health — LLM spend, approvals waiting, recent workflow runs, probe scores'],
+  deception: ['Deception', 'Where suspicious sources are being steered — active leases, captured intel, and the kill switch'],
   settings: ['Settings', 'Configure Vigil — AI, integrations, users and platform'],
 }

@@ -310,6 +310,38 @@ class DeceptionSignalService:
             logger.error("Failed to prune deception probes: %s", e)
             return 0
 
+    def list_probes(
+        self, source_ip: Optional[str] = None, limit: int = 200
+    ) -> List[Any]:
+        """Recent probe rows newest-first, optionally filtered by source.
+
+        The console's captured-intel panel reads these — the evidence a
+        corroboration verdict was built from, and the finding ids that tie
+        a lease back to the findings that fed it.
+        """
+        from sqlalchemy import select
+
+        from core.storage.connection import get_db_manager
+        from core.storage.models import DeceptionProbe
+
+        try:
+            db = get_db_manager()
+            with db.session_scope() as session:
+                query = (
+                    select(DeceptionProbe)
+                    .order_by(DeceptionProbe.created_at.desc())
+                    .limit(max(1, min(int(limit), 500)))
+                )
+                if source_ip:
+                    query = query.where(DeceptionProbe.source_ip == source_ip)
+                rows = list(session.execute(query).scalars().all())
+                for row in rows:
+                    session.expunge(row)
+                return rows
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to list deception probes: %s", e)
+            return []
+
     def kill_switch_active(self, now=None) -> bool:
         """The env override, or the console toggle — either one trips it.
 
