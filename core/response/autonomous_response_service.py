@@ -437,6 +437,25 @@ class AutonomousResponseService:
             )
             return {"success": False, "error": str(e)}
 
+    def execute_honey_route_action(self, action) -> Dict:
+        """Execute one approved honey-route action now and record the outcome.
+
+        The tool-layer twin of the sweep's ``honey_route`` arm: the same
+        executor and the same executed/failed marking, so a bound,
+        permissioned caller triggers now what the 30-second sweep would do
+        on its next tick. Never called with a PENDING row — the tool layer
+        refuses those, because executing one would bypass the human decision
+        the row is held for.
+        """
+        result = self._execute_honey_route(action)
+        if result.get("success"):
+            self.approval_service.mark_executed(action.action_id, result)
+        else:
+            self.approval_service.mark_failed(
+                action.action_id, result.get("error", "Unknown error")
+            )
+        return result
+
     def execute_approved_actions(self) -> List[Dict]:
         """
         Execute all approved actions that haven't been executed yet.

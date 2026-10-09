@@ -63,7 +63,7 @@ WORKFLOW_STEP_MAP = {
         },
         {
             "title": "Response Planning",
-            "description": "Determine response actions, assess risk, create approval requests",
+            "description": "Determine response actions (isolate, block, or honey_route for a corroborated recon source — propose_honey_route or a proposed_actions entry), assess risk, create approval requests",
         },
         {
             "title": "Case Management",

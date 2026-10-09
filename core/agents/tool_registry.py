@@ -8,6 +8,7 @@ import logging
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
+from core.agents.builtins import AgentId
 from core.agents.projections import pack_completed_hunts, read_replay
 from core.auth.permissions import APPROVE_PERMISSION, username_has_permission
 from core.integrations.mcp.surface import current_caller
@@ -514,6 +515,109 @@ def get_approval_stats(**_args: Any) -> Any:
     return _approvals().get_stats()
 
 
+def _response():
+    from core.response.autonomous_response_service import AutonomousResponseService
+
+    return AutonomousResponseService()
+
+
+# Feature 5 — the agent path into the deception posture. The proposal is a
+# human_only row (a confidence a run names is its own claim and cannot release
+# the action), keyed per attacker exactly like the daemon's own minting, so a
+# proposal and a daemon finding converge on one row. Inert: nothing is steered
+# here, and a hunt — nobody bound — may propose, which is why there is no
+# caller or permission check on this form.
+def propose_honey_route(
+    *,
+    attacker_ip: str,
+    reason: str,
+    destination_ips: Optional[list] = None,
+    ports: Optional[list] = None,
+    confidence: float = 0.8,
+    evidence: Optional[list] = None,
+) -> Args:
+    from core.deception.config import DeceptionConfig
+    from core.response.approval_service import ActionType, Reversibility
+
+    ip = (attacker_ip or "").strip()
+    if not ip or ip == "unknown":
+        return {"error": "propose_honey_route needs a source IP; none was given"}
+
+    if not DeceptionConfig.from_settings().enabled:
+        return {
+            "error": "honey-routing is disabled (daemon_deception_enabled); "
+            "enable the deception posture before proposing it"
+        }
+
+    try:
+        port_list = [int(p) for p in (ports or [])]
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        return {"error": "ports must be integers and confidence a number"}
+
+    action = _approvals().create_action(
+        action_type=ActionType.HONEY_ROUTE,
+        title=f"Honey Route: {ip}",
+        description=(
+            f"Agent proposal: transparent redirect of {ip} into decoy services "
+            f"(ports {', '.join(str(p) for p in port_list) or 'n/a'}); no deny "
+            f"signal is sent to the source."
+        ),
+        target=ip,
+        confidence=confidence,
+        reason=reason,
+        evidence=[str(item) for item in (evidence or [])],
+        created_by=AgentId.INVESTIGATOR.value,
+        parameters={
+            "attacker_ip": ip,
+            "destination_ips": [str(d) for d in (destination_ips or [])],
+            "ports": port_list,
+        },
+        reversibility=Reversibility.REVERSIBLE,
+        idempotency_key=f"{ActionType.HONEY_ROUTE.value}:{ip}",
+        human_only=True,
+    )
+    return {
+        "success": True,
+        "action_id": action.action_id,
+        "status": action.status,
+        "requires_approval": action.requires_approval,
+        "message": f"{ip} proposed for honey-routing; the row waits for an analyst",
+    }
+
+
+# The execute form of the deception door: exactly approve_action's chain —
+# refuse an unbound caller first (a hunt gets the refusal, not a steer), then
+# require the approval permission — and only a row a person already decided.
+# An APPROVED honey_route row may be steered now instead of within the sweep's
+# 30 seconds; a PENDING one is refused, because executing it would bypass the
+# human decision the row is held for.
+def execute_honey_route(*, action_id: str) -> Args:
+    from core.response.approval_service import ActionStatus, ActionType
+
+    if current_caller() is None:
+        return {"error": "Honey-route cannot be executed: no principal is bound"}
+    if refusal := _without_approval_right():
+        return refusal
+
+    action = _approvals().get_action(action_id)
+    if action is None:
+        return {"error": f"Action {action_id} not found"}
+    if action.action_type != ActionType.HONEY_ROUTE.value:
+        return {
+            "error": f"Action {action_id} is a {action.action_type} action, "
+            "not honey_route"
+        }
+    if action.status != ActionStatus.APPROVED.value:
+        return {
+            "error": f"Action {action_id} is {action.status}: a pending row is "
+            "approved (approve_action) before it can be executed"
+        }
+
+    result = _response().execute_honey_route_action(action)
+    return {**result, "action_id": action.action_id}
+
+
 # Names executed by the function of the same name in this module. Looked up
 # when called, so the MCP wrappers and this door share that function.
 _OWNED = frozenset(
@@ -536,6 +640,8 @@ _OWNED = frozenset(
         "approve_action",
         "reject_action",
         "get_approval_stats",
+        "propose_honey_route",
+        "execute_honey_route",
     }
 )
 
