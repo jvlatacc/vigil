@@ -1,0 +1,65 @@
+name: Edge Core
+
+# core/edge (the signed-policy shared domain) has the repo's canonical gates
+# applied to exactly its tree — the Medic pattern: path-filtered so a PR that
+# does not touch core/edge pays nothing, and no repository condition because
+# nothing here needs a secret, so it runs on forks as well. ci-cd.yml itself
+# triggers only for main/develop, which a release-branch PR never targets.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "core/edge/**"
+      - "tests/unit/edge/**"
+      - ".importlinter"
+      - ".github/workflows/edge-core.yml"
+  pull_request:
+    paths:
+      - "core/edge/**"
+      - "tests/unit/edge/**"
+      - ".importlinter"
+      - ".github/workflows/edge-core.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  edge-core:
+    name: Edge core gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run flake8
+        run: flake8 core/edge tests/unit/edge
+
+      - name: Run black
+        run: black --check core/edge tests/unit/edge
+
+      - name: Run isort
+        run: isort --check-only core/edge tests/unit/edge
+
+      # Zero new errors on the edge domain; --ignore-missing-imports matches
+      # the canonical lint job (stubs the app tree does not ship).
+      - name: Run mypy
+        run: mypy core/edge --ignore-missing-imports
+
+      # The layering contracts in .importlinter — core reaches nothing it
+      # must not, and services/warden (later) inherits the fence.
+      - name: Run import-linter
+        run: lint-imports
+
+      - name: Run edge unit tests
+        run: pytest tests/unit/edge -q
