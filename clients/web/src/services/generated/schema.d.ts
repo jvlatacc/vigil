@@ -7984,6 +7984,10 @@ export interface paths {
          *
          *     Rejects any pending approval action on the run and finalises it
          *     as ``cancelled`` with the supplied reason.
+         *
+         *     The gates and the hand-off live in core.workflows.run_control, shared
+         *     with the MCP cancel tool, so a run cancelled either way is cancelled
+         *     the same way.
          */
         post: operations["post_api_workflows_runs_run_id_cancel"];
         delete?: never;
@@ -8056,6 +8060,10 @@ export interface paths {
          *     Looks up the run's pending approval action, approves it, and
          *     re-enters the phase loop. If there is no pending approval action
          *     linked to the run, returns 409.
+         *
+         *     The gates and the hand-off live in core.workflows.run_control, shared
+         *     with the MCP resume tool, so a run resumed either way is resumed the
+         *     same way.
          */
         post: operations["post_api_workflows_runs_run_id_resume"];
         delete?: never;
