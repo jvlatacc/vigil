@@ -286,6 +286,52 @@ DEEPTEMPO_FINDING_TOOLS = [
         },
     },
     {
+        "name": "enumerate_wazuh_findings",
+        "description": (
+            "Enumerate VigilSOC findings that originated from Wazuh alerts, the cases "
+            "that contain them, and summary counts. Read-only; supports time-window, "
+            "severity, status, and Wazuh rule-id filters with bounded pagination."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "severity": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "critical"],
+                    "description": "Filter by severity level",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status (e.g., 'new', 'investigating', 'resolved')",
+                },
+                "rule_id": {
+                    "type": "string",
+                    "description": "Exact Wazuh rule id (source_metadata.rule_id)",
+                },
+                "timestamp_start": {
+                    "type": "string",
+                    "description": "ISO 8601 lower bound on finding timestamp",
+                },
+                "timestamp_end": {
+                    "type": "string",
+                    "description": "ISO 8601 upper bound on finding timestamp",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Pagination offset (0-based)",
+                    "default": 0,
+                },
+                # Declared so the /internal invoke router's row cap reaches the
+                # tool: an undeclared limit silently loses its server-side bound.
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of findings to return",
+                    "default": 50,
+                },
+            },
+        },
+    },
+    {
         "name": "list_cases",
         "description": "List investigation cases with optional filters. Returns active and closed cases.",
         "input_schema": {

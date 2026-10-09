@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 import logging
 from dataclasses import asdict
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
 from core.agents.projections import pack_completed_hunts, read_replay
@@ -151,6 +152,84 @@ def get_findings_stats(**_args: Any) -> Args:
 
 def get_finding(*, finding_id: str) -> Any:
     return _data().get_finding(finding_id)
+
+
+def _iso(value: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO 8601 tool argument into a datetime; None passes through.
+
+    Raises ValueError on a malformed bound — the caller decides how that
+    surfaces, per the error convention.
+    """
+    if value is None:
+        return None
+    return datetime.fromisoformat(value)
+
+
+def _compact_wazuh(finding: Args) -> Args:
+    """Compact row plus the Wazuh-native fields agents reason over."""
+    provenance = finding.get("source_metadata") or {}
+    return {
+        "finding_id": finding.get("finding_id"),
+        "severity": finding.get("severity"),
+        "status": finding.get("status"),
+        "timestamp": finding.get("timestamp"),
+        "title": finding.get("title"),
+        "wazuh_alert_id": provenance.get("wazuh_alert_id"),
+        "rule_id": provenance.get("rule_id"),
+        "rule_level": provenance.get("rule_level"),
+        "agent_name": provenance.get("agent_name"),
+        "mitre_predictions": finding.get("mitre_predictions"),
+    }
+
+
+# Read-only: the vendor is fixed to wazuh here, not a parameter — the one
+# provenance source that needs enumeration today. The service-side mechanism
+# underneath is vendor-agnostic, so a second source reuses the queries.
+def enumerate_wazuh_findings(
+    *,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    rule_id: Optional[str] = None,
+    timestamp_start: Optional[str] = None,
+    timestamp_end: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> Args:
+    try:
+        filters = dict(
+            severity=severity,
+            status=status,
+            rule_id=rule_id,
+            timestamp_start=_iso(timestamp_start),
+            timestamp_end=_iso(timestamp_end),
+        )
+        data = _data()
+        total = data.count_wazuh_findings(**filters)
+        findings = data.find_wazuh_findings(limit=limit, offset=offset, **filters)
+        # SQL-side EXISTS over case_findings under the same filters:
+        # page-independent of the findings page, unlike a list_cases post-read
+        # scan. Zero cases is a result, not an error.
+        cases = data.cases_containing_wazuh_findings(**filters)
+        summary = data.summarize_wazuh_findings(**filters)
+    except ValueError:
+        return {
+            "error": (
+                "timestamp_start and timestamp_end must be ISO 8601; got "
+                f"{timestamp_start!r} and {timestamp_end!r}"
+            )
+        }
+    except Exception as exc:  # noqa: BLE001 - a tool that ran and could not answer
+        logger.exception("enumerate_wazuh_findings failed")
+        return {"error": f"enumerate_wazuh_findings failed: {exc}"}
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + limit) < total,
+        "findings": [_compact_wazuh(f) for f in findings],
+        "cases": cases,  # {"total": n, "cases": [...]} — zeros are a result
+        "summary": summary,  # {"total", "by_severity", "by_status"} — SQL aggregates
+    }
 
 
 def list_cases(
@@ -522,6 +601,7 @@ _OWNED = frozenset(
         "search_findings",
         "get_findings_stats",
         "get_finding",
+        "enumerate_wazuh_findings",
         "list_cases",
         "get_case",
         "create_case",
