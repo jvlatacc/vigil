@@ -9,9 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.response.config import MtdConfig, ResponseConfig, is_recon_probe
 from core.response.fastpath.config import FastPathConfig
 from core.time import utcnow
-from services.daemon.config import ProcessingConfig, ResponseConfig
+from services.daemon.config import ProcessingConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
 from services.daemon.probes import PROBE_DATA_SOURCE
 from services.daemon.vendor_errors import (
@@ -69,6 +70,7 @@ class FindingProcessor:
         config: ProcessingConfig,
         response_config: Optional[ResponseConfig] = None,
         fastpath_config: Optional[FastPathConfig] = None,
+        mtd_config: Optional[MtdConfig] = None,
     ):
         self.config = config
         # The queue-for-response line is the band's review threshold, so the
@@ -81,6 +83,10 @@ class FindingProcessor:
         self.fastpath_config = fastpath_config
         self._fastpath_ledger = None
         self._fastpath_registry = None
+        # The MTD band gates its own queue candidates: a deceive-recommended
+        # or recon-tagged probe queues for response only while MTD is on,
+        # so a default install queues exactly what it queued before.
+        self.mtd_config = mtd_config or MtdConfig()
         # Bounded so a stalled processor holds producers back (put blocks)
         # instead of piling findings up in memory.
         self.input_queue: asyncio.Queue = asyncio.Queue(maxsize=INPUT_QUEUE_MAXSIZE)
@@ -643,7 +649,7 @@ Provide your assessment in the following format:
 SEVERITY: [critical/high/medium/low]
 CONFIDENCE: [0.0-1.0]
 CATEGORY: [malware/intrusion/data_exfil/credential_theft/lateral_movement/other]
-RECOMMENDED_ACTION: [isolate/block/investigate/monitor/dismiss]
+RECOMMENDED_ACTION: [{"/".join(TRIAGE_ACTIONS)}]
 REASONING: [Brief explanation]
 """
 
@@ -1005,10 +1011,21 @@ REASONING: [Brief explanation]
         recommended_action = finding.get("recommended_action", "").lower()
         confidence = finding.get("triage_confidence", 0.5)
 
+        # The MTD band adds its own candidates beside the containment ones:
+        # a probe triage recommended deceiving, and a scanning-tagged probe
+        # (T1046/T1595) whose tags say deceive even when triage chose a
+        # calmer word. Both queue only while MTD is on — with the feature
+        # off the queue sees exactly what it saw before, bit for bit.
+        mtd_candidate = self.mtd_config.enabled and (
+            recommended_action == "deceive"
+            or is_recon_probe(finding.get("mitre_predictions") or {})
+        )
+
         # Queue for response if high severity or action recommended
         should_respond = (
             severity in ["critical", "high"]
             or recommended_action in ["isolate", "block"]
+            or mtd_candidate
             or confidence >= self.response_config.review_threshold
         )
 
