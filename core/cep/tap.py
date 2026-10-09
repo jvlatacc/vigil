@@ -60,16 +60,17 @@ class CepTap:
     def observe(self, item: Any) -> None:
         """Mirror one finding into the tap queue. Never blocks, never raises."""
         self.stats["cep_events_seen"] += 1
+        # Room right now is evidence the engine consumer has drained since
+        # the last drop, so the tap is keeping up again (checked before the
+        # put: at maxsize=1 a successful put leaves the queue exactly full).
+        if self.queue.qsize() < self.queue.maxsize:
+            self.stats["cep_degraded"] = 0
         try:
             self.queue.put_nowait(item)
         except asyncio.QueueFull:
             # Drop the newest event = the one arriving; the spine is untouched.
             self._on_drop()
             return
-        # Headroom again means the consumer drained past capacity since the
-        # last drop, so the tap is no longer degraded.
-        if self.queue.qsize() < self.queue.maxsize:
-            self.stats["cep_degraded"] = 0
         self._record(self._events_counter)
 
     def _on_drop(self) -> None:
