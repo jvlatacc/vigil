@@ -4,7 +4,12 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from core.agents.builtins import AgentId
-from core.response.approval_service import ActionStatus, ActionType, ApprovalService
+from core.response.approval_service import (
+    ActionStatus,
+    ActionType,
+    ApprovalService,
+    Reversibility,
+)
 from core.response.config import ResponseConfig
 
 logger = logging.getLogger(__name__)
@@ -274,6 +279,164 @@ class AutonomousResponseService:
             "message": "No EDR executor is configured for host isolation",
         }
 
+    def create_honey_route_action(
+        self,
+        attacker_ip: str,
+        destination_ips: List[str],
+        ports: List[int],
+        confidence: float,
+        reason: str,
+        evidence: List[str],
+    ) -> Optional[Dict]:
+        """Create a honey-route action (feature 5) for a corroborated recon source.
+
+        Per-attacker idempotency — ``honey_route:<attacker_ip>`` — so one
+        source probing five hosts yields one lease, not five rows. A
+        reversible redirect carries its own approval floor
+        (``config.honey_route_floor``): at or above it the row auto-approves
+        and executes inline through the steering backend; below it the row
+        waits for an analyst exactly as everything else does.
+        """
+        if not attacker_ip or attacker_ip == "unknown":
+            logger.warning("Honey-route action skipped: no actionable source IP")
+            return None
+
+        try:
+            action, inserted = self.approval_service._put_action(
+                action_type=ActionType.HONEY_ROUTE,
+                title=f"Honey Route: {attacker_ip}",
+                description=f"Transparent redirect of {attacker_ip} into decoy services "
+                f"(ports {', '.join(str(p) for p in ports) or 'n/a'}); "
+                f"no deny signal is sent to the source.",
+                target=attacker_ip,
+                confidence=confidence,
+                reason=reason,
+                evidence=evidence,
+                created_by=AgentId.AUTO_RESPONDER.value,
+                parameters={
+                    "attacker_ip": attacker_ip,
+                    "destination_ips": list(destination_ips or []),
+                    "ports": [int(p) for p in (ports or [])],
+                },
+                reversibility=Reversibility.REVERSIBLE,
+                idempotency_key=f"{ActionType.HONEY_ROUTE.value}:{attacker_ip}",
+            )
+
+            if not inserted:
+                return {
+                    "status": action.status,
+                    "reused": True,
+                    "action_id": action.action_id,
+                    "message": f"Honey-route already recorded for {attacker_ip}",
+                    "confidence": action.confidence,
+                    "requires_approval": action.requires_approval,
+                    "result": action.execution_result,
+                }
+
+            if action.status == ActionStatus.APPROVED.value:
+                logger.info(
+                    f"Action {action.action_id} auto-approved for honey-routing "
+                    f"(confidence: {confidence:.2%})"
+                )
+                execution_result = self._execute_honey_route(action)
+
+                if execution_result.get("success"):
+                    self.approval_service.mark_executed(
+                        action.action_id, execution_result
+                    )
+                    return {
+                        "status": "executed",
+                        "action_id": action.action_id,
+                        "message": f"{attacker_ip} steered into decoys",
+                        "confidence": confidence,
+                        "result": execution_result,
+                    }
+
+                self.approval_service.mark_failed(
+                    action.action_id,
+                    execution_result.get("error", "Unknown error"),
+                )
+                return {
+                    "status": ActionStatus.FAILED.value,
+                    "action_id": action.action_id,
+                    "message": execution_result.get("message")
+                    or f"Honey-route of {attacker_ip} was not executed",
+                    "confidence": confidence,
+                    "result": execution_result,
+                }
+            else:
+                logger.info(
+                    f"Honey-route action {action.action_id} pending approval "
+                    f"(confidence: {confidence:.2%})"
+                )
+                return {
+                    "status": "pending_approval",
+                    "action_id": action.action_id,
+                    "message": "Honey-route action created, awaiting analyst approval",
+                    "confidence": confidence,
+                    "requires_approval": True,
+                }
+
+        except Exception as e:
+            logger.error("Error creating honey-route action: %s", e)
+            return {"error": str(e)}
+
+    def _execute_honey_route(self, action, ttl_seconds: Optional[int] = None) -> Dict:
+        """Steer one approved honey-route action; the first real rollback arm.
+
+        Mints the lease row (or reuses the one a crashed attempt left),
+        programs the backend with the lease scope, and returns the standard
+        ``{success, ...}`` dict — enriched with the lease id, backend, TTL
+        and rollback handle that ``execution_result`` must carry: the
+        unsteer is driven by the daemon's lease sweep from this record, not
+        by the approval row. A backend error marks the action FAILED and
+        leaves production routing untouched (fail-open).
+        """
+        from core.deception.leases import DeceptionLeaseService, run_backend_call
+
+        params = action.parameters or {}
+        attacker_ip = params.get("attacker_ip") or action.target
+        ttl = int(ttl_seconds or self.config.honey_route_ttl_seconds)
+
+        try:
+            lease_service = DeceptionLeaseService()
+        except NotImplementedError as e:
+            # The configured backend does not exist yet (controller ships with
+            # the decoy-controller service); building it must fail loudly.
+            return {"success": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return {"success": False, "error": f"steering backend unavailable: {e}"}
+
+        try:
+            existing = lease_service.by_action(action.action_id)
+            if existing is not None and existing.status == "active":
+                lease_id = existing.lease_id
+            else:
+                lease_id = lease_service.mint(
+                    attacker_ip=attacker_ip,
+                    destination_ips=list(params.get("destination_ips") or []),
+                    ports=[int(p) for p in (params.get("ports") or [])],
+                    action_id=action.action_id,
+                    ttl_seconds=ttl,
+                )
+
+            result = run_backend_call(
+                lease_service.steer_lease(lease_id, ttl_seconds=ttl)
+            )
+            if result.get("success"):
+                return {
+                    **result,
+                    "lease_id": lease_id,
+                    "ttl": ttl,
+                    "rollback": f"DELETE /steer/{lease_id}",
+                }
+            return {**result, "lease_id": lease_id}
+        except Exception as e:  # noqa: BLE001
+            logger.exception(
+                "Honey-route execution failed for action %s", action.action_id
+            )
+            return {"success": False, "error": str(e)}
+
     def execute_approved_actions(self) -> List[Dict]:
         """
         Execute all approved actions that haven't been executed yet.
@@ -322,6 +485,8 @@ class AutonomousResponseService:
                         reason=action.reason,
                         parameters=params,
                     )
+                elif action.action_type == "honey_route":
+                    result = self._execute_honey_route(action)
 
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.

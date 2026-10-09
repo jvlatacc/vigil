@@ -130,6 +130,8 @@ class SOCDaemon:
             approvals=approvals,
         )
         self._scheduler = TaskScheduler(self.config.scheduler)
+        # The lease sweep counts its outcomes on the responder's stats.
+        self._scheduler.set_responder(self._responder)
         self._orchestrator = Orchestrator(
             self.config.orchestrator,
             approvals=approvals,

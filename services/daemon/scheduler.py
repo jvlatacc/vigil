@@ -26,6 +26,14 @@ def _sandbox_poll_interval() -> int:
     return max(30, get_settings().sandbox_poll_interval)
 
 
+def _deception_sweep_interval() -> int:
+    """Lease-sweep cadence: the TTL divided by twelve, bounded 60-300s."""
+    from core.deception.config import DeceptionConfig
+
+    ttl = max(DeceptionConfig.from_settings().ttl_seconds, 1)
+    return max(60, min(300, ttl // 12))
+
+
 @dataclass
 class ScheduledTask:
     """Represents a scheduled task."""
@@ -46,6 +54,9 @@ class TaskScheduler:
         self._tasks: List[ScheduledTask] = []
         # The processor's input queue; probes go on it like polled findings.
         self._processor_queue: Optional[asyncio.Queue] = None
+        # Optional responder reference, set by main.py so the deception
+        # lease sweep's outcomes land in responder.stats (feature 5).
+        self._responder = None
 
         # Services (lazy loaded)
         self._data_service = None
@@ -152,9 +163,56 @@ class TaskScheduler:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Threat feed poller unavailable: {e}")
 
+        # Deception lease sweep (feature 5): release expired leases,
+        # renew corroborated ones under the max-duration cap, honour the
+        # kill-switch, prune old probe evidence. Cheap when the posture has
+        # never been on (no rows to reconcile), and deliberately registered
+        # always — a posture disabled while leases are live must still see
+        # them released.
+        self._tasks.append(
+            ScheduledTask(
+                name="deception_lease_sweep",
+                func=self._run_deception_lease_sweep,
+                interval=_deception_sweep_interval(),
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+    async def _run_deception_lease_sweep(self):
+        """Reconcile deception leases once; counts land in responder.stats."""
+        from core.deception.leases import DeceptionLeaseService
+
+        service = DeceptionLeaseService()
+        out = await service.sweep()
+        pruned = service.prune_probes()
+        if out.get("failed"):
+            self.stats["errors"] += 1
+        if self._responder is None:
+            return
+        stats = getattr(self._responder, "stats", None)
+        if isinstance(stats, dict):
+            stats["honey_released"] += len(out.get("released", [])) + len(
+                out.get("expired", [])
+            )
+            stats["honey_failed"] += len(out.get("failed", []))
+        if pruned or any(out.values()):
+            logger.info(
+                "Deception lease sweep: released=%s renewed=%s expired=%s failed=%s pruned=%s",
+                len(out.get("released", [])),
+                len(out.get("renewed", [])),
+                len(out.get("expired", [])),
+                len(out.get("failed", [])),
+                pruned,
+            )
+
     def set_processor_queue(self, queue: asyncio.Queue):
         """Set the processor's input queue that probe sweeps inject onto."""
         self._processor_queue = queue
+
+    def set_responder(self, responder) -> None:
+        """Give the lease sweep somewhere to count its outcomes (feature 5)."""
+        self._responder = responder
 
     def _init_services(self):
         """Initialize required services."""

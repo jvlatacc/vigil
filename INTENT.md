@@ -35,6 +35,14 @@ respond:
   # Route every action through human approval regardless of confidence.
   # (DAEMON_FORCE_APPROVAL, or Settings -> Approvals in the UI)
   force_manual_approval: false
+  # Turn the deception posture (honey-routing) on. (DAEMON_DECEPTION_ENABLED)
+  honey_route_enabled: false
+  # Minimum confidence for an unattended honey-route; higher is tighter.
+  # (DAEMON_HONEY_ROUTE_FLOOR)
+  honey_route_floor: 0.80
+  # Redirect lease lifetime in seconds; a shorter lease is tighter.
+  # (DAEMON_HONEY_ROUTE_TTL)
+  honey_route_ttl_seconds: 3600
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

@@ -45,6 +45,7 @@ from core.storage.models.config import (
     ThreatIndicator,
     UserPreference,
 )
+from core.storage.models.deception import DeceptionLease, DeceptionProbe
 from core.storage.models.episodic import (
     EpisodicDistilFailure,
     EpisodicDistilMarker,
@@ -96,6 +97,8 @@ __all__ = [
     "Conversation",
     "CustomAgent",
     "CustomWorkflow",
+    "DeceptionLease",
+    "DeceptionProbe",
     "EpisodicDistilFailure",
     "EpisodicDistilMarker",
     "EpisodicGap",
