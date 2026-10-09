@@ -119,6 +119,8 @@ cp env.example .env   # set AGENT_INTERNAL_TOKEN (see below)
 
 Then open http://localhost:6988 and create the admin account on the bootstrap screen.
 
+No browser on this host — a server, a CI job, an MCP client? Boot `./start.sh --headless` and follow [Headless deployment](docs/headless.md): the same stack with no console, taken to an MCP credential by one script.
+
 `start.sh` provisions the pinned Python with [uv](https://docs.astral.sh/uv/), installs dependencies, starts PostgreSQL, Redis, and the Bifrost LLM gateway in Docker, starts a host Ollama if one is installed (optional), initializes the schema and reference data, and launches the API, the agent layer, and the frontend. No LogLM or cloud API key is needed to reach a running UI.
 
 - **`AGENT_INTERNAL_TOKEN`** lets the agent layer talk to the API. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Without it the stack still starts, but workflow runs stay queued.
