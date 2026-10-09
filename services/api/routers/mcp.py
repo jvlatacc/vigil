@@ -9,10 +9,17 @@ an MCP server can spawn subprocesses and surface tools to agents.
 import logging
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core.deps import provide_mcp_client, provide_mcp_registry
+from core.integrations.mcp import connection_state
+from core.integrations.mcp.connection_state import (
+    auth_config_for,
+    ensure_provider,
+    missing_auth_secrets,
+)
+from core.integrations.mcp.oauth import TokenError, token_providers
 from core.integrations.mcp.registry import MCPRegistry, deactivate, register_connected
 from core.integrations.mcp.service import MCPService
 from core.routing import Auth, RouterMeta
@@ -103,6 +110,13 @@ async def get_servers_status(mcp_client=Depends(provide_mcp_client)):
     connected. With no MCP client, every server is disconnected: the catalog
     has no session state of its own. Dormant reconnect stays on
     ``GET /connections/status``.
+
+    A server whose config declares an ``auth`` block also carries
+    ``connection_state`` -- one of disabled / dormant / needs_consent /
+    connected / error -- plus ``oauth`` metadata (grant, issuer, client id,
+    scopes, RFC 8707 resource, expiry) and a ``last_error`` naming a safe
+    reason when one exists. The five states describe the OAuth connection;
+    plain stdio servers keep the session ``status`` alone.
     """
     enabled = mcp_service.get_all_enabled_states()
     connected = mcp_client.get_connection_status() if mcp_client else {}
@@ -121,6 +135,16 @@ async def get_servers_status(mcp_client=Depends(provide_mcp_client)):
             err = mcp_client.get_last_error(name)
             if err:
                 row["error"] = err
+        server = mcp_service.servers.get(name)
+        merged = connection_state.status_fields(
+            name, getattr(server, "auth", None), enabled=row["enabled"]
+        )
+        if merged is not None:
+            conn_state, last_error, oauth_fields = merged
+            row["connection_state"] = conn_state.value
+            row["oauth"] = oauth_fields
+            if last_error:
+                row["last_error"] = last_error
         statuses.append(row)
     return {"statuses": statuses}
 
@@ -306,6 +330,139 @@ async def reload_servers(
         "message": "MCP servers reloaded successfully",
         "total_servers": len(new_servers),
         "servers": new_servers,
+    }
+
+
+# --- Outbound OAuth consent -------------------------------------------------
+#
+# A client-credentials server acquires tokens on its own; an authorization-code
+# server needs one interactive consent, and these are its two halves: start,
+# then the callback the integrations UI completes with the code the IdP
+# redirected with. Both are integrations-admin acts -- consent delegates the
+# operator's own identity to a server.
+
+
+class OAuthConsentStart(BaseModel):
+    redirect_uri: Optional[str] = None
+
+
+class OAuthConsentCallback(BaseModel):
+    code: str
+    state: str
+
+
+def _oauth_config_or_409(server_name: str):
+    """The server's parsed auth config, or a 409 that says which half is missing."""
+    server = mcp_service.servers.get(server_name)
+    config, config_error = auth_config_for(server_name, getattr(server, "auth", None))
+    if config is None:
+        raise HTTPException(
+            status_code=409,
+            detail=config_error or "MCP server carries no OAuth configuration",
+        )
+    return config
+
+
+@router.post("/oauth/{server_name}/consent")
+async def start_oauth_consent(
+    server_name: str,
+    body: OAuthConsentStart,
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Begin the one interactive consent an authorization-code server needs.
+
+    Returns the authorization URL (PKCE S256, RFC 8707 resource bound) and
+    the state the callback must echo. The default redirect URI is this
+    API's own callback route; pass one when the UI handles the redirect.
+    """
+    require_integrations_admin(current_user)
+    _validate_known_server(server_name)
+    config = _oauth_config_or_409(server_name)
+    if config.grant != "authorization_code":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "consent applies to authorization_code servers; "
+                "client-credentials servers acquire tokens without a person"
+            ),
+        )
+
+    redirect_uri = body.redirect_uri or (
+        str(request.base_url).rstrip("/") + f"/api/mcp/oauth/{server_name}/callback"
+    )
+    provider = ensure_provider(config)
+    try:
+        started = await provider.start_authorization(redirect_uri=redirect_uri)
+    except TokenError as exc:
+        # Discovery failures and the like: safe text, the IdP's answer.
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    # The provider is now waiting on its callback; remember that so the
+    # operator sees needs_consent even before the next token attempt.
+    connection_state.sync_connection_state(
+        config,
+        enabled=mcp_service.is_server_enabled(server_name),
+        missing_secrets=missing_auth_secrets(config),
+        provider=provider,
+    )
+    logger.warning(
+        "MCP OAuth consent started for server %s by %s",
+        server_name,
+        current_user.username,
+    )
+    return {
+        "server": server_name,
+        "authorization_url": started["authorization_url"],
+        "state": started["state"],
+    }
+
+
+@router.post("/oauth/{server_name}/callback")
+async def complete_oauth_consent(
+    server_name: str,
+    body: OAuthConsentCallback,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Finish the consent flow: the UI posts the code and state the IdP
+    redirected with, Vigil exchanges the code for the refresh token, and
+    the connection reports connected."""
+    require_integrations_admin(current_user)
+    _validate_known_server(server_name)
+    config = _oauth_config_or_409(server_name)
+    provider = token_providers().provider_for(server_name)
+    if provider is None:
+        raise HTTPException(
+            status_code=409,
+            detail="no consent in progress for this server -- start consent first",
+        )
+
+    try:
+        await provider.complete_authorization(code=body.code, state=body.state)
+    except TokenError as exc:
+        # Record why the operator is back where they started, then say so.
+        # state mismatch and rejected codes are the operator's doing; issuer
+        # refusals are not -- either way the message is safe text.
+        connection_state.sync_connection_state(
+            config,
+            enabled=mcp_service.is_server_enabled(server_name),
+            missing_secrets=missing_auth_secrets(config),
+            provider=provider,
+            fresh_error=str(exc),
+        )
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    conn_state, _last_error, oauth_fields = connection_state.sync_connection_state(
+        config,
+        enabled=mcp_service.is_server_enabled(server_name),
+        missing_secrets=missing_auth_secrets(config),
+        provider=provider,
+    )
+    logger.warning("MCP OAuth consent completed for server %s", server_name)
+    return {
+        "server": server_name,
+        "connection_state": conn_state.value,
+        **oauth_fields,
     }
 
 
