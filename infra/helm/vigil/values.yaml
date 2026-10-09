@@ -550,6 +550,13 @@ containerSecurityContext:
 secrets:
   existingSecret: ""
 
+  # Decoy plane (MTD spec 03): the daemon webhook bearer, aliased to the
+  # decoy channel, and the canary credential the decoys accept. Empty by
+  # default — decoys generate an ephemeral marked canary when none is set
+  # (services/decoy/canary.py) and send no bearer when the token is unset.
+  decoyIngestToken: ""
+  decoyCanaryPassword: ""
+
   # ExternalSecrets Operator (issue #113) — declares an ExternalSecret that
   # materializes the K8s Secret from an external store (AWS SM, Vault, etc).
   # When enabled, the plain secret.yaml template is skipped.
@@ -873,6 +880,62 @@ observability:
 # -----------------------------------------------------------------------------
 # Off by default — flipping to true on an existing cluster may break traffic
 # that was previously implicitly allowed. Plan the rollout.
+# -----------------------------------------------------------------------------
+# Decoys (MTD plane 03) — canary workloads for honey-routed attacker sessions
+# -----------------------------------------------------------------------------
+# Disabled by default: enabling decoys is a human configuration act (spec,
+# Locked). Both decoys share the backend image — command is overridden per
+# Deployment — and reach exactly one egress target each: the daemon's
+# webhook ingest (see their NetworkPolicies in networkpolicy.yaml).
+sshDecoy:
+  enabled: false
+  image:
+    repository: ""   # inherits backend.image.repository when empty
+    tag: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+httpDecoy:
+  enabled: false
+  image:
+    repository: ""   # inherits backend.image.repository when empty
+    tag: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+decoys:
+  # Shared decoy knobs (read by services/decoy/config.py through core.config).
+  sessionTtlSeconds: 3600
+  # Service/container ports; fixed values, part of the compose and Cilium
+  # wiring — changing them is a coordinated change across surfaces.
+  ports:
+    ssh: 2222
+    http: 8080
+
 networkPolicies:
   enabled: false
   # Namespace selector used to allow ingress traffic from the ingress
