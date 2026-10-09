@@ -130,7 +130,8 @@ class DatabaseService:
             anomaly_score: Anomaly score (0-1), or None when the source omitted it
             timestamp: Finding timestamp, or None when the source omitted it
             data_source: Data source type
-            **kwargs: Additional fields (title, entity_context, evidence_links, cluster_id, severity, status)
+            **kwargs: Additional fields (title, entity_context, evidence_links,
+                source_metadata, cluster_id, severity, status)
 
         Returns:
             Created Finding object or None if failed
@@ -146,6 +147,7 @@ class DatabaseService:
                 description=kwargs.get("description"),
                 entity_context=kwargs.get("entity_context"),
                 evidence_links=kwargs.get("evidence_links"),
+                source_metadata=kwargs.get("source_metadata"),
                 cluster_id=kwargs.get("cluster_id"),
                 severity=kwargs.get("severity"),
                 status=kwargs.get("status", "new"),
@@ -240,6 +242,7 @@ class DatabaseService:
                     description=r.get("description"),
                     entity_context=r.get("entity_context"),
                     evidence_links=r.get("evidence_links"),
+                    source_metadata=r.get("source_metadata"),
                     cluster_id=r.get("cluster_id"),
                     severity=r.get("severity"),
                     status=r.get("status", "new"),

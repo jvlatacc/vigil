@@ -129,6 +129,17 @@ def add_findings_noise_mark(conn):
             ADD COLUMN IF NOT EXISTS noise_marked_by VARCHAR(50);
     """))
 
+# Where a finding's source-system provenance lives (for a Wazuh ingest: the
+# alert id, rule id/level, and agent identity the transform builds).
+# create_all adds the column to fresh installs; this covers existing
+# databases. Nullable, no backfill: findings stored before the column never
+# had their provenance kept for them.
+@migration("Add source_metadata column to findings")
+def add_findings_source_metadata(conn):
+    conn.execute(text("""
+        ALTER TABLE findings ADD COLUMN IF NOT EXISTS source_metadata JSONB;
+    """))
+
 @migration("Create GIN trigram index on findings.description")
 def create_findings_description_gin_index(conn):
     conn.execute(text("""

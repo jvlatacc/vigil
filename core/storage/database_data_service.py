@@ -288,6 +288,7 @@ class DatabaseDataService:
                     description=finding_data.get("description"),
                     entity_context=finding_data.get("entity_context"),
                     evidence_links=finding_data.get("evidence_links"),
+                    source_metadata=finding_data.get("source_metadata"),
                     cluster_id=finding_data.get("cluster_id"),
                     severity=finding_data.get("severity"),
                     status=finding_data.get("status", "new"),
