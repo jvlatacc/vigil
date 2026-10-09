@@ -364,11 +364,11 @@ class EntityGraph:
         for raw in raw_nodes:
             try:
                 kind, value = raw["kind"], raw["value"]
+                _check_kind(kind)
                 first_seen = _utc(datetime.fromisoformat(raw["first_seen"]))
                 last_seen = _utc(datetime.fromisoformat(raw["last_seen"]))
             except (KeyError, TypeError, ValueError) as exc:
                 raise GraphRestoreError(f"malformed node entry {raw!r}: {exc}") from exc
-            _check_kind(kind)
             key: NodeKey = (kind, value)
             if key in nodes:
                 raise GraphRestoreError(f"duplicate node {key}")

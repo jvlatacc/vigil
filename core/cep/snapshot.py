@@ -369,7 +369,10 @@ class PostgresSnapshotStore:
                     "loses all state — the loss window is unbounded until then.",
                     exc,
                 )
-                raise _StoreUnavailable(str(exc)) from exc
+                raise _StoreUnavailable(
+                    f"{what} unavailable: the cep_snapshots table does not exist; "
+                    "apply infra/database/init/40_cep_snapshots.sql"
+                ) from exc
             raise
 
 
