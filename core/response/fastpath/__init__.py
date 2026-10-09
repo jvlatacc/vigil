@@ -15,7 +15,21 @@ Callers import from ``core.response.fastpath``.
 """
 
 from core.response.fastpath.config import FastPathConfig
+from core.response.fastpath.gate import (
+    ACTION_BY_SEVERITY,
+    FastPathDecision,
+    FastPathVerdict,
+    GateCounters,
+    evaluate,
+    record_decision,
+)
 
 __all__ = [
+    "ACTION_BY_SEVERITY",
     "FastPathConfig",
+    "FastPathDecision",
+    "FastPathVerdict",
+    "GateCounters",
+    "evaluate",
+    "record_decision",
 ]
