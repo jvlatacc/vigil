@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 _LITERAL_DOLLAR = "\x00"
 
 
-# Matches ${VAR_NAME} placeholders in mcp-config.json values/args. Anchored
-# to uppercase+underscore+digits so we don't pick up things like
-# ${workspaceFolder} (filtered explicitly below regardless).
-_ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
+# One grammar for ${VAR} and ${VAR:-default} placeholders, shared by the
+# substitution engine and the dormancy extraction below — a name one side can
+# resolve must be a name the other side checks. The old split (uppercase-only
+# here, any-name there) let a lowercase ${var} substitute to "" without ever
+# appearing in the dormancy check.
+_PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::-((?:\$\{[^}]+\}|[^{}])*))?\}")
+
+# Backwards-compatible alias: the extractor matches the same grammar the
+# substitution engine does.
+_ENV_PLACEHOLDER_RE = _PLACEHOLDER_RE
 
 # Placeholders that are path sentinels, not credentials — never treat as
 # required env vars.
@@ -54,16 +60,29 @@ def extract_required_env_vars(
     ``mcp_client.connect_to_server`` — if any resolve to empty, the
     server is considered dormant-by-design (not a connect failure).
 
+    The scan uses the same grammar the substitution engine does (see
+    ``_PLACEHOLDER_RE``): every name substitution could resolve is a name
+    checked here, in either case. ``${VAR:-default}`` is skipped — it is
+    self-satisfying and cannot silently substitute empty.
+
     Limitation (documented for follow-ups): this infers requirements
     from the config file. A server whose process quietly needs a
-    credential that isn't referenced via ``${…}`` is invisible to us
-    and will fall through to the regular connect path.
+    credential that isn't referenced via ``${…}`` is invisible to us —
+    list it in the entry's ``required_env_vars`` for ambient forwarding,
+    or reference it via a placeholder.
     """
     found: set[str] = set()
     for value in list((raw_env or {}).values()) + list(raw_args or []):
         if not isinstance(value, str):
             continue
         for m in _ENV_PLACEHOLDER_RE.finditer(value):
+            if m.group(2) is not None:
+                # ${VAR:-default} is self-satisfying: substitution can always
+                # resolve it to at least the default, so it can never
+                # silently substitute empty and must not hold the server
+                # dormant. Ambient forwarding for such a name goes through
+                # the entry's explicit required_env_vars list.
+                continue
             name = m.group(1)
             if name in _PLACEHOLDER_BLACKLIST:
                 continue
@@ -241,8 +260,6 @@ class MCPService:
         from_secrets: bool,
         keep_unresolved: bool,
     ) -> str:
-        pattern = r"\$\{([^}:]+)(?::-((?:\$\{[^}]+\}|[^{}])*))?\}"
-
         def replace_var(match):
             var_name = match.group(1)
             default = match.group(2)
@@ -267,7 +284,7 @@ class MCPService:
         prev = None
         while prev != value:
             prev = value
-            value = re.sub(pattern, replace_var, value)
+            value = _PLACEHOLDER_RE.sub(replace_var, value)
 
         return value.replace(_LITERAL_DOLLAR, "$")
 
