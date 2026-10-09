@@ -105,6 +105,7 @@ export default function UsersSection({ notify }: SectionProps) {
       password: '',
       full_name: u.full_name,
       role_id: u.role_id,
+      external_subject: u.external_subject ?? '',
     })
     setDialogError('')
     setDialogOpen(true)

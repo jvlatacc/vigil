@@ -2644,6 +2644,10 @@
       "data_type": "character varying(200)",
       "nullable": false
     },
+    "external_subject": {
+      "data_type": "character varying(255)",
+      "nullable": true
+    },
     "failed_login_count": {
       "data_type": "integer",
       "nullable": false

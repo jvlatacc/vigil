@@ -194,6 +194,19 @@ class Settings(BaseSettings):
     # nobody asked for should not be listening. This is the floor an operator
     # sets before boot; the Settings toggle overrides it at runtime.
     vigil_mcp_enabled: bool = False
+    # Inbound tokens from the deployment's identity provider, beside minted
+    # credentials, on the same surface. The issuer tokens must come from, the
+    # audience they must carry, and the key set signatures are checked
+    # against -- all three or none, and nothing here is a secret: they are
+    # the issuer's public facts (core/auth/idp_jwt.py). A token that verifies
+    # is still only a who; what it may do reads from its Vigil roles alone.
+    vigil_mcp_oidc_issuer: Optional[str] = None
+    vigil_mcp_oidc_audience: Optional[str] = None
+    vigil_mcp_oidc_jwks_url: Optional[str] = None
+    # Tri-state veto over the verifier above: unset (the default) means
+    # "configured is on"; an explicit false keeps it off even when the three
+    # settings are present.
+    vigil_mcp_oidc_enabled: Optional[bool] = None
     vigil_csrf_enabled: bool = True
     vigil_csrf_report_only: bool = True
     vigil_csrf_exempt_paths: Optional[str] = None
@@ -356,6 +369,7 @@ class Settings(BaseSettings):
         "demo_mode",
         "daemon_slack_enabled",
         "mcp_auto_connect_on_startup",
+        "vigil_mcp_oidc_enabled",
         mode="before",
     )
     # Tri-state: blank means "no opinion, use the call site's fallback".

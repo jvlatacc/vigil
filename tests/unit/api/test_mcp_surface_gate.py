@@ -351,3 +351,197 @@ def test_a_closed_surface_is_still_the_one_answering(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Not Found"}
+
+
+# --- A token from the deployment's identity provider --------------------------
+#
+# Beside minted credentials, the surface accepts a JWT from the issuer the
+# deployment configures -- and the check runs for real: signature against the
+# issuer's JWKS over HTTP (tests/unit/_idp_issuer_mock.py), strict issuer and
+# audience, exp/iss/aud/sub all required. What the token cannot do is claim an
+# account into being: the subject maps to one an administrator named, and what
+# that account may do reads from Vigil roles exactly as for any other
+# principal. The existing session-token test above already covers the
+# unconfigured deployment -- the verifier is off, a JWT is refused.
+
+
+class _MappedPerson:
+    username = "ext-alice"
+    is_active = True
+
+
+@pytest.fixture
+def an_issuer():
+    from tests.unit._idp_issuer_mock import Issuer
+
+    with Issuer() as issuer:
+        yield issuer
+
+
+def _a_configured_verifier(an_issuer):
+    from tests.unit._idp_issuer_mock import settings_for
+
+    return patch("core.auth.idp_jwt.get_settings", return_value=settings_for(an_issuer))
+
+
+def test_a_token_from_the_identity_provider_opens_the_surface(
+    client_on_a_domain, an_issuer
+):
+    """Signature, issuer, audience and mapping all in order -- the gate opens."""
+    from tests.unit._idp_issuer_mock import store_with
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client_on_a_domain.post(
+            "/mcp",
+            json=_INITIALIZE,
+            headers={
+                "Authorization": f"Bearer {an_issuer.token()}",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+
+    assert response.status_code == 200
+
+
+def test_an_idp_token_for_a_subject_no_account_maps_is_refused(client, an_issuer):
+    """No account carries the subject: refused, because tokens do not sign up."""
+    from tests.unit._idp_issuer_mock import store_with
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(None)
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client.post(
+            "/mcp", json={}, headers={"Authorization": f"Bearer {an_issuer.token()}"}
+        )
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_an_idp_token_signed_by_somebody_else_is_refused(client, an_issuer):
+    """The JWKS names one key; a signature from any other is not the issuer's."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from tests.unit._idp_issuer_mock import store_with
+
+    an_impostor = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    forged = an_issuer.token(signed_with=an_impostor)
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client.post(
+            "/mcp", json={}, headers={"Authorization": f"Bearer {forged}"}
+        )
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_an_idp_token_for_another_audience_is_refused(client, an_issuer):
+    """A token minted for something else is not minted for this surface."""
+    from tests.unit._idp_issuer_mock import store_with
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client.post(
+            "/mcp",
+            json={},
+            headers={"Authorization": f"Bearer {an_issuer.token(aud='other-service')}"},
+        )
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_an_expired_idp_token_is_refused(client, an_issuer):
+    from tests.unit._idp_issuer_mock import store_with
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client.post(
+            "/mcp",
+            json={},
+            headers={"Authorization": f"Bearer {an_issuer.token(exp=1_000_000_000)}"},
+        )
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_an_idp_token_from_another_issuer_is_refused(client, an_issuer):
+    from tests.unit._idp_issuer_mock import store_with
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client.post(
+            "/mcp",
+            json={},
+            headers={
+                "Authorization": f"Bearer {an_issuer.token(iss='https://evil.example')}"
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.headers.get("WWW-Authenticate") == "Bearer"
+
+
+def test_an_idp_callers_session_is_not_another_callers(client_on_a_domain, an_issuer):
+    """The binding is real: an IdP caller owns the session they opened."""
+    from tests.unit._idp_issuer_mock import store_with
+
+    class _AnotherPerson:
+        username = "ext-bob"
+        is_active = True
+
+    with _a_configured_verifier(an_issuer), patch(
+        "core.auth.idp_jwt.unit_of_work", store_with(_MappedPerson())
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        opened = client_on_a_domain.post(
+            "/mcp",
+            json=_INITIALIZE,
+            headers={
+                "Authorization": f"Bearer {an_issuer.token()}",
+                "Accept": "application/json, text/event-stream",
+            },
+        )
+        assert opened.status_code == 200
+        session_id = opened.headers.get("mcp-session-id")
+        assert session_id, "the server did not hand back a session id"
+
+        with patch("core.auth.idp_jwt.unit_of_work", store_with(_AnotherPerson())):
+            borrowed = client_on_a_domain.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                headers={
+                    **_MCP_HEADERS,
+                    "Authorization": f"Bearer {an_issuer.token(sub='idp-subject-2')}",
+                    "mcp-session-id": session_id,
+                },
+            )
+
+    assert borrowed.status_code == 404, (
+        "A caller reached a session opened by someone else. The session "
+        "manager only compares principals when scope['user'] is its own "
+        "AuthenticatedUser; Vigil authenticates ahead of the server, so the "
+        "principal must be put on the scope for the check to mean anything."
+    )
+
+
+def test_a_minted_credential_still_opens_the_surface_with_a_verifier_configured(
+    client_on_a_domain, an_issuer
+):
+    """The second credential kind adds; it does not displace."""
+    with _a_configured_verifier(an_issuer), patch(
+        "services.api.mcp_surface.authenticate", return_value=_Alice()
+    ), patch("services.api.mcp_surface.is_enabled", return_value=True):
+        response = client_on_a_domain.post(
+            "/mcp", json=_INITIALIZE, headers=_MCP_HEADERS
+        )
+
+    assert response.status_code == 200

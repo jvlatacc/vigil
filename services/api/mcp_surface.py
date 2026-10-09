@@ -9,8 +9,9 @@ Three gates, in order, because each one's answer means something different:
 
 * **Closed.** The surface is off, and a 404 says so. Not 403: a door nobody
   opened should not announce that it exists and is locked.
-* **Unauthenticated.** No credential, or one that does not work. 401 with a
-  challenge, and the same answer for every way a credential can fail.
+* **Unauthenticated.** No credential, or one that does not work -- minted or
+  IdP-issued alike. 401 with a challenge, and the same answer for every way a
+  credential can fail.
 * **Open.** The principal is bound for the duration of the call, which is what
   ``caller()`` reads when a tool records who did something.
 """
@@ -23,6 +24,7 @@ from typing import Optional
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from core.auth.idp_jwt import idp_user
 from core.auth.mcp_credential_service import authenticate
 from core.integrations.mcp.surface import acting_as, is_enabled
 
@@ -133,6 +135,14 @@ class McpSurfaceGate:
         user = _dev_mode_user(token) if token else None
         if user is None and token:
             user = authenticate(token)
+        if user is None and token:
+            # A token from the deployment's identity provider, beside minted
+            # credentials. Accepted only when the deployment configured an
+            # issuer, and only for an account an administrator mapped the
+            # token's subject to -- nothing here is a dev-mode gate, so it is
+            # deliberately absent from DEV_MODE_OPEN_GATES: it opens nothing
+            # on its own.
+            user = idp_user(token)
         if user is None:
             # One answer for no credential, an unknown one, a revoked one and
             # an expired one. A holder of a working credential learns nothing
@@ -238,4 +248,12 @@ def announce(enabled: bool, credential_count: int) -> None:
             "MCP surface: no credentials exist, so every request to %s will be "
             "refused. Mint one before a caller can use it.",
             MOUNT_PATH,
+        )
+
+    from core.auth.idp_jwt import idp_jwt_active
+
+    if idp_jwt_active():
+        logger.warning(
+            "MCP surface: identity-provider tokens are accepted beside minted "
+            "credentials, for accounts whose subject an administrator mapped."
         )

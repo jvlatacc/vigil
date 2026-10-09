@@ -12397,6 +12397,8 @@ export interface components {
         UpdateUserRequest: {
             /** Email */
             email?: string | null;
+            /** External Subject */
+            external_subject?: string | null;
             /** Full Name */
             full_name?: string | null;
             /** Is Active */
