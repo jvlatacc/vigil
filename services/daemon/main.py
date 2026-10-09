@@ -59,6 +59,8 @@ class SOCDaemon:
         self._orchestrator = None
         self._metrics_server = None
         self._mcp_client = None
+        # CepTap — present only when CEP is enabled (see _init_components)
+        self._cep_tap = None
 
         logger.info("SOC Daemon initialized")
 
@@ -91,6 +93,7 @@ class SOCDaemon:
         logger.info("Initializing daemon components...")
 
         # Import here to avoid circular imports
+        from core.cep.config import CepConfig
         from core.integrations.mcp.client import (
             build_mcp_client,
             set_process_mcp_client,
@@ -138,6 +141,24 @@ class SOCDaemon:
         if self.config.metrics.enabled:
             self._metrics_server = MetricsServer(self.config.metrics)
 
+        # CEP tap (In-Memory Streaming CEP spec): when enabled, the processor's
+        # input queue is swapped for a tee'd subclass. Producers keep the exact
+        # asyncio.Queue contract they had (same bound, same blocking put, acks
+        # untouched), while every finding is mirrored into the engine's own
+        # bounded queue without blocking: on overflow the mirror drops the
+        # newest event and counts it, so the spine can never stall behind
+        # correlation.
+        cep_config = CepConfig.from_env()
+        if cep_config.enabled:
+            from core.cep.tap import CepTap, FindingTeeQueue
+
+            self._cep_tap = CepTap(queue_max=cep_config.queue_max)
+            self._processor.input_queue = FindingTeeQueue(
+                tap=self._cep_tap,
+                maxsize=self._processor.input_queue.maxsize,
+            )
+            logger.info("CEP tap installed (queue_max=%d)", cep_config.queue_max)
+
         # Connect components via queues
         self._poller.set_output_queue(self._processor.input_queue)
         self._kafka_ingestor.set_output_queue(self._processor.input_queue)
@@ -152,6 +173,7 @@ class SOCDaemon:
             self._metrics_server.responder = self._responder
             self._metrics_server.scheduler = self._scheduler
             self._metrics_server.orchestrator = self._orchestrator
+            self._metrics_server.cep = self._cep_tap
 
         logger.info("All components initialized")
 
