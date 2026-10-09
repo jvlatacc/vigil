@@ -110,6 +110,19 @@ class SOCDaemon:
         # rather than surfacing on the first query inside a component task.
         get_db_manager()
 
+        # Seed the never-quarantine invariant set from settings (#944) before
+        # any component exists that could evaluate an action. A seed the store
+        # refuses raises and stops the boot: silently protecting less than
+        # the operator declared is the one failure the invariant may not have.
+        from core.response.guards_config import GuardConfig
+        from core.response.protected_assets import seed_protected_assets
+        from core.storage.unit_of_work import unit_of_work
+
+        guard_config = GuardConfig.from_settings()
+        if guard_config.protected_assets:
+            with unit_of_work() as session:
+                seed_protected_assets(session, guard_config.protected_assets)
+
         self._poller = DataPoller(self.config.polling)
         self._kafka_ingestor = KafkaIngestor(self.config.kafka)
         self._processor = FindingProcessor(
