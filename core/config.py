@@ -287,6 +287,12 @@ class Settings(BaseSettings):
     daemon_containment_subnet_prefix: int = 24
     daemon_max_containment_share_per_hour: float = 0.10
     daemon_max_containment_per_subnet_hour: int = 10
+    # Operator allow-list for the invoke boundary: MCP tool names an agent run
+    # may call directly despite the destructive-verb gate (core.llm.tool_risk).
+    # Chat is never loosened by it — its exclusion is its own decision. A
+    # shorter list is tighter.
+    # TODO(PR6): Settings UI field for this allow-list.
+    daemon_tool_risk_overrides: Annotated[List[str], NoDecode] = []
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
     daemon_slack_enabled: Optional[bool] = None
@@ -359,6 +365,7 @@ class Settings(BaseSettings):
         "extension_connector_allowlist",
         "daemon_escalate_severities",
         "daemon_never_quarantine",
+        "daemon_tool_risk_overrides",
         "kafka_topics",
         mode="before",
     )

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from core.integrations.atomic_red_team.descriptor import EXECUTE_IDS
+from core.llm.tool_risk import is_destructive_mcp as _is_destructive_mcp
 from core.llm.tool_schemas import (
     ALL_TOOLS,
     CALL_INTEGRATION_TOOL,
@@ -23,81 +24,12 @@ REMOTE = "remote"
 # world (isolates a host, blocks an IP, kills a process) and a later read cannot
 # undo it. Chat reaches every other connected MCP tool on demand (see
 # ``integration_tools``), but the chat surface has no approval-resume path — a
-# parked call would hang forever, never gate — so these are out of its reach. Real containment
-# goes through the approval queue (``create_approval_action``) and workflows, not
-# ad-hoc chat calls.
-_DESTRUCTIVE_VERBS = frozenset(
-    {
-        "isolate",
-        "unisolate",
-        "contain",
-        "quarantine",
-        "block",
-        "unblock",
-        "kill",
-        "terminate",
-        "shutdown",
-        "disable",
-        "deactivate",
-        "suspend",
-        "delete",
-        "remove",
-        "purge",
-        "wipe",
-        "revoke",
-        "ban",
-        "remediate",
-        "detonate",
-        "reset",
-        "release",
-    }
-)
-# A read-only lead verb (get_isolation_status, list_blocked_ips) is safe even
-# when a destructive noun follows, so it overrides the verb check.
-_READONLY_LEADS = frozenset(
-    {
-        "get",
-        "list",
-        "search",
-        "describe",
-        "fetch",
-        "query",
-        "show",
-        "read",
-        "lookup",
-        "count",
-        "stats",
-        "status",
-        "check",
-    }
-)
-
-
-def _is_destructive_mcp(name: str) -> bool:
-    """True for a server-prefixed MCP tool that performs an irreversible action.
-
-    Every token of the id is read, the server prefix included. Vendor tools
-    arrive as ``{server}_{tool}`` and Vigil's own arrive bare, so there is no
-    one prefix to strip — and stripping the first token off a bare name takes
-    the verb, which is the whole of what this decides on: ``isolate_host``
-    would be read as ``host``.
-
-    A read-only lead verb wins outright; otherwise any destructive verb token
-    marks it. Reading the prefix too can only over-drop, and that is the side to
-    err on — a spurious drop means chat recommends the action instead of calling
-    it, whereas a missed one is an ungated detonation.
-
-    ART execute is named, not verb-matched: adding ``execute`` to the verb set
-    would also drop ``splunk_execute``.
-    """
-    if name in EXECUTE_IDS:
-        return True
-    tokens = name.split("_")
-    if not tokens:
-        return False
-    if tokens[0] in _READONLY_LEADS:
-        return False
-    return any(tok in _DESTRUCTIVE_VERBS for tok in tokens)
+# parked call would hang forever, never gate — so these are out of its reach. Real
+# containment goes through the approval queue (``create_approval_action``) and
+# workflows, not ad-hoc chat calls. The taxonomy and the person gate behind it
+# live in ``core.llm.tool_risk`` — chat, the agent invoke boundary and the
+# workflow phase grants all read the one predicate. The private name stays
+# importable from this module: the chat tests read it here.
 
 
 # Weakest to strongest, so an agent is as hands-on as its most hands-on tool.
