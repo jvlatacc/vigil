@@ -13,7 +13,15 @@ from services.daemon.metrics import MetricsServer
 
 pytestmark = pytest.mark.unit
 
-NAMES = ("poller", "kafka", "processor", "responder", "scheduler", "orchestrator")
+NAMES = (
+    "poller",
+    "kafka",
+    "processor",
+    "responder",
+    "scheduler",
+    "orchestrator",
+    "policy-maturity",
+)
 
 
 async def _forever():
@@ -29,6 +37,7 @@ async def _server(**overrides):
     server.responder = SimpleNamespace()
     server.scheduler = SimpleNamespace()
     server.orchestrator = SimpleNamespace(enabled=False)
+    server.policy_maturity = SimpleNamespace(enabled=True)
     for name in NAMES:
         server.register_task(
             name, overrides.get(name) or asyncio.create_task(_forever())

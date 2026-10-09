@@ -4,7 +4,7 @@ import os
 import sys
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Any, List, Literal, Optional
+from typing import Annotated, Any, Literal
 
 from pydantic import ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -116,7 +116,7 @@ def dotenv_allowed() -> bool:
     return not disabled
 
 
-def _settings_env_file() -> Optional[Path]:
+def _settings_env_file() -> Path | None:
     if not dotenv_allowed():
         return None
     return REPO_ROOT / ".env"
@@ -137,8 +137,8 @@ class Settings(BaseSettings):
     testing: bool = False
     environment: str = "development"
     release_version: str = "unknown"
-    demo_mode: Optional[bool] = None
-    autostart_services: Optional[str] = None
+    demo_mode: bool | None = None
+    autostart_services: str | None = None
     max_upload_size_mb: int = 500
     # os.pathsep-separated roots beyond the home directory that local detection
     # rule sources may live under.
@@ -153,7 +153,7 @@ class Settings(BaseSettings):
     # Database. DATABASE_URL is not a field: Settings.extra is ignore so the
     # agent and scripts/migrate_schema.py can keep it in the environment.
     # Python sessions go through DatabaseConfig (encrypted DSN / POSTGRES_*).
-    postgresql_connection_string: Optional[str] = None
+    postgresql_connection_string: str | None = None
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "deeptempo_soc"
@@ -177,12 +177,12 @@ class Settings(BaseSettings):
 
     # Redis / queue. None means "no Redis configured" — the rate limiter falls back
     # to in-memory on None, so a default here would silently change its behavior.
-    redis_url: Optional[str] = None
+    redis_url: str | None = None
     llm_max_concurrent: int = 5
 
     # HTTP security
-    vigil_cors_origins: Optional[str] = None
-    vigil_csp_policy: Optional[str] = None
+    vigil_cors_origins: str | None = None
+    vigil_csp_policy: str | None = None
     vigil_csp_enabled: bool = True
     vigil_hsts_enabled: bool = True
     vigil_hsts_max_age: int = 31536000
@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     vigil_mcp_enabled: bool = False
     vigil_csrf_enabled: bool = True
     vigil_csrf_report_only: bool = True
-    vigil_csrf_exempt_paths: Optional[str] = None
+    vigil_csrf_exempt_paths: str | None = None
     vigil_cookie_secure: bool = True
     vigil_cookie_samesite: str = "strict"
 
@@ -227,15 +227,15 @@ class Settings(BaseSettings):
     ollama_extra_tool_models: str = ""
     model_catalog_refresh_interval_s: int = 300
     prompt_injection_block: bool = False
-    mcp_auto_connect_on_startup: Optional[bool] = None
+    mcp_auto_connect_on_startup: bool | None = None
     llm_budget_unlimited: bool = False
-    extension_connector_allowlist: Annotated[List[str], NoDecode] = []
+    extension_connector_allowlist: Annotated[list[str], NoDecode] = []
 
     # Email
     smtp_host: str = ""
     smtp_port: int = 587
-    smtp_user: Optional[str] = None
-    smtp_username: Optional[str] = None
+    smtp_user: str | None = None
+    smtp_username: str | None = None
     smtp_from: str = "noreply@vigil.local"
     smtp_tls: bool = True
     vigil_email_backend: str = "console"
@@ -266,6 +266,8 @@ class Settings(BaseSettings):
     # deployment gains the fast path by upgrading; a policy only acts after an
     # operator promotes it, and only while this flag is on.
     jit_fast_path_enabled: bool = False
+    # Seconds between scheduled maturity passes (services/daemon/maturity.py).
+    jit_maturity_interval: int = 900
     daemon_auto_response: bool = True
     daemon_confidence_threshold: float = 0.90
     # The rest of the confidence band (#916); see core.response.config.
@@ -276,10 +278,10 @@ class Settings(BaseSettings):
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
     daemon_escalation_enabled: bool = True
-    daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
+    daemon_escalate_severities: Annotated[list[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
-    daemon_slack_enabled: Optional[bool] = None
+    daemon_slack_enabled: bool | None = None
     daemon_slack_channel: str = "#soc-alerts"
     daemon_pagerduty_enabled: bool = False
     daemon_threat_hunt_interval: int = 86400
@@ -316,13 +318,13 @@ class Settings(BaseSettings):
     kafka_enabled: bool = False
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_consumer_group: str = "vigil-soc"
-    kafka_topics: Annotated[List[str], NoDecode] = []
+    kafka_topics: Annotated[list[str], NoDecode] = []
     kafka_auto_offset_reset: str = "latest"
     kafka_max_poll_records: int = 500
     kafka_session_timeout_ms: int = 30000
     kafka_security_protocol: str = "PLAINTEXT"
-    kafka_sasl_mechanism: Optional[str] = None
-    kafka_ssl_ca_location: Optional[str] = None
+    kafka_sasl_mechanism: str | None = None
+    kafka_ssl_ca_location: str | None = None
 
     # Ingestion / webhooks
     darktrace_enabled: bool = False
@@ -406,7 +408,7 @@ def _load_json_config(path: Path) -> dict:
     try:
         with open(path, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.error(f"Config load error {path}: {e}")
         return {}
 
