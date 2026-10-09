@@ -144,9 +144,12 @@ def parse_entries(
     parsed: List[ProtectedTarget] = []
     unparsed: List[str] = []
     for entry in entries:
+        text = entry.strip()
+        if not text:
+            continue  # a blank names nothing and is no one's protection
         rule = parse_entry(entry, origin)
         if rule is None:
-            unparsed.append(entry.strip())
+            unparsed.append(text)
             logger.error(
                 "protected_targets: entry %r is not kind:value with kind in %s; "
                 "containment is held for a person until it is fixed",
@@ -247,32 +250,29 @@ def _row_to_target(row: ProtectedTargetRow) -> ProtectedTarget:
     )
 
 
-def load_rows() -> Tuple[ProtectedTarget, ...]:
-    """Every active row in the ``protected_targets`` table.
+def rows_to_targets(rows: Iterable[ProtectedTargetRow]) -> Tuple[ProtectedTarget, ...]:
+    """ORM rows to rule values, so the response layer never imports a
+    repository and storage never imports a capability domain."""
+    return tuple(_row_to_target(row) for row in rows)
 
-    Raises on a failed read; the callers fail closed rather than decide.
+
+def current_rules(
+    config: ResponseConfig,
+    rows: Optional[Iterable[ProtectedTarget]] = None,
+    read_failed: bool = False,
+) -> ProtectedTargetRules:
+    """The env floor plus operator rows, as a pure composition.
+
+    ``rows`` are the active operator rows a caller loaded (through its own
+    DB seam, so tests can stub it); ``read_failed`` is the caller's failed
+    read — it holds every containment for a person.
     """
-    from core.storage.connection import get_db_manager
-    from core.storage.protected_target_repository import active_rows
-
-    with get_db_manager().session_scope() as session:
-        return tuple(_row_to_target(row) for row in active_rows(session))
-
-
-def current_rules(config: ResponseConfig) -> ProtectedTargetRules:
-    """The env floor plus the operator rows, fail-closed on a failed read."""
     floor, unparsed = parse_entries(config.never_quarantine, ORIGIN_ENV)
-    try:
-        rows = load_rows()
-    except Exception as e:  # noqa: BLE001
-        logger.error(
-            "Cannot read the protected targets; holding containment for a "
-            "person: %s",
-            e,
-        )
+    if read_failed:
         return ProtectedTargetRules(floor=floor, unparsed=unparsed, read_failed=True)
-    db_env = tuple(r for r in rows if r.origin == ORIGIN_ENV)
-    operator = tuple(r for r in rows if r.origin != ORIGIN_ENV)
+    loaded = tuple(rows or ())
+    db_env = tuple(r for r in loaded if r.origin == ORIGIN_ENV)
+    operator = tuple(r for r in loaded if r.origin != ORIGIN_ENV)
     return ProtectedTargetRules(
         floor=floor + db_env, operator=operator, unparsed=unparsed
     )

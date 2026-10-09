@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, create_model
@@ -35,6 +35,12 @@ from core.integrations.integration_secrets import (
 from core.intent import intent_file
 from core.llm.defaults import DEFAULT_MODEL
 from core.response.approval_service import APPROVAL_CONFIG_KEY
+from core.response.protected_targets import (
+    ORIGIN_ENV,
+    ORIGIN_OPERATOR,
+    parse_entries,
+    parse_entry,
+)
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
 from core.secrets import get_secret, set_secret
 from core.secrets_manager import get_secrets_manager
@@ -1779,6 +1785,194 @@ def set_force_manual_approval(
     return ForceManualApprovalResponse(
         enabled=config.enabled, environment_wins=_environment_wins()
     )
+
+
+# ---- Never-quarantine protected targets ----
+# Containment targets unattended response may never touch. The
+# DAEMON_NEVER_QUARANTINE environment floor is read at each decision and can
+# be undercut by nothing here; rows added through this surface may tighten
+# the floor and never loosen it, so removing an entry the environment
+# protects is refused with the same 409 the Act override gets.
+
+
+class ProtectedTargetEntry(BaseModel):
+    """One operator never-quarantine entry. The environment floor is read-only."""
+
+    kind: Literal["ip", "cidr", "hostname_glob", "role"]
+    value: str
+    reason: str
+
+
+class ProtectedTargetView(BaseModel):
+    kind: str
+    value: str
+    origin: str
+    reason: str
+    created_by: str
+    created_at: Optional[str] = None
+    removable: bool
+
+
+class ProtectedTargetsResponse(BaseModel):
+    """The list: the environment floor first, then operator rows. ``unparsed``
+    are floor entries that failed to parse — while any exist, the daemon
+    holds containment for a person rather than trust a list it cannot read."""
+
+    targets: List[ProtectedTargetView]
+    unparsed: List[str] = []
+
+
+def _protected_targets_response() -> ProtectedTargetsResponse:
+    """The env floor and the operator rows in evaluation order."""
+    settings = get_settings()
+    floor, unparsed = parse_entries(settings.daemon_never_quarantine, ORIGIN_ENV)
+    targets = [
+        ProtectedTargetView(
+            kind=rule.kind,
+            value=rule.value,
+            origin=ORIGIN_ENV,
+            reason=rule.reason or "The environment protects this target.",
+            created_by="environment",
+            removable=False,
+        )
+        for rule in floor
+    ]
+    from core.storage.connection import get_db_manager
+    from core.storage.protected_target_repository import active_rows
+
+    try:
+        with get_db_manager().session_scope() as session:
+            rows = active_rows(session)
+    except Exception as e:
+        logger.error("Error listing protected targets: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Could not read the protected-target list"
+        ) from e
+    floor_pairs = {(rule.kind, rule.value) for rule in floor}
+    for row in rows:
+        targets.append(
+            ProtectedTargetView(
+                kind=row.kind,
+                value=row.value,
+                origin=row.origin,
+                reason=row.reason,
+                created_by=row.created_by,
+                created_at=row.created_at.isoformat() if row.created_at else None,
+                removable=row.origin != ORIGIN_ENV
+                and (row.kind, row.value) not in floor_pairs,
+            )
+        )
+    return ProtectedTargetsResponse(targets=targets, unparsed=list(unparsed))
+
+
+@router.get("/protected-targets", response_model=ProtectedTargetsResponse)
+def list_protected_targets():
+    """The never-quarantine list in evaluation order: the environment floor
+    first, then operator rows."""
+    return _protected_targets_response()
+
+
+@router.post(
+    "/protected-targets",
+    dependencies=_SETTINGS_WRITE,
+    response_model=ProtectedTargetsResponse,
+)
+def add_protected_target(
+    entry: ProtectedTargetEntry,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Protect one more target. A row tightens the floor and never loosens it;
+    the reason is required so an invariant nobody can explain is one nobody
+    dares remove."""
+    rule = parse_entry(
+        f"{entry.kind}:{entry.value}",
+        ORIGIN_OPERATOR,
+        reason=entry.reason,
+        created_by=str(current_user.user_id),
+    )
+    if rule is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Not a valid {entry.kind} value: {entry.value!r}",
+        )
+    from core.storage.connection import get_db_manager
+    from core.storage.protected_target_repository import active_row_for, add_row
+
+    try:
+        with get_db_manager().session_scope() as session:
+            if active_row_for(session, rule.kind, rule.value) is not None:
+                raise HTTPException(
+                    status_code=409, detail="That target is already protected."
+                )
+            add_row(
+                session,
+                kind=rule.kind,
+                value=rule.value,
+                reason=entry.reason,
+                created_by=str(current_user.user_id),
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error adding protected target: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Could not save the protected target"
+        ) from e
+    return _protected_targets_response()
+
+
+@router.delete(
+    "/protected-targets",
+    dependencies=_SETTINGS_WRITE,
+    response_model=ProtectedTargetsResponse,
+)
+def remove_protected_target(
+    kind: str,
+    value: str,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Record the removal of an operator row — never a deletion: the row keeps
+    its history so a later containment is explainable. An entry the environment
+    protects is refused with the environment-wins 409."""
+    requested = parse_entry(f"{kind}:{value}", ORIGIN_OPERATOR)
+    if requested is None:
+        raise HTTPException(
+            status_code=422, detail=f"Not a valid {kind} value: {value!r}"
+        )
+    floor, _unparsed = parse_entries(get_settings().daemon_never_quarantine, ORIGIN_ENV)
+    if any(r.kind == requested.kind and r.value == requested.value for r in floor):
+        raise HTTPException(
+            status_code=409,
+            detail="The environment wins; the protected target was not removed.",
+        )
+    from core.storage.connection import get_db_manager
+    from core.storage.protected_target_repository import (
+        active_row_for,
+        record_removal,
+    )
+
+    try:
+        with get_db_manager().session_scope() as session:
+            row = active_row_for(session, requested.kind, requested.value)
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No active protected target for that kind and value.",
+                )
+            if row.origin == ORIGIN_ENV:
+                raise HTTPException(
+                    status_code=409,
+                    detail="The environment wins; the protected target was not removed.",
+                )
+            record_removal(session, row, removed_by=str(current_user.user_id))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error removing protected target: %s", e)
+        raise HTTPException(
+            status_code=503, detail="Could not remove the protected target"
+        ) from e
+    return _protected_targets_response()
 
 
 # ---- Darktrace webhook receiver config ----

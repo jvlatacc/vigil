@@ -3100,6 +3100,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/config/protected-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Protected Targets
+         * @description The never-quarantine list in evaluation order: the environment floor
+         *     first, then operator rows.
+         */
+        get: operations["get_api_config_protected-targets"];
+        put?: never;
+        /**
+         * Add Protected Target
+         * @description Protect one more target. A row tightens the floor and never loosens it;
+         *     the reason is required so an invariant nobody can explain is one nobody
+         *     dares remove.
+         */
+        post: operations["post_api_config_protected-targets"];
+        /**
+         * Remove Protected Target
+         * @description Record the removal of an operator row — never a deletion: the row keeps
+         *     its history so a later containment is explainable. An entry the environment
+         *     protects is refused with the environment-wins 409.
+         */
+        delete: operations["delete_api_config_protected-targets"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/config/s3": {
         parameters: {
             query?: never;
@@ -11465,6 +11498,53 @@ export interface components {
             priority: string;
         };
         /**
+         * ProtectedTargetEntry
+         * @description One operator never-quarantine entry. The environment floor is read-only.
+         */
+        ProtectedTargetEntry: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ip" | "cidr" | "hostname_glob" | "role";
+            /** Reason */
+            reason: string;
+            /** Value */
+            value: string;
+        };
+        /** ProtectedTargetView */
+        ProtectedTargetView: {
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by: string;
+            /** Kind */
+            kind: string;
+            /** Origin */
+            origin: string;
+            /** Reason */
+            reason: string;
+            /** Removable */
+            removable: boolean;
+            /** Value */
+            value: string;
+        };
+        /**
+         * ProtectedTargetsResponse
+         * @description The list: the environment floor first, then operator rows. ``unparsed``
+         *     are floor entries that failed to parse — while any exist, the daemon
+         *     holds containment for a person rather than trust a list it cannot read.
+         */
+        ProtectedTargetsResponse: {
+            /** Targets */
+            targets: components["schemas"]["ProtectedTargetView"][];
+            /**
+             * Unparsed
+             * @default []
+             */
+            unparsed: string[];
+        };
+        /**
          * RecalculateCostRequest
          * @description Body for POST /analytics/recalculate-cost.
          *
@@ -18210,6 +18290,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_config_protected-targets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedTargetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_config_protected-targets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProtectedTargetEntry"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedTargetsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_config_protected-targets": {
+        parameters: {
+            query: {
+                kind: string;
+                value: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedTargetsResponse"];
                 };
             };
             /** @description Validation Error */

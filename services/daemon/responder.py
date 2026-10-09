@@ -6,9 +6,10 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from core.response.approval_service import ApprovalService
+from core.response.approval_service import ActionType, ApprovalService
 from core.response.autonomous_response_service import AutonomousResponseService
 from core.response.config import response_action_decision
+from core.response.protected_targets import containment_hold, env_floor_rules
 from services.daemon.config import EscalationConfig, ResponseConfig
 
 logger = logging.getLogger(__name__)
@@ -354,6 +355,24 @@ class AutonomousResponder:
         if not target_ip and not hostname:
             logger.warning(f"No target available for response action on {finding_id}")
             return
+
+        # Target validation against the never-quarantine floor. The row is
+        # still created — the approval gate holds it PENDING with the
+        # invariant rule (hold, never drop) — but the attempt is named here,
+        # where the daemon's response decisions are traced.
+        floor_hold = containment_hold(
+            ActionType.ISOLATE_HOST.value,
+            target_ip or hostname or "",
+            env_floor_rules(self.response_config),
+            {"hostname": hostname} if hostname else None,
+        )
+        if floor_hold:
+            logger.warning(
+                "Response target for %s trips a never-quarantine invariant "
+                "(%s); the action row will be held for a person",
+                finding_id,
+                floor_hold,
+            )
 
         # Build correlation data
         correlation_data = self._response_service.correlate_alerts(

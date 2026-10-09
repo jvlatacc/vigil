@@ -431,6 +431,7 @@ dbInit:
     - 37_workflow_runs_outcome.sql
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
+    - 40_protected_targets.sql
   resources:
     requests:
       cpu: 50m
@@ -732,6 +733,7 @@ config:
   DAEMON_CRITICAL_ACTION_FLOOR: "0.70"
   DAEMON_HIGH_ACTION_FLOOR: "0.80"
   DAEMON_FORCE_APPROVAL: "false"
+  DAEMON_NEVER_QUARANTINE: ""
   DAEMON_DRY_RUN: "false"
   DAEMON_ESCALATION_ENABLED: "true"
   DAEMON_ESCALATE_SEVERITIES: "critical,high"
