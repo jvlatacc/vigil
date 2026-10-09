@@ -35,9 +35,9 @@ class TestMedicUntouched:
 class TestReservedVocabulary:
     def test_edge_modules_do_not_use_reserved_terms(self):
         """The repo reserves agent/daemon/federation for other things."""
-        from core.edge import policy, signing, verify
+        from core.edge import executors, policy, signing, verify
 
-        for module in (policy, signing, verify):
+        for module in (policy, signing, verify, executors):
             names = " ".join(vars(module))
             for term in ("agent", "daemon", "federation"):
                 assert term not in names, f"core.edge uses the reserved term '{term}'"
