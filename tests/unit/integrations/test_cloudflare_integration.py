@@ -111,6 +111,138 @@ def test_gateway_block_domain_builds_traffic_filter():
 
 
 # ---------------------------------------------------------------------------
+# core/integrations/cloudflare/tool.py — rate-limit REST helpers
+# (the speculative fast path's one real enforcement primitive)
+# ---------------------------------------------------------------------------
+
+
+def _http_response(status_code, payload):
+    fake = MagicMock()
+    fake.status_code = status_code
+    fake.content = b"{}"
+    fake.json.return_value = payload
+    return fake
+
+
+def test_ratelimit_apply_ip_requires_ip_zone_and_timeout():
+    cf = _import_cloudflare_tool()
+    no_ip = cf._ratelimit_apply_ip(
+        api_token="t", zone_id="z", ip="", mitigation_timeout=60, reason="r"
+    )
+    assert "error" in no_ip
+    no_zone = cf._ratelimit_apply_ip(
+        api_token="t", zone_id=None, ip="9.9.9.9", mitigation_timeout=60, reason="r"
+    )
+    assert "error" in no_zone
+    no_timeout = cf._ratelimit_apply_ip(
+        api_token="t", zone_id="z", ip="9.9.9.9", mitigation_timeout=0, reason="r"
+    )
+    assert "error" in no_timeout
+
+
+def test_ratelimit_apply_ip_creates_rule_in_entrypoint_ruleset():
+    cf = _import_cloudflare_tool()
+    entrypoint = _http_response(200, {"result": {"id": "rs-entry"}})
+    created = _http_response(201, {"success": True, "result": {"id": "rule-1"}})
+    with patch.object(cf.httpx, "get", return_value=entrypoint), patch.object(
+        cf.httpx, "post", return_value=created
+    ) as posted:
+        out = cf._ratelimit_apply_ip(
+            api_token="tok",
+            zone_id="zone-1",
+            ip="9.9.9.9",
+            mitigation_timeout=600,
+            reason="fast_path.review_threshold=0.85 met (0.92)",
+        )
+    assert out["success"] is True
+    assert out["external_ref"] == "rs-entry:rule-1"
+    args, kwargs = posted.call_args
+    assert "/zones/zone-1/rulesets/rs-entry/rules" in args[0]
+    assert kwargs["json"]["action"] == "block"
+    assert kwargs["json"]["ratelimit"]["mitigation_timeout"] == 600
+    assert kwargs["json"]["expression"] == "(ip.src eq 9.9.9.9)"
+    assert kwargs["headers"]["Authorization"] == "Bearer tok"
+
+
+def test_ratelimit_apply_ip_creates_the_entrypoint_ruleset_when_absent():
+    cf = _import_cloudflare_tool()
+    missing = _http_response(404, {"success": False})
+    new_ruleset = _http_response(200, {"result": {"id": "rs-new"}})
+    created = _http_response(201, {"success": True, "result": {"id": "rule-2"}})
+    with patch.object(cf.httpx, "get", return_value=missing), patch.object(
+        cf.httpx, "post", side_effect=[new_ruleset, created]
+    ) as posted:
+        out = cf._ratelimit_apply_ip(
+            api_token="tok",
+            zone_id="zone-1",
+            ip="9.9.9.9",
+            mitigation_timeout=60,
+            reason="fast-path test",
+        )
+    assert out["success"] is True
+    assert out["external_ref"] == "rs-new:rule-2"
+    first_post = posted.call_args_list[0]
+    assert first_post.args[0].endswith("/zones/zone-1/rulesets")
+    assert first_post.kwargs["json"]["phase"] == "http_ratelimit"
+
+
+def test_ratelimit_apply_ip_reports_vendor_rejection():
+    cf = _import_cloudflare_tool()
+    rejected = _http_response(
+        400, {"success": False, "errors": [{"message": "mitigation_timeout too small"}]}
+    )
+    with patch.object(
+        cf.httpx,
+        "get",
+        return_value=_http_response(200, {"result": {"id": "rs-entry"}}),
+    ), patch.object(cf.httpx, "post", return_value=rejected):
+        out = cf._ratelimit_apply_ip(
+            api_token="tok",
+            zone_id="zone-1",
+            ip="9.9.9.9",
+            mitigation_timeout=60,
+            reason="fast-path test",
+        )
+    assert out["success"] is False
+    assert out["external_ref"] is None
+
+
+def test_ratelimit_release_ip_deletes_the_referenced_rule():
+    cf = _import_cloudflare_tool()
+    deleted = _http_response(200, {"success": True})
+    with patch.object(cf.httpx, "delete", return_value=deleted) as deleted_call:
+        out = cf._ratelimit_release_ip(
+            api_token="tok",
+            zone_id="zone-1",
+            external_ref="rs-entry:rule-1",
+        )
+    assert out["success"] is True
+    assert (
+        "/zones/zone-1/rulesets/rs-entry/rules/rule-1" in deleted_call.call_args.args[0]
+    )
+
+
+def test_ratelimit_release_ip_treats_404_as_already_released():
+    cf = _import_cloudflare_tool()
+    with patch.object(
+        cf.httpx, "delete", return_value=_http_response(404, {"success": False})
+    ):
+        out = cf._ratelimit_release_ip(
+            api_token="tok", zone_id="zone-1", external_ref="rs-entry:rule-1"
+        )
+    assert out["success"] is True
+    assert out.get("already_released") is True
+
+
+def test_ratelimit_release_ip_requires_a_parseable_ref():
+    cf = _import_cloudflare_tool()
+    out = cf._ratelimit_release_ip(
+        api_token="tok", zone_id="zone-1", external_ref="not-a-ref"
+    )
+    assert "error" in out
+
+
+# ---------------------------------------------------------------------------
 # services/threat_feed_service.py — STIX 2.1 parsing
 # ---------------------------------------------------------------------------
 
