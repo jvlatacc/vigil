@@ -87,6 +87,10 @@ class Step:
     sources: Optional[Tuple[str, ...]] = None
     techniques: Optional[Tuple[str, ...]] = None
     min_severity: Optional[str] = None
+    # Seconds allowed between this step's matching event and the NEXT
+    # step's event (the spec contract: "max gap to the NEXT step"). The
+    # final step's value is dead config — the sequence completes on its
+    # event.
     max_gap_seconds: int = _DEFAULT_MAX_GAP_SECONDS
 
 
