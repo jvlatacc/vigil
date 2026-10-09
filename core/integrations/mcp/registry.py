@@ -12,6 +12,30 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _scan_tool_descriptions(server: str, tools: List[Dict]) -> None:
+    """Warn per tool description that scans as instruction injection.
+
+    Detect-only (spec area B): a hit is surfaced to the operator through the
+    log channel and registration proceeds -- a community server's over-eager
+    description must not take its tools down. Descriptions enter LLM context
+    unguarded (tool results are wrapped at both boundaries; these are not),
+    so the log is the tripwire, not a block.
+    """
+    from core.llm.security import scan_for_injection
+
+    for tool in tools:
+        scan = scan_for_injection(tool.get("description") or "")
+        if not scan:
+            continue
+        logger.warning(
+            "Prompt-injection pattern(s) %s in tool description -- "
+            "server=%s tool=%s; registered anyway (detect-only)",
+            ",".join(sorted(set(scan.patterns))),
+            server,
+            tool.get("name") or "<unnamed>",
+        )
+
+
 class MCPRegistry:
     """
     Central registry that tracks active MCP servers and their available tools.
@@ -45,6 +69,7 @@ class MCPRegistry:
         }
         if tools:
             self._tools_cache[name] = tools
+            _scan_tool_descriptions(name, tools)
         logger.info(f"Registered MCP server: {name} ({len(tools or [])} tools)")
 
     def get_active_servers(self) -> List[str]:
