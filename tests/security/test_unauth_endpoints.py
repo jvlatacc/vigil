@@ -149,6 +149,21 @@ PROTECTED_ROUTES = [
     ("GET", "/api/v1/agent-runs", None),
     ("GET", "/api/v1/workflows", None),
     ("GET", "/api/v1/cases/metrics/mttr", None),
+    # The JIT policy compiler's console surface — auth=REQUIRED on every route
+    # (swept exhaustively in
+    # tests/unit/policy_compiler/test_policies_router_security.py).
+    ("GET", "/api/compiled-policies", None),
+    ("GET", "/api/compiled-policies/pol_0000000000000000", None),
+    ("GET", "/api/compiled-policies/pol_0000000000000000/decisions", None),
+    (
+        "GET",
+        "/api/compiled-policies/pol_0000000000000000/export?format=rego",
+        None,
+    ),
+    ("POST", "/api/compiled-policies/pol_0000000000000000/promote", {"version": 1}),
+    ("POST", "/api/compiled-policies/pol_0000000000000000/suspend", {"version": 1}),
+    ("POST", "/api/compiled-policies/pol_0000000000000000/rearm", {"version": 1}),
+    ("POST", "/api/compiled-policies/pol_0000000000000000/retire", {"version": 1}),
 ]
 
 
