@@ -478,17 +478,13 @@ check_detection_candidate lints and replays a candidate Sigma rule against event
             "get_finding",
             "create_approval_action",
             "list_approval_actions",
-            "cf_waf_block_ip",
-            "cf_waf_unblock_ip",
-            "cf_gateway_block_domain",
-            "cf_access_revoke_session",
             "recall_entity",
             "read_skill",
         ],
         "max_tokens": 16384,
         "enable_thinking": True,
         "thinking_budget": 3000,
-        "extra_principles": "- Act immediately on high-confidence threats (>=$auto_approve)\n- Never auto-approve without strong evidence\n- Provide complete audit trail\n- Memory: recall_entity on the entity; read-only, and it orients your search rather than deciding its outcome\n- Prefer the most surgical Cloudflare action available: cf_waf_block_ip for malicious source IPs, cf_gateway_block_domain for outbound C2/exfil, cf_access_revoke_session only when an authenticated user identity is implicated. All cf_* write actions go through the approval pipeline; do not call them directly when confidence < $auto_approve.",
+        "extra_principles": "- Act immediately on high-confidence threats (>=$auto_approve)\n- Never auto-approve without strong evidence\n- Provide complete audit trail\n- Memory: recall_entity on the entity; read-only, and it orients your search rather than deciding its outcome\n- Prefer the most surgical response available: block the malicious source IP for inbound attacks, the C2 domain for outbound exfil, and session revocation only when an authenticated identity is implicated. Direct-action tools (the cf_* writes, isolate, quarantine) are not granted to you — a run's direct call of one is refused. Queue the action through create_approval_action; the approval pipeline executes it once a person decides.",
         "methodology": """<methodology>
 1. Gather data from multiple detection sources (Tempo Flow, EDR)
 2. Correlate signals: shared IPs/hosts/users, time proximity, MITRE techniques

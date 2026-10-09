@@ -12,6 +12,7 @@ import yaml
 from core.agents.enablement import disabled_agent_ids, disabled_message
 from core.integrations.atomic_red_team.descriptor import EXECUTE_IDS
 from core.llm.defaults import DEFAULT_MODEL
+from core.llm.tool_risk import current_overrides, destructive_refusal
 from core.skills.skill_library import READ_SKILL_TOOL
 
 if TYPE_CHECKING:
@@ -232,12 +233,25 @@ def _prompt_for(agent_id: str) -> str:
 # Compose allows phase.tools. The prompt already tells an agent whose profile
 # recommends read_skill to call it, so that name has to be on the phase or the
 # call the prompt requires is refused. Other recommended tools stay off the
-# phase: the workflow author listed what this step may use.
-def _tools_for(phase: Dict[str, Any], recommended: List[str]) -> List[str]:
-    tools = list(phase.get("tools") or [])
-    if READ_SKILL_TOOL in recommended and READ_SKILL_TOOL not in tools:
-        tools.append(READ_SKILL_TOOL)
-    return tools
+# phase: the workflow author listed what this step may use — minus the
+# direct-action names the invoke boundary would refuse without a person. A
+# grant the gate would kill is dead weight at best, and granting one is what
+# arms the call. tool_risk_overrides is honored here too, so a team that wants
+# direct agent action from a phase names the tool and gets it.
+def _tools_for(
+    phase: Dict[str, Any], recommended: List[str]
+) -> Tuple[List[str], List[str]]:
+    overrides = current_overrides()
+    granted: List[str] = []
+    dropped: List[str] = []
+    for tool in phase.get("tools") or []:
+        if destructive_refusal(tool, person_bound=False, overrides=overrides) is None:
+            granted.append(tool)
+        else:
+            dropped.append(tool)
+    if READ_SKILL_TOOL in recommended and READ_SKILL_TOOL not in granted:
+        granted.append(READ_SKILL_TOOL)
+    return granted, dropped
 
 
 # A file playbook writes one instructions block. A custom workflow authors the same
@@ -267,17 +281,31 @@ def _phases_of(definition: Any) -> List[Dict[str, Any]]:
             raise UnknownPlaybook(f"phase {index + 1} names no agent")
 
         profile = _profile_for(agent)
-        resolved.append(
-            {
-                "id": phase.get("id") or phase.get("phase_id") or f"phase-{index + 1}",
-                "agent": agent,
-                "name": phase.get("name") or f"Phase {index + 1}",
-                "instructions": _instructions_of(phase),
-                "approval_required": bool(phase.get("approval_required")),
-                "tools": _tools_for(phase, profile.recommended_tools),
-                "prompt": profile.system_prompt,
-            }
-        )
+        granted, refused = _tools_for(phase, profile.recommended_tools)
+        entry = {
+            "id": phase.get("id") or phase.get("phase_id") or f"phase-{index + 1}",
+            "agent": agent,
+            "name": phase.get("name") or f"Phase {index + 1}",
+            "instructions": _instructions_of(phase),
+            "approval_required": bool(phase.get("approval_required")),
+            "tools": granted,
+            "prompt": profile.system_prompt,
+        }
+        if refused:
+            _record_unavailable(
+                entry,
+                [
+                    {
+                        "tool": tool,
+                        "reason": (
+                            f"the invoke policy refuses {tool} without a person; "
+                            "queue it through create_approval_action"
+                        ),
+                    }
+                    for tool in refused
+                ],
+            )
+        resolved.append(entry)
     return resolved
 
 
@@ -320,6 +348,12 @@ def _budgets(phases: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"max_calls": max(len(phases), 1) * per_phase, **DEFAULT_SPEND}
 
 
+# One blind-spot list per phase: policy refusals recorded at grant time and
+# deployment gaps recorded here accumulate instead of overwriting.
+def _record_unavailable(phase: Dict[str, Any], entries: List[Dict[str, str]]) -> None:
+    phase["unavailable"] = [*phase.get("unavailable", []), *entries]
+
+
 # A tool a phase named and this deployment lacks leaves its grant and is recorded
 # on the phase, so the run journals a blind spot rather than a log line.
 def _drop_missing(phases: List[Dict[str, Any]], declared: List[str]) -> None:
@@ -327,10 +361,16 @@ def _drop_missing(phases: List[Dict[str, Any]], declared: List[str]) -> None:
         missing = [tool for tool in phase["tools"] if tool not in declared]
         phase["tools"] = [tool for tool in phase["tools"] if tool in declared]
         if missing:
-            phase["unavailable"] = [
-                {"tool": tool, "reason": f"no tool in this deployment answers {tool}"}
-                for tool in missing
-            ]
+            _record_unavailable(
+                phase,
+                [
+                    {
+                        "tool": tool,
+                        "reason": f"no tool in this deployment answers {tool}",
+                    }
+                    for tool in missing
+                ],
+            )
 
 
 # Only ART execute is gated. The id must be one config.tools actually carries:
