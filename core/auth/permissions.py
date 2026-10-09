@@ -8,13 +8,14 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Optional
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from core.auth.auth_service import AuthService
 from core.auth.current_user import get_current_user
-from core.storage.models import User
+from core.storage.models import Role, User
 from core.storage.unit_of_work import unit_of_work
 
 APPROVE_PERMISSION = "ai_decisions.approve"
@@ -59,3 +60,20 @@ def username_has_permission(username: str, permission: str) -> bool:
         user_id = user.user_id if user else ""
     # An unknown id holds nothing, except under DEV_MODE, which grants all.
     return AuthService.check_permission(user_id, permission)
+
+
+def can_assign_role(
+    current_user: User, target_role: Role, session: Optional[Session] = None
+) -> bool:
+    """True only if ``current_user`` holds every permission ``target_role`` grants.
+
+    One escalation guard for every path that hands out privileges — user role
+    assignment and group→role mapping writes alike: a user with ``users.write``
+    may not grant, directly or through a directory-group mapping, a role
+    carrying more privileges than they themselves hold.
+    """
+    current_perms = AuthService.get_user_permissions(current_user.user_id, session)
+    for perm, granted in (target_role.permissions or {}).items():
+        if granted and not current_perms.get(perm, False):
+            return False
+    return True
