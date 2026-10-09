@@ -87,6 +87,20 @@ def _mirror_to_file(filename: str, config_data: Dict[str, Any]) -> None:
         logger.warning(f"Could not mirror {filename} to the State Directory: {e}")
 
 
+def _token_preview(secret: Optional[str]) -> Optional[str]:
+    """Last-4 preview of a stored credential, for identifying it in Settings.
+
+    Previews used to show the LEADING characters (12 of the GitHub token, 8 of
+    the Claude key) — up to a third of a 36-char secret portion, sent to every
+    reader of the config (E6). The tail identifies a credential at least as
+    well; a secret too short for its tail to be a minority of it — 8 characters
+    or fewer — gets no preview at all.
+    """
+    if not secret or len(secret) <= 8:
+        return None
+    return f"...{secret[-4:]}"
+
+
 class ClaudeConfig(BaseModel):
     """Claude API configuration."""
 
@@ -266,7 +280,7 @@ def get_claude_config():
 
         return {
             "configured": has_key,
-            "key_preview": f"{api_key[:8]}..." if has_key else None,
+            "key_preview": _token_preview(api_key),
         }
     except Exception as e:
         logger.error(f"Error getting Claude config: {e}")
@@ -1286,7 +1300,7 @@ def get_github_config():
 
         return {
             "configured": has_token,
-            "token_preview": f"{token[:12]}..." if has_token else None,
+            "token_preview": _token_preview(token),
         }
     except Exception as e:
         logger.error(f"Error getting GitHub config: {e}")
