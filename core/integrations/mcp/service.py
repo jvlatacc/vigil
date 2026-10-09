@@ -207,13 +207,40 @@ class MCPService:
 
         Resolves against ``env`` — the environment the child is actually spawned
         with — so anything the spawn site pinned there is seen rather than
-        collapsed to an empty string.
+        collapsed to an empty string. A name the reduced env lacks falls
+        through to the secret store.
 
         Only the template is expanded. A resolved value is spliced in as plain
         text, so a stored value that itself contains ``${...}`` (a saved
         connector URL, say) cannot name another variable or secret to read.
+
+        This is the trust-full form: both env values and stored secrets may
+        flow into the result. It is for the child's *environment*; strings
+        bound for argv go through ``_substitute_public_value``.
         """
         source: Mapping[str, str] = os.environ if env is None else env  # noqa: ENV001
+        return self._expand(value, source, from_secrets=True, keep_unresolved=False)
+
+    def _substitute_public_value(self, value: str, env: Mapping[str, str]) -> str:
+        """Expand ``${VAR}`` in argv-bound strings — env-declared values only.
+
+        The secret store is never consulted (E3): a resolved credential must
+        not land in argv, where ``/proc/<pid>/cmdline`` reads it out to every
+        same-UID process on the host. A placeholder that resolves to nothing
+        here stays literal, so a child that expands ``${VAR}`` from its own
+        environment — mcp-remote does exactly that for ``--header`` values —
+        keeps its template intact.
+        """
+        return self._expand(value, env, from_secrets=False, keep_unresolved=True)
+
+    def _expand(
+        self,
+        value: str,
+        source: Mapping[str, str],
+        *,
+        from_secrets: bool,
+        keep_unresolved: bool,
+    ) -> str:
         pattern = r"\$\{([^}:]+)(?::-((?:\$\{[^}]+\}|[^{}])*))?\}"
 
         def replace_var(match):
@@ -221,14 +248,19 @@ class MCPService:
             default = match.group(2)
             # A non-empty export wins; empty counts as unset, as in bash ${VAR:-d}
             # and everywhere else credentials resolve.
-            env_val = source.get(var_name) or get_secret(var_name)
+            env_val = source.get(var_name)
+            if not env_val and from_secrets:
+                env_val = get_secret(var_name)
             if env_val:
                 return env_val.replace("$", _LITERAL_DOLLAR)
             if default is not None:
-                return self._substitute_env_vars(default, env).replace(
-                    "$", _LITERAL_DOLLAR
-                )
-            return ""
+                return self._expand(
+                    default,
+                    source,
+                    from_secrets=from_secrets,
+                    keep_unresolved=keep_unresolved,
+                ).replace("$", _LITERAL_DOLLAR)
+            return match.group(0) if keep_unresolved else ""
 
         # Repeat only to unwind nested defaults; resolved values carry no "$"
         # until the end, so they are never matched again.
@@ -312,17 +344,6 @@ class MCPService:
                         "VIGIL_DIR": str(vigil_path()),
                         "PYTHONPATH": project_path_str,
                     }
-                    # Declared config env is substituted against this reduced
-                    # environment, not os.environ — unset names fall through to
-                    # the secret store, never to a wholesale env copy.
-                    env.update(
-                        {
-                            k: self._substitute_env_vars(v, env)
-                            for k, v in raw_env_strs.items()
-                        }
-                    )
-
-                    # Get args and perform environment variable substitution
                     raw_args = list(server_config.get("args") or [])
 
                     # Capture declared credential placeholders *before*
@@ -333,20 +354,55 @@ class MCPService:
                         raw_env_strs, raw_args
                     )
 
-                    # Explicit per-server opt-in for ambient names: a variable
-                    # the server's own config references (its declaration) is
-                    # forwarded from the backend environment or the secret
-                    # store. Anything the config never names stays out — the
-                    # deny-by-default boundary above is not a hole for
-                    # whatever else happens to be exported.
-                    for var in required_env_vars:
+                    # Explicit per-server opt-in (required_env_vars in the
+                    # entry) plus every name the entry's own placeholders
+                    # reference: those are forwarded from the backend
+                    # environment or the secret store, so declared
+                    # substitution below can see them. The store fallback
+                    # mirrors the dormancy gate — a credential may live in
+                    # secrets.enc instead of an export. Anything the config
+                    # neither names nor lists stays out: the deny-by-default
+                    # boundary above is not a hole for whatever else happens
+                    # to be exported.
+                    explicit_opt_ins = list(
+                        server_config.get("required_env_vars") or []
+                    )
+                    opt_in_names: set[str] = set()
+                    for var in explicit_opt_ins + required_env_vars:
                         if var in env:
                             continue
                         value = resolve_opt_in(var)
                         if value:
                             env[var] = value
+                            opt_in_names.add(var)
 
-                    args = [self._substitute_env_vars(arg, env) for arg in raw_args]
+                    # Declared config env is substituted against this reduced
+                    # environment — now including the opted-in names — not
+                    # os.environ; unset names fall through to the secret
+                    # store, never to a wholesale env copy.
+                    env.update(
+                        {
+                            k: self._substitute_env_vars(v, env)
+                            for k, v in raw_env_strs.items()
+                        }
+                    )
+                    # A name the env block declares is part of the declared
+                    # environment, not an ambient opt-in: docker-style "-e
+                    # KEY=value" argv interpolation depends on it (see the
+                    # okta entry). Only purely opt-in names stay out of argv
+                    # interpolation.
+                    opt_in_names -= set(raw_env_strs)
+
+                    # argv interpolation is the public channel: it sees the
+                    # declared environment but never the ambient opt-ins, so
+                    # an opt-in-only credential stays a literal ${VAR} in args
+                    # for the child to expand from its own environment (E3 —
+                    # see the loglm entry in mcp-config.json).
+                    public_env = {k: v for k, v in env.items() if k not in opt_in_names}
+                    args = [
+                        self._substitute_public_value(arg, public_env)
+                        for arg in raw_args
+                    ]
 
                     # Launch the image's baked copy of a pinned npx/uvx entry
                     # instead of downloading it; anything not baked is as declared.
