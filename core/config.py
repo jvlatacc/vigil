@@ -261,6 +261,11 @@ class Settings(BaseSettings):
     daemon_enrich_backfill_interval: int = 300
     daemon_enrich_backfill_batch: int = 50
     daemon_enrich_backfill_max_age_hours: int = 168
+    # JIT policy fast path (docs/adr/0001): evaluate compiled deterministic
+    # policies before LLM triage. Off in every environment by default — no
+    # deployment gains the fast path by upgrading; a policy only acts after an
+    # operator promotes it, and only while this flag is on.
+    jit_fast_path_enabled: bool = False
     daemon_auto_response: bool = True
     daemon_confidence_threshold: float = 0.90
     # The rest of the confidence band (#916); see core.response.config.

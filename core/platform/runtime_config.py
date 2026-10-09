@@ -35,10 +35,17 @@ _CACHE_TTL_SECONDS = 60
 # Each setting maps (Settings-UI field name) -> (fallback env var name).
 # Keep this table in sync with ``AIOperationsSettingsConfig`` in
 # ``services/api/routers/config.py`` and with the env-var docs in ``env.example``.
+# The policy_compiler_* keys have no Settings-UI fields yet: they are read by
+# the JIT policy compiler's maturity job (docs/adr/0001) with defaults in
+# ``core.policy_compiler.config``.
 ENV_FALLBACKS = {
     "local_ollama_recovery_enabled": "LOCAL_OLLAMA_RECOVERY_ENABLED",
     "local_ollama_recovery_retry_limit": "LOCAL_OLLAMA_RECOVERY_RETRY_LIMIT",
     "local_ollama_recovery_restart_gateway": "LOCAL_OLLAMA_RECOVERY_RESTART_GATEWAY",
+    "policy_compiler_min_runs": "POLICY_COMPILER_MIN_RUNS",
+    "policy_compiler_min_consistency": "POLICY_COMPILER_MIN_CONSISTENCY",
+    "policy_compiler_window_days": "POLICY_COMPILER_WINDOW_DAYS",
+    "policy_compiler_drift_limit": "POLICY_COMPILER_DRIFT_LIMIT",
 }
 
 _cache_lock = threading.Lock()
