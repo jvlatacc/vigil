@@ -36,14 +36,19 @@ jobs:
           diff -r infra/database/init infra/helm/vigil/files/database-init \
             --exclude=README.md
 
-      - name: Fetch chart dependencies
+      - name: Verify vendored chart dependencies
+        # Subcharts are vendored in charts/ and checksummed in SHA256SUMS, so
+        # this job fetches nothing: Docker Hub rate-limits anonymous pulls from
+        # Actions runner IPs (HTTP 429), which is what the old
+        # `helm dependency update` step died on. Verify the pinned artifacts,
+        # then extract them for lint/template (Helm 4 wants directories,
+        # not just tgz). The checksum file lives at the chart root — helm
+        # rejects non-chart files inside charts/.
         run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
-          helm dependency update infra/helm/vigil
-          # Helm 4 requires subcharts extracted, not just as tgz
-          for tgz in infra/helm/vigil/charts/*.tgz; do
-            tar -xzf "$tgz" -C infra/helm/vigil/charts/
+          cd infra/helm/vigil
+          sha256sum -c SHA256SUMS
+          for tgz in charts/*.tgz; do
+            tar -xzf "$tgz" -C charts/
           done
 
       - name: helm lint (default values)
@@ -114,15 +119,8 @@ jobs:
       - name: Set up chart-testing
         uses: helm/chart-testing-action@v2.8.0
 
-      - name: Add chart repositories
-        # `ct lint` runs `helm dependency build` under the hood, which
-        # requires the upstream repos in `Chart.yaml` to be registered.
-        # Repo additions don't carry across jobs, so we add them here
-        # too (the lint job above adds the same set).
-        run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
-          helm repo update
-
       - name: Run chart-testing (lint)
-        run: ct lint --check-version-increment=false --target-branch ${{ github.event.repository.default_branch }} --chart-dirs infra/helm
+        # Subcharts are vendored, so skip the dependency build ct would run
+        # here — re-resolving them pulls postgresql from Docker Hub, which
+        # rate-limits anonymous pulls from runner IPs (HTTP 429).
+        run: ct lint --check-version-increment=false --skip-helm-dependencies --target-branch ${{ github.event.repository.default_branch }} --chart-dirs infra/helm
