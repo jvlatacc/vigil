@@ -41,6 +41,15 @@ data:
   {{- $_ := set $computed "VIGIL_RUNS_URL" (printf "%s/internal/runs" $backend) }}
   {{- $_ := set $computed "VIGIL_TOOLS_URL" (printf "%s/internal/tools/invoke" $backend) }}
   {{- end }}
+  {{- if or .Values.sshDecoy.enabled .Values.httpDecoy.enabled }}
+  {{- /* Decoy knobs (services/decoy/config.py). Flipping decoys on in values
+         is the human enablement; a rendered decoy pod serves. The ingest URL
+         is computed here following AGENT_URL: seam addresses render in one
+         place. Only decoy code reads these keys (Settings extra="ignore"). */ -}}
+  {{- $_ := set $computed "DECOY_ENABLED" "true" }}
+  {{- $_ := set $computed "DECOY_INGEST_URL" (printf "http://%s:%v/ingest" (include "vigil.daemon.fullname" .) .Values.daemon.ports.webhook) }}
+  {{- $_ := set $computed "DECOY_SESSION_TTL_SECONDS" (.Values.decoys.sessionTtlSeconds | toString) }}
+  {{- end }}
   {{- range $k, $v := .Values.config }}
   {{- if not (hasKey $computed $k) }}
   {{ $k }}: {{ $v | quote }}

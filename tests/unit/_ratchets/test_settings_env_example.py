@@ -68,6 +68,7 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "BIFROST_IMAGE_TAG",
     "BIND_HOST",
     "GRAFANA_PASSWORD",
+    "SKIP_FRONTEND",
     "VITE_EXTENSION_ORIGIN_ALLOWLIST",
     # Read by the TypeScript agent processes themselves, not by Settings.
     "AGENT_HEALTH_PORT",
@@ -87,10 +88,18 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # Bootstrap for the secrets manager itself, which cannot depend on Settings.
     "ENABLE_KEYRING",
     "SECRETS_BACKEND",
+    # Decoy credentials, read through get_secret (services/decoy/canary.py,
+    # emitter.py) — never Settings fields, so they cannot leak into logs or
+    # config dumps.
+    "DECOY_INGEST_TOKEN",
+    "DECOY_CANARY_PASSWORD",
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
     "VIGIL_DIR",
+    # Boot-time override read by start.sh for headless mode (f959365): the shell
+    # value outranks the .env default, so Settings never sees it.
+    "SKIP_FRONTEND",
 }
 
 

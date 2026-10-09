@@ -525,37 +525,30 @@ async def resume_workflow_run(
     Looks up the run's pending approval action, approves it, and
     re-enters the phase loop. If there is no pending approval action
     linked to the run, returns 409.
+
+    The gates and the hand-off live in core.workflows.run_control, shared
+    with the MCP resume tool, so a run resumed either way is resumed the
+    same way.
     """
-    from core.response.approval_service import ActionStatus
-    from core.workflows.run_resume import resume_run
-
-    run = run_service.get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
-    if run.get("status") != "paused":
-        raise HTTPException(
-            status_code=409,
-            detail=f"Run {run_id} is not paused (status={run.get('status')})",
-        )
-
-    approved_by = current_user.username
-    pending = approval_service.list_actions(
-        status=ActionStatus.PENDING, workflow_run_id=run_id
+    from core.workflows.run_control import (
+        AmbiguousPendingApprovals,
+        NoPendingApproval,
+        RunNotFound,
+        RunNotPaused,
+        resume_paused_run,
     )
-    if not pending:
-        raise HTTPException(
-            status_code=409, detail=f"Run {run_id} has no pending approval"
-        )
-    if len(pending) > 1:
-        # Resume names no action, so with several pending it would pick one unseen.
-        raise HTTPException(
-            status_code=409,
-            detail=f"Run {run_id} has {len(pending)} pending approvals; "
-            "decide each through /approvals/{action_id}",
-        )
 
-    approval_service.approve_action(pending[0].action_id, approved_by=approved_by)
-    return await resume_run(run_id, pending[0].action_id, approved_by)
+    try:
+        return await resume_paused_run(
+            run_id,
+            decided_by=current_user.username,
+            run_service=run_service,
+            approval_service=approval_service,
+        )
+    except RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except (RunNotPaused, NoPendingApproval, AmbiguousPendingApprovals) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @router.post("/workflows/runs/{run_id}/cancel", dependencies=_DECIDE)
@@ -571,45 +564,23 @@ async def cancel_workflow_run(
 
     Rejects any pending approval action on the run and finalises it
     as ``cancelled`` with the supplied reason.
+
+    The gates and the hand-off live in core.workflows.run_control, shared
+    with the MCP cancel tool, so a run cancelled either way is cancelled
+    the same way.
     """
-    from core.response.approval_service import ActionStatus
-    from core.workflows.run_cancel import stop_run
-    from core.workflows.run_resume import resume_run
+    from core.workflows.run_control import RunNotFound, cancel_run
 
-    run = run_service.get_run(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
-
-    rejected_by = current_user.username
-    pending = approval_service.list_actions(
-        status=ActionStatus.PENDING, workflow_run_id=run_id
-    )
-    for action in pending:
-        approval_service.reject_action(
-            action.action_id, reason=request.reason, rejected_by=rejected_by
+    try:
+        return await cancel_run(
+            run_id,
+            reason=request.reason,
+            actor=current_user.username,
+            run_service=run_service,
+            approval_service=approval_service,
         )
-
-    # A rejection ends the run, but the agent layer is what ends it: this hands
-    # the decision over and that side journals it and stops.
-    if run.get("status") == "paused" and pending:
-        return await resume_run(run_id, pending[0].action_id, rejected_by)
-
-    # Ask the run to stop, then make sure it does: the abort lets a hunt settle itself
-    # and write a report, and the escalation behind it covers a worker that cannot.
-    stopped = stop_run(run_id, request.reason, rejected_by)
-
-    run_service.finalize_run(
-        run_id,
-        status="cancelled",
-        error=f"Cancelled: {request.reason}",
-    )
-    return {
-        "success": True,
-        "status": "cancelled",
-        "run_id": run_id,
-        "rejection_reason": request.reason,
-        **stopped,
-    }
+    except RunNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 @router.post("/workflows/runs/{run_id}/narrate")

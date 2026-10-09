@@ -37,6 +37,8 @@ OTHER_CONSUMERS = {
     "AWS_ACCESS_KEY_ID": "ingestion and config routers",
     "AWS_SECRET_ACCESS_KEY": "ingestion and config routers",
     "DARKTRACE_WEBHOOK_SECRET": "darktrace webhook router",
+    "DECOY_CANARY_PASSWORD": "services/decoy/canary.py",
+    "DECOY_INGEST_TOKEN": "services/decoy/emitter.py",
     "JWT_SECRET_KEY": "auth",
     "KAFKA_SASL_PASSWORD": "services/daemon/config.py",
     "KAFKA_SASL_USERNAME": "services/daemon/config.py",

@@ -25,7 +25,7 @@ from core.config import get_settings
 from core.ingestion.dedup import RedisDedupSet
 from services.daemon.config import PollingConfig, ProcessingConfig
 from services.daemon.poller import DataPoller
-from services.daemon.processor import FindingProcessor, _STORE_ATTEMPTS
+from services.daemon.processor import _STORE_ATTEMPTS, FindingProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -297,7 +297,11 @@ async def test_webhook_does_not_redeliver(monkeypatch, caplog):
                 body = await response.json()
                 status = response.status
         assert status == 200
-        assert body == {"status": "ok", "ingested": 1}
+        assert body == {
+            "status": "ok",
+            "ingested": 1,
+            "origin_verified": False,  # no attestation header
+        }
         assert await poller._webhook_dedup.is_processed("wh-1") is True
 
         await _drain(processor, poller._output_queue)

@@ -360,6 +360,16 @@
         "_setup_note": "Cloudflare WAF, Zero Trust Gateway, and Access response actions plus read-only IP/domain threat lookups. Configure api_token (and optional account_id, zone_id) in Settings → Integrations. Tools are no-ops until the integration is enabled.",
         "_note": "Cloudforce One threat-intel feeds are ingested separately by daemon/threat_feed_poller.py and enrich findings via daemon/processor.py — no MCP tool surface required for v1."
       }
+    },
+
+    "honey-router": {
+      "command": "python3",
+      "args": ["core/integrations/honey_router/tool.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "_setup_note": "MTD honey-routing enforcement (Cilium local redirect first). Enable the honey_router integration in Settings → Integrations and set backend/namespace there; route/unroute tools are no-ops until it is enabled. The kubernetes client is imported only when a route is applied, so installs without it start cleanly.",
+        "_note": "Operator/analyst surface. The autonomous path is the daemon responder creating honey_route approval actions — never this tool server."
+      }
     }
   }
 }

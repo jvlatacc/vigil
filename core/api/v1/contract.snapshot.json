@@ -77,6 +77,120 @@
         "title": "BreachedCasesResponse",
         "type": "object"
       },
+      "BreakerResetRequest": {
+        "properties": {
+          "reason": {
+            "description": "Why the breaker is being manually reset; recorded in the config audit log.",
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "BreakerResetRequest",
+        "type": "object"
+      },
+      "BreakerResetResponse": {
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/BreakerStatusResponse"
+          },
+          "before": {
+            "$ref": "#/components/schemas/BreakerStatusResponse"
+          },
+          "rule": {
+            "default": "response.breaker_reset=manual",
+            "title": "Rule",
+            "type": "string"
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ],
+        "title": "BreakerResetResponse",
+        "type": "object"
+      },
+      "BreakerStatusResponse": {
+        "description": "Frozen shape of one breaker observation (mirrors ``BreakerStatus``).",
+        "properties": {
+          "counters": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "title": "Counters",
+            "type": "object"
+          },
+          "escalation_fired": {
+            "default": false,
+            "title": "Escalation Fired",
+            "type": "boolean"
+          },
+          "opened_at": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opened At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rule"
+          },
+          "seconds_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Left"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "store": {
+            "default": "redis",
+            "title": "Store",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "BreakerStatusResponse",
+        "type": "object"
+      },
       "ByPriorityResponse": {
         "properties": {
           "priority_breakdown": {
@@ -6320,6 +6434,114 @@
         "summary": "Update Finding",
         "tags": [
           "findings"
+        ]
+      }
+    },
+    "/api/v1/response/breaker": {
+      "get": {
+        "operationId": "get_api_v1_response_breaker",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BreakerStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Breaker Status",
+        "tags": [
+          "breaker"
+        ]
+      }
+    },
+    "/api/v1/response/breaker/reset": {
+      "post": {
+        "operationId": "post_api_v1_response_breaker_reset",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BreakerResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BreakerResetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Breaker Reset",
+        "tags": [
+          "breaker"
         ]
       }
     },

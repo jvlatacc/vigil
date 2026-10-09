@@ -57,6 +57,11 @@ jobs:
     if: github.repository == 'Vigil-SOC/vigil'
     runs-on: ubuntu-latest
     needs: [version]
+    # The multi-arch index digest build-push-action pushed — the same digest
+    # signed and SBOM-attested below. update-release consumes it to regenerate
+    # the image SBOMs as release assets.
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     permissions:
       contents: read
       packages: write          # push to ghcr.io
@@ -132,6 +137,47 @@ jobs:
           IMAGE: ghcr.io/vigil-soc/vigil-backend
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      # --- SBOM: inventory the signed image, attest it keylessly. -------
+      # Release-blocking (no continue-on-error): a release ships with its
+      # SBOM or does not ship.
+      #
+      # anchore/sbom-action pinned by commit SHA; syft pinned to the version
+      # the release SBOMs were validated against.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
+      # Scan the same immutable index digest cosign just signed — never a tag,
+      # never the config digest docker manifest inspect reports. syft resolves
+      # a multi-arch index to ONE platform image: the host platform by default
+      # (linux/amd64 on ubuntu runners; verified with syft 1.54.1 against a
+      # known index — --platform linux/arm64 selects the arm64 child instead).
+      # The arm64 image shares the package inventory for the compiled layers it
+      # differs in; the source-side SBOMs in update-release cover the tree for
+      # both platforms.
+      - name: Generate image SBOM (CycloneDX)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-backend
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          syft scan "${IMAGE}@${DIGEST}" \
+            -o "cyclonedx-json@1.6=vigil-sbom-backend-${VERSION}.cdx.json"
+
+      # Keyless, mirroring the sign step above: same subject, no --key — the
+      # job's id-token: write supplies GitHub OIDC. Consumers verify with the
+      # same certificate identity as the signature (see SECURITY.md).
+      - name: Attest SBOM (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-backend
+          VERSION: ${{ needs.version.outputs.version }}
+        run: >
+          cosign attest --yes --type cyclonedx
+          --predicate "vigil-sbom-backend-${VERSION}.cdx.json"
+          "${IMAGE}@${DIGEST}"
+
   # ---------------------------------------------------------------------------
   # Build + push: daemon
   # ---------------------------------------------------------------------------
@@ -139,6 +185,11 @@ jobs:
     name: Build daemon image
     if: github.repository == 'Vigil-SOC/vigil'
     runs-on: ubuntu-latest
+    needs: [version]
+    # Same signed index digest the SBOM steps below attest; update-release
+    # consumes it to regenerate the image SBOM as a release asset.
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -206,6 +257,47 @@ jobs:
           IMAGE: ghcr.io/vigil-soc/vigil-daemon
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+      # --- SBOM: inventory the signed image, attest it keylessly. -------
+      # Release-blocking (no continue-on-error): a release ships with its
+      # SBOM or does not ship.
+      #
+      # anchore/sbom-action pinned by commit SHA; syft pinned to the version
+      # the release SBOMs were validated against.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
+      # Scan the same immutable index digest cosign just signed — never a tag,
+      # never the config digest docker manifest inspect reports. syft resolves
+      # a multi-arch index to ONE platform image: the host platform by default
+      # (linux/amd64 on ubuntu runners; verified with syft 1.54.1 against a
+      # known index — --platform linux/arm64 selects the arm64 child instead).
+      # The arm64 image shares the package inventory for the compiled layers it
+      # differs in; the source-side SBOMs in update-release cover the tree for
+      # both platforms.
+      - name: Generate image SBOM (CycloneDX)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-daemon
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          syft scan "${IMAGE}@${DIGEST}" \
+            -o "cyclonedx-json@1.6=vigil-sbom-daemon-${VERSION}.cdx.json"
+
+      # Keyless, mirroring the sign step above: same subject, no --key — the
+      # job's id-token: write supplies GitHub OIDC. Consumers verify with the
+      # same certificate identity as the signature (see SECURITY.md).
+      - name: Attest SBOM (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-daemon
+          VERSION: ${{ needs.version.outputs.version }}
+        run: >
+          cosign attest --yes --type cyclonedx
+          --predicate "vigil-sbom-daemon-${VERSION}.cdx.json"
+          "${IMAGE}@${DIGEST}"
+
   # ---------------------------------------------------------------------------
   # Build + push: agent (worker and serve run the same image)
   # ---------------------------------------------------------------------------
@@ -213,6 +305,11 @@ jobs:
     name: Build agent image
     if: github.repository == 'Vigil-SOC/vigil'
     runs-on: ubuntu-latest
+    needs: [version]
+    # Same signed index digest the SBOM steps below attest; update-release
+    # consumes it to regenerate the image SBOM as a release asset.
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -274,6 +371,47 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
           IMAGE: ghcr.io/vigil-soc/vigil-agent
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # --- SBOM: inventory the signed image, attest it keylessly. -------
+      # Release-blocking (no continue-on-error): a release ships with its
+      # SBOM or does not ship.
+      #
+      # anchore/sbom-action pinned by commit SHA; syft pinned to the version
+      # the release SBOMs were validated against.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
+      # Scan the same immutable index digest cosign just signed — never a tag,
+      # never the config digest docker manifest inspect reports. syft resolves
+      # a multi-arch index to ONE platform image: the host platform by default
+      # (linux/amd64 on ubuntu runners; verified with syft 1.54.1 against a
+      # known index — --platform linux/arm64 selects the arm64 child instead).
+      # The arm64 image shares the package inventory for the compiled layers it
+      # differs in; the source-side SBOMs in update-release cover the tree for
+      # both platforms.
+      - name: Generate image SBOM (CycloneDX)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-agent
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          syft scan "${IMAGE}@${DIGEST}" \
+            -o "cyclonedx-json@1.6=vigil-sbom-agent-${VERSION}.cdx.json"
+
+      # Keyless, mirroring the sign step above: same subject, no --key — the
+      # job's id-token: write supplies GitHub OIDC. Consumers verify with the
+      # same certificate identity as the signature (see SECURITY.md).
+      - name: Attest SBOM (keyless)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/vigil-soc/vigil-agent
+          VERSION: ${{ needs.version.outputs.version }}
+        run: >
+          cosign attest --yes --type cyclonedx
+          --predicate "vigil-sbom-agent-${VERSION}.cdx.json"
+          "${IMAGE}@${DIGEST}"
 
   # ---------------------------------------------------------------------------
   # Smoke-test: pull the images and verify they start
@@ -406,7 +544,11 @@ jobs:
     name: Annotate GitHub Release
     if: github.repository == 'Vigil-SOC/vigil'
     runs-on: ubuntu-latest
-    needs: [version, smoke-test]
+    # Direct needs on the build jobs for their plumbed push digests — the
+    # multi-arch index digests cosign signed and SBOM-attested. smoke-test
+    # already gated on them transitively, so ordering is unchanged: SBOMs
+    # attach only to a verified release.
+    needs: [version, smoke-test, build-backend, build-daemon, build-agent]
     permissions:
       contents: write    # edit release body
       packages: read
@@ -425,26 +567,101 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Fetch digests
-        id: digests
-        run: |
-          BACKEND=$(docker manifest inspect ghcr.io/vigil-soc/vigil-backend:${{ needs.version.outputs.version }} \
-            | python3 -c "import sys,json; m=json.load(sys.stdin); print(m.get('config',{}).get('digest','unknown'))")
-          DAEMON=$(docker manifest inspect ghcr.io/vigil-soc/vigil-daemon:${{ needs.version.outputs.version }} \
-            | python3 -c "import sys,json; m=json.load(sys.stdin); print(m.get('config',{}).get('digest','unknown'))")
-          AGENT=$(docker manifest inspect ghcr.io/vigil-soc/vigil-agent:${{ needs.version.outputs.version }} \
-            | python3 -c "import sys,json; m=json.load(sys.stdin); print(m.get('config',{}).get('digest','unknown'))")
-          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
-          echo "daemon=$DAEMON"   >> "$GITHUB_OUTPUT"
-          echo "agent=$AGENT"     >> "$GITHUB_OUTPUT"
+      # --- SBOMs: nine CycloneDX documents per release, all release-blocking
+      # (no continue-on-error): a release ships with its SBOMs or does not
+      # ship. Source-side: the Python lock, the four npm lockfiles, and the
+      # whole source tree — the only artifact that covers the medic uv.lock,
+      # since the medic image is never pushed. Image-side: regenerated here
+      # from the plumbed index digests, so the files on the release page and
+      # the registry attestations describe the same signed digests.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
 
-      - name: Append image refs to release notes
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Install cyclonedx-py
+        run: pipx install cyclonedx-bom==7.5.0
+
+      - name: Generate SBOMs (CycloneDX)
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p sbom-dist
+
+          # Python lock — the full exact-pin resolution of requirements.lock.
+          cyclonedx-py requirements requirements.lock \
+            --of JSON \
+            -o "sbom-dist/vigil-sbom-python-${VERSION}.cdx.json"
+
+          # npm lockfiles — lockfile-only, so no node_modules install is
+          # needed; each surface runs from its own directory.
+          for proj in clients/web clients/desktop services/agent infra/docker/mcp-packages; do
+            name=$(basename "$proj")
+            ( cd "$proj" && npx --yes @cyclonedx/cyclonedx-npm@6.0.1 \
+                --package-lock-only --ignore-npm-errors \
+                --of JSON \
+                -o "$OLDPWD/sbom-dist/vigil-sbom-npm-${name}-${VERSION}.cdx.json" )
+          done
+
+          # Whole source tree — a directory scan, so it also catches the
+          # medic uv.lock and the Dockerfiles.
+          syft scan . \
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-source-${VERSION}.cdx.json"
+
+          # Per-image SBOMs, regenerated from the plumbed index digests — the
+          # exact digests signed and attested in the build jobs.
+          syft scan "ghcr.io/vigil-soc/vigil-backend@${{ needs.build-backend.outputs.digest }}" \
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-backend-${VERSION}.cdx.json"
+          syft scan "ghcr.io/vigil-soc/vigil-daemon@${{ needs.build-daemon.outputs.digest }}" \
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-daemon-${VERSION}.cdx.json"
+          syft scan "ghcr.io/vigil-soc/vigil-agent@${{ needs.build-agent.outputs.digest }}" \
+            -o "cyclonedx-json@1.6=sbom-dist/vigil-sbom-agent-${VERSION}.cdx.json"
+
+      # Support-tarball convention: a .sha256 sibling per file holding the
+      # bare file name, so `sha256sum -c <file>.sha256` works as pasted.
+      - name: SBOM checksums
+        run: |
+          cd sbom-dist
+          for f in ./*.cdx.json; do
+            sha256sum "$(basename "$f")" > "${f}.sha256"
+          done
+
+      - name: Append image refs and SBOMs to release notes
         uses: softprops/action-gh-release@v3
         with:
           append_body: true
           files: |
             support-dist/vigil-support-${{ needs.version.outputs.version }}.tar.gz
             support-dist/vigil-support-${{ needs.version.outputs.version }}.tar.gz.sha256
+            sbom-dist/vigil-sbom-backend-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-backend-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-daemon-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-daemon-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-agent-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-agent-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-python-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-python-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-npm-web-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-npm-web-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-npm-desktop-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-npm-desktop-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-npm-agent-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-npm-agent-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-npm-mcp-packages-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-npm-mcp-packages-${{ needs.version.outputs.version }}.cdx.json.sha256
+            sbom-dist/vigil-sbom-source-${{ needs.version.outputs.version }}.cdx.json
+            sbom-dist/vigil-sbom-source-${{ needs.version.outputs.version }}.cdx.json.sha256
           body: |
 
             ---
@@ -452,9 +669,9 @@ jobs:
 
             | Image | Tag | Digest |
             |-------|-----|--------|
-            | `ghcr.io/vigil-soc/vigil-backend` | `${{ needs.version.outputs.version }}` | `${{ steps.digests.outputs.backend }}` |
-            | `ghcr.io/vigil-soc/vigil-daemon`  | `${{ needs.version.outputs.version }}` | `${{ steps.digests.outputs.daemon }}`  |
-            | `ghcr.io/vigil-soc/vigil-agent`   | `${{ needs.version.outputs.version }}` | `${{ steps.digests.outputs.agent }}`   |
+            | `ghcr.io/vigil-soc/vigil-backend` | `${{ needs.version.outputs.version }}` | `${{ needs.build-backend.outputs.digest }}` |
+            | `ghcr.io/vigil-soc/vigil-daemon`  | `${{ needs.version.outputs.version }}` | `${{ needs.build-daemon.outputs.digest }}` |
+            | `ghcr.io/vigil-soc/vigil-agent`   | `${{ needs.version.outputs.version }}` | `${{ needs.build-agent.outputs.digest }}` |
 
             ```bash
             # Pull by tag
@@ -462,3 +679,34 @@ jobs:
             docker pull ghcr.io/vigil-soc/vigil-daemon:${{ needs.version.outputs.version }}
             docker pull ghcr.io/vigil-soc/vigil-agent:${{ needs.version.outputs.version }}
             ```
+
+            ---
+            ### SBOMs (CycloneDX 1.6)
+
+            Every image above carries a keyless CycloneDX attestation bound to
+            its signed digest; the same inventories plus source-side SBOMs are
+            attached below. Verify an attestation (see SECURITY.md for details):
+
+            ```bash
+            cosign verify-attestation \
+              --type cyclonedx \
+              --certificate-identity https://github.com/Vigil-SOC/vigil/.github/workflows/release.yml@refs/tags/v${{ needs.version.outputs.version }} \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              ghcr.io/vigil-soc/vigil-backend:${{ needs.version.outputs.version }}
+            ```
+
+            Attached files (each with a `.sha256` sibling — `sha256sum -c <file>.sha256`):
+
+            - `vigil-sbom-backend-${{ needs.version.outputs.version }}.cdx.json` — released backend image
+            - `vigil-sbom-daemon-${{ needs.version.outputs.version }}.cdx.json` — released daemon image
+            - `vigil-sbom-agent-${{ needs.version.outputs.version }}.cdx.json` — released agent image
+            - `vigil-sbom-python-${{ needs.version.outputs.version }}.cdx.json` — Python lock (`requirements.lock`)
+            - `vigil-sbom-npm-web-${{ needs.version.outputs.version }}.cdx.json` — web client lockfile
+            - `vigil-sbom-npm-desktop-${{ needs.version.outputs.version }}.cdx.json` — desktop client lockfile
+            - `vigil-sbom-npm-agent-${{ needs.version.outputs.version }}.cdx.json` — agent lockfile
+            - `vigil-sbom-npm-mcp-packages-${{ needs.version.outputs.version }}.cdx.json` — MCP connector lockfile
+            - `vigil-sbom-source-${{ needs.version.outputs.version }}.cdx.json` — whole source tree (incl. `services/medic/uv.lock`)
+
+            Image SBOMs describe the `linux/amd64` platform (syft resolves the
+            multi-arch index to the scanner's platform); the source-side SBOMs
+            cover the tree for all platforms.

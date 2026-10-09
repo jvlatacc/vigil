@@ -9,8 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.response.config import MtdConfig, ResponseConfig, is_recon_probe
+from core.response.fastpath.config import FastPathConfig
 from core.time import utcnow
-from services.daemon.config import ProcessingConfig, ResponseConfig
+from services.daemon.config import ProcessingConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
 from services.daemon.probes import PROBE_DATA_SOURCE
 from services.daemon.vendor_errors import (
@@ -67,11 +69,24 @@ class FindingProcessor:
         self,
         config: ProcessingConfig,
         response_config: Optional[ResponseConfig] = None,
+        fastpath_config: Optional[FastPathConfig] = None,
+        mtd_config: Optional[MtdConfig] = None,
     ):
         self.config = config
         # The queue-for-response line is the band's review threshold, so the
         # processor reads the same ResponseConfig the responder does (#916).
         self.response_config = response_config or ResponseConfig.from_settings()
+        # The Fast-Path's blast-radius config (speculative containment): the
+        # gate consults nothing but this and the finding dict. Ledger and
+        # executor registry are built on the first qualifying finding, so a
+        # disabled deployment never constructs them.
+        self.fastpath_config = fastpath_config
+        self._fastpath_ledger = None
+        self._fastpath_registry = None
+        # The MTD band gates its own queue candidates: a deceive-recommended
+        # or recon-tagged probe queues for response only while MTD is on,
+        # so a default install queues exactly what it queued before.
+        self.mtd_config = mtd_config or MtdConfig()
         # Bounded so a stalled processor holds producers back (put blocks)
         # instead of piling findings up in memory.
         self.input_queue: asyncio.Queue = asyncio.Queue(maxsize=INPUT_QUEUE_MAXSIZE)
@@ -107,6 +122,9 @@ class FindingProcessor:
             "queued_for_investigation": 0,
             "sanitization_flagged": 0,
             "store_dropped": 0,
+            "fastpath_leases_issued": 0,
+            "fastpath_shadow_records": 0,
+            "fastpath_errors": 0,
         }
 
     def _sanitize_finding(self, finding: Dict[str, Any], source: Optional[str]) -> None:
@@ -631,7 +649,7 @@ Provide your assessment in the following format:
 SEVERITY: [critical/high/medium/low]
 CONFIDENCE: [0.0-1.0]
 CATEGORY: [malware/intrusion/data_exfil/credential_theft/lateral_movement/other]
-RECOMMENDED_ACTION: [isolate/block/investigate/monitor/dismiss]
+RECOMMENDED_ACTION: [{"/".join(TRIAGE_ACTIONS)}]
 REASONING: [Brief explanation]
 """
 
@@ -993,10 +1011,21 @@ REASONING: [Brief explanation]
         recommended_action = finding.get("recommended_action", "").lower()
         confidence = finding.get("triage_confidence", 0.5)
 
+        # The MTD band adds its own candidates beside the containment ones:
+        # a probe triage recommended deceiving, and a scanning-tagged probe
+        # (T1046/T1595) whose tags say deceive even when triage chose a
+        # calmer word. Both queue only while MTD is on — with the feature
+        # off the queue sees exactly what it saw before, bit for bit.
+        mtd_candidate = self.mtd_config.enabled and (
+            recommended_action == "deceive"
+            or is_recon_probe(finding.get("mitre_predictions") or {})
+        )
+
         # Queue for response if high severity or action recommended
         should_respond = (
             severity in ["critical", "high"]
             or recommended_action in ["isolate", "block"]
+            or mtd_candidate
             or confidence >= self.response_config.review_threshold
         )
 
@@ -1035,3 +1064,139 @@ REASONING: [Brief explanation]
                 logger.info(
                     f"Finding {finding.get('finding_id')} queued for autonomous investigation"
                 )
+
+        # The Fast-Path gate (speculative containment, PR-4): the
+        # deterministic, LLM-free verdict beside the deliberation loop.
+        # A pure predicate plus, when enabled, one counters read; any
+        # failure is contained here — the finding's own path is done.
+        await self._evaluate_fast_path(finding)
+
+    def _fastpath_ledger_handle(self):
+        """The containment lease ledger, built on first qualifying use."""
+        from core.response.fastpath.ledger import ContainmentLedger
+
+        if self._fastpath_ledger is None:
+            self._fastpath_ledger = ContainmentLedger()
+        return self._fastpath_ledger
+
+    def _fastpath_executor(self, action_type: str):
+        """The registered executor for an action type, or None."""
+        from core.response.fastpath.executors import default_registry
+
+        if self._fastpath_registry is None:
+            self._fastpath_registry = default_registry()
+        return self._fastpath_registry.get(action_type)
+
+    async def _evaluate_fast_path(self, finding: Dict[str, Any]) -> None:
+        """Consult the Fast-Path policy gate and issue a lease when it says so.
+
+        On ISSUE_LEASE the ledger's driver performs the ONE synchronous
+        intent insert and then the executor apply outside any transaction —
+        the millisecond path's whole database work is that committed intent
+        (the ledger owns the ordering; nothing here touches
+        ``approval_actions`` or the 30 s approval sweep).
+        """
+        from core.response.fastpath import FastPathVerdict, evaluate, record_decision
+        from core.response.fastpath.adjudication import (
+            entity_type_for_target,
+            gate_counters,
+        )
+        from core.response.fastpath.ledger import LeaseIntent, issue_and_apply
+
+        cfg = self.fastpath_config
+        if cfg is None:
+            cfg = FastPathConfig.from_settings()
+
+        try:
+            # The counters read is the only database work, and the disabled
+            # path skips it: with the kill switch off the gate refuses at
+            # its enabled check, before any cap could read a counter.
+            counters = None
+            if cfg.enabled:
+                counters = await asyncio.to_thread(gate_counters, finding, cfg)
+
+            decision = evaluate(finding, cfg, counters)
+            record_decision(decision)
+            if decision.verdict is not FastPathVerdict.ISSUE_LEASE:
+                return
+
+            entity_type = entity_type_for_target(finding, decision.target)
+            if entity_type is None:
+                logger.warning(
+                    "fast-path: cannot derive entity type for target %r on"
+                    " finding %s — no lease issued",
+                    decision.target,
+                    finding.get("finding_id"),
+                )
+                return
+
+            intent = LeaseIntent(
+                action_type=decision.action_type,
+                entity_type=entity_type,
+                entity_id=decision.target,
+                ttl_seconds=decision.ttl_seconds,
+                decision_rule=decision.decision_rule,
+                observed=dict(decision.observed),
+                finding_id=finding.get("finding_id"),
+                is_shadow=decision.is_shadow,
+            )
+
+            if decision.is_shadow:
+                # Shadow rows are scored and recorded, never applied — the
+                # driver returns without touching an executor for one.
+                ledger = self._fastpath_ledger_handle()
+                outcome = await issue_and_apply(ledger, intent, executor=None)
+                if outcome.shadow:
+                    self.stats["fastpath_shadow_records"] += 1
+                return
+
+            executor = self._fastpath_executor(decision.action_type)
+            if executor is None:
+                # No executor for this action type (e.g. an edge verb with no
+                # operator endpoint): issuing would only record an intent the
+                # reconciler would abort. No lease.
+                logger.warning(
+                    "fast-path: no executor registered for action %s — no"
+                    " lease for finding %s",
+                    decision.action_type,
+                    finding.get("finding_id"),
+                )
+                return
+
+            outcome = await issue_and_apply(
+                self._fastpath_ledger_handle(), intent, executor
+            )
+            if outcome.replay:
+                # An active lease already holds this principal — the
+                # idempotency key collapsed the duplicate.
+                logger.debug(
+                    "fast-path: lease %s already active, replay collapsed",
+                    outcome.lease.id,
+                )
+            elif outcome.applied:
+                self.stats["fastpath_leases_issued"] += 1
+                logger.info(
+                    "fast-path: lease %s applied (%s on %s %s, ttl %ss) rule=%s",
+                    outcome.lease.id,
+                    decision.action_type,
+                    entity_type,
+                    decision.target,
+                    decision.ttl_seconds,
+                    decision.decision_rule,
+                )
+            elif outcome.error:
+                self.stats["fastpath_errors"] += 1
+                logger.warning(
+                    "fast-path: lease %s apply failed: %s",
+                    outcome.lease.id,
+                    outcome.error,
+                )
+        except Exception:
+            # The Fast-Path is beside the pipeline, never in front of it: a
+            # gate or ledger failure must not fail the finding. Counted and
+            # logged at exception level — surfaced, not suppressed.
+            self.stats["fastpath_errors"] += 1
+            logger.exception(
+                "fast-path evaluation failed for finding %s",
+                finding.get("finding_id"),
+            )
