@@ -350,6 +350,15 @@ class Settings(BaseSettings):
     daemon_protected_assets: Annotated[List[dict], NoDecode] = []
     # Ed25519 origin trust roots: JSON array of objects.
     daemon_trusted_origins: Annotated[List[dict], NoDecode] = []
+    # Automated MTD / honey-routing. core.response.config.MtdConfig bridges
+    # these; nothing else reads them here. Default off: enabling is a human
+    # configuration act, not a code change. The floor is its own band — it
+    # never rides the isolate/block thresholds, so raising one band's number
+    # can never widen the other's reach.
+    daemon_mtd_enabled: bool = False
+    daemon_mtd_confidence_floor: float = 0.60
+    daemon_mtd_session_ttl_seconds: int = 3600
+    daemon_mtd_internal_only: bool = True
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
