@@ -53,9 +53,13 @@ from services.daemon.intent import effective_daemon_config, intent_report
 router = APIRouter()
 
 # Writes change what the platform connects to and trusts, so Auth.REQUIRED alone
-# (any active account) is not enough. Reads stay open to every role.
+# (any active account) is not enough. Neither is a bare login for reads (E6):
+# integration config names the vendors Vigil talks to, which credentials are
+# set, and previews of those credentials. A role denied both read grants may
+# not enumerate them.
 _SETTINGS_WRITE = [permission_gate("settings.write")]
 _INTEGRATIONS_WRITE = [permission_gate("integrations.write")]
+_INTEGRATIONS_READ = [permission_gate("integrations.read", "settings.read")]
 
 ROUTER_META = RouterMeta(
     prefix="/api/config",
@@ -807,7 +811,7 @@ def _secrets_set_map(integrations: dict) -> dict:
     return result
 
 
-@router.get("/integrations")
+@router.get("/integrations", dependencies=_INTEGRATIONS_READ)
 def get_integrations_config():
     """
     Get integrations configuration.
@@ -974,7 +978,7 @@ def get_state_directory():
     return {"success": True, "state_directory": state_dir_status()}
 
 
-@router.get("/integrations/status")
+@router.get("/integrations/status", dependencies=_INTEGRATIONS_READ)
 def get_integrations_status(
     bridge: IntegrationBridgeService = Depends(provide_integration_bridge),
 ):
@@ -1268,7 +1272,7 @@ def set_general_config(
     return {"success": True, "message": "General settings saved"}
 
 
-@router.get("/github")
+@router.get("/github", dependencies=_INTEGRATIONS_READ)
 def get_github_config():
     """
     Get GitHub integration configuration status.
@@ -1805,7 +1809,7 @@ DARKTRACE_DEFAULTS: Dict[str, Any] = {
 }
 
 
-@router.get("/darktrace")
+@router.get("/darktrace", dependencies=_INTEGRATIONS_READ)
 def get_darktrace_config():
     """Return the current Darktrace webhook receiver config (without the secret)."""
     try:
