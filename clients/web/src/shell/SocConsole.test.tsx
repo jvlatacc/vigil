@@ -11,11 +11,13 @@ import api, { streamFetch, aiDecisionsApi, approvalsApi, workflowApi, configApi,
 
 const authState = vi.hoisted(() => ({
   allow: (_permission: string): boolean => true,
+  // Mutable so the unmapped-state tests can shape the signed-in account.
+  user: { full_name: 'Test User', email: 'test@vigil.local', role_id: 'role-admin', mfa_enabled: false } as Record<string, unknown>,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
-    user: { full_name: 'Test User', email: 'test@vigil.local', role_id: 'role-admin', mfa_enabled: false },
+    user: authState.user,
     logout: vi.fn(),
     hasPermission: (permission: string) => authState.allow(permission),
   }),
@@ -1157,5 +1159,35 @@ describe('SocConsole', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
       expect(localStorage.getItem(CONSOLE_TOUR_SEEN_KEY)).toBe('1')
     })
+  })
+})
+
+describe('unmapped session', () => {
+  const realUser = { ...authState.user }
+
+  beforeEach(() => {
+    localStorage.setItem(CONSOLE_TOUR_SEEN_KEY, '1')
+  })
+
+  afterEach(() => {
+    authState.user = { ...realUser }
+  })
+
+  it('an authenticated session with zero permissions replaces the console', () => {
+    // The deny-by-default landing of a federated sign-in whose directory
+    // groups map to no role.
+    authState.user.permissions = {}
+    renderConsole()
+    expect(screen.getByRole('heading', { name: 'No role mapped' })).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Primary' })).not.toBeInTheDocument()
+  })
+
+  it('a user with no permission map at all still renders the console', () => {
+    // Shape drift is surfaced by the screens' own gates, not by asserting a
+    // reason the shell cannot see.
+    delete authState.user.permissions
+    renderConsole()
+    expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'No role mapped' })).not.toBeInTheDocument()
   })
 })
