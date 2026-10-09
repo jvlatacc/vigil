@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import contextmanager
 from datetime import timedelta
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from core.agents import internal_auth, tool_registry, tools_router
 from core.agents.mcp_tools import MCPFailure
+from core.agents.tool_registry import ToolDenied
 from core.auth import tool_principal
 from core.auth.auth_service import AuthService
 from core.cases.case_workflow_service import CaseWorkflowService
@@ -144,6 +146,30 @@ class TestFailureKinds:
     def test_bad_arguments_are_invalid_args(self, client, monkeypatch):
         _raises(monkeypatch, TypeError("unexpected keyword argument 'nope'"))
         assert _invoke(client).json()["failure"]["kind"] == "invalid_args"
+
+    # denied is the dispatch gate's answer: the bound caller may not run this
+    # tool at all. An answer about the person, never a visibility gap.
+    def test_a_denied_dispatch_names_the_missing_permission(self, client, monkeypatch):
+        _raises(monkeypatch, ToolDenied("list_findings", "tools.invoke", "nestor"))
+        body = _invoke(client).json()
+        assert body == {
+            "ok": False,
+            "failure": {
+                "kind": "denied",
+                "detail": "nestor may not invoke list_findings: tools.invoke required",
+            },
+        }
+
+    def test_a_denied_dispatch_is_journalled_in_the_log(
+        self, client, monkeypatch, caplog
+    ):
+        _raises(monkeypatch, ToolDenied("list_findings", "tools.invoke", "nestor"))
+        with caplog.at_level(logging.WARNING, logger="core.agents.tools_router"):
+            _invoke(client)
+        assert any(
+            "list_findings" in record.message and "tools.invoke" in record.message
+            for record in caplog.records
+        )
 
     # A TypeError from inside a tool is not a bad call. Reported as invalid_args it
     # tells the model to retry with different arguments, which it does until the cap.

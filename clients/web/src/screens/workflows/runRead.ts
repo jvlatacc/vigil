@@ -368,7 +368,7 @@ export function decisionsOf(raw: unknown[]): InvestigateDecisionView[] {
   })
 }
 
-const FAILURES: readonly string[] = ['timeout', 'unavailable', 'backend_error', 'refused', 'invalid_args']
+const FAILURES: readonly string[] = ['timeout', 'unavailable', 'backend_error', 'refused', 'invalid_args', 'denied']
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
 /** Unknown entry kinds are dropped, so a newer agent service cannot break the page. */
