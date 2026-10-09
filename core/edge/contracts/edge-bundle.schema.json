@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/vigil/edge/contracts/edge-bundle/v1",
+  "title": "Vigil edge policy bundle v1",
+  "description": "The signed document an edge daemon enforces while partitioned (design spec art_CRPCjz0X). Signing it is the human promotion of edge autonomy: the bundle selects from the tiers fixed in code and can never widen them. tier3+ is deliberately absent from the autonomy_tier enum — the signer refuses it, and the edge gate rejects any bundle claiming it. This schema is the cross-service wire contract: the daemon (services/edge) validates against it without importing core.",
+  "type": "object",
+  "required": [
+    "bundle_id",
+    "edge_schema_version",
+    "segment_scope",
+    "version",
+    "not_before",
+    "expires_at",
+    "autonomy_tier",
+    "decision",
+    "allowed_actions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "bundle_id": {
+      "description": "Stable identifier of the policy stream; versions of one stream share it.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+    },
+    "edge_schema_version": {
+      "description": "Wire schema version; bump on incompatible change. A daemon older than the schema it is handed must demote to Tier 0.",
+      "const": 1
+    },
+    "segment_scope": {
+      "description": "What this bundle governs: a VPC, CIDR range, or node selector. A daemon applies the bundle only if its own identity fits this scope.",
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": true,
+      "properties": {
+        "vpc": { "type": "string", "maxLength": 64 },
+        "cidrs": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "type": "string", "maxLength": 50 }
+        },
+        "node_selector": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": { "type": "string", "maxLength": 253 }
+        }
+      }
+    },
+    "version": {
+      "description": "Strictly increasing per bundle_id. A daemon never accepts an older version over a newer one.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "parent_version": {
+      "description": "Version this bundle supersedes; rollback-resistance help (TUF-style). Optional for v1.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "not_before": {
+      "description": "UTC, medic timestamp convention (YYYY-MM-DDTHH:MM:SSZ).",
+      "$ref": "#/$defs/ts"
+    },
+    "expires_at": {
+      "description": "Hard validity end. An expired bundle can never be extended locally; the daemon demotes to Tier 0.",
+      "$ref": "#/$defs/ts"
+    },
+    "min_edge_version": {
+      "description": "Minimum daemon version that may run this bundle (semver).",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "autonomy_tier": {
+      "description": "Which autonomy band the daemon may operate in. tier0 observe-only, tier1 exact-IOC prevention, tier2 reversible network containment. tier3+ exist in the daemon enum but are unsignable in v1.",
+      "enum": ["tier0", "tier1", "tier2"]
+    },
+    "decision": {
+      "description": "Confidence bands and caps. The daemon's deterministic gate reads them from here, never from environment.",
+      "type": "object",
+      "required": [
+        "auto_act_confidence",
+        "escalate_confidence",
+        "max_actions_per_hour",
+        "max_active_blocks",
+        "default_block_ttl_seconds"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "auto_act_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "escalate_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "max_actions_per_hour": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "max_active_blocks": { "type": "integer", "minimum": 1, "maximum": 10000 },
+        "default_block_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        }
+      }
+    },
+    "allowed_actions": {
+      "description": "The complete action vocabulary this bundle grants. Anything not listed never executes. Empty list = valid observe-only bundle (tier0).",
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "required": ["action_type", "executor"],
+        "additionalProperties": false,
+        "properties": {
+          "action_type": {
+            "description": "v1 is network-scoped only: no host isolation, no file quarantine, no user disable.",
+            "enum": ["block_ip", "block_domain"]
+          },
+          "executor": {
+            "description": "Which executor implementation may carry the action.",
+            "enum": ["nftables", "k8s_networkpolicy"]
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "max_ttl_seconds": {
+                "description": "Upper bound on any single action's TTL; the daemon clamps to it.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "namespaces": {
+                "description": "k8s_networkpolicy executor only: namespaces this bundle may write NetworkPolicy objects in.",
+                "type": "array",
+                "maxItems": 64,
+                "items": { "type": "string", "maxLength": 253 }
+              }
+            },
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "rules": {
+      "description": "Deterministic rules: observations matching them act at their own severity floor without needing the SLM.",
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "match"],
+        "additionalProperties": false,
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "match": {
+            "description": "Free-form match document; the edge gate (services/edge) owns its semantics.",
+            "type": "object"
+          },
+          "severity_floor": {
+            "enum": ["info", "low", "medium", "high", "critical"]
+          },
+          "description": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "ioc_sets": {
+      "description": "Named IOC collections the rules reference. tier1 acts only on exact members of these sets.",
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": false,
+      "propertyNames": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+        "maxLength": 100
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["kind", "entries"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": { "enum": ["cidr", "domain", "ip"] },
+          "entries": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 10000,
+            "items": { "type": "string", "maxLength": 253 }
+          },
+          "source": { "type": "string", "maxLength": 200 }
+        }
+      }
+    },
+    "revocations": {
+      "description": "Explicit revocation entries: named IOCs or rule_ids to stop honoring. Revocation beats local allowance.",
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "rollback_reference": {
+      "description": "The bundle this one replaces (bundle_id + version) for operator rollback paths.",
+      "type": "object",
+      "properties": {
+        "bundle_id": { "type": "string", "maxLength": 100 },
+        "version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "ts": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}
