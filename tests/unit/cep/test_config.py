@@ -1,8 +1,10 @@
-"""Unit tests for CepConfig env parsing (defaults, overrides, clamping)."""
+"""Unit tests for the CepConfig Settings bridge (defaults, overrides,
+clamping, and the strict-parse convention shared with every DAEMON_* knob)."""
 
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from core.cep.config import CepConfig
 
@@ -45,11 +47,14 @@ def test_enabled_falsy_values(monkeypatch: pytest.MonkeyPatch, raw: str):
     assert CepConfig.from_env().enabled is False
 
 
-def test_enabled_empty_value_uses_default(monkeypatch: pytest.MonkeyPatch):
-    """Set-but-empty (the compose rendering of an unset default) is the
-    unset default, not an explicit opt-out."""
+def test_enabled_empty_value_fails_settings_validation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Set-but-empty parses strictly, like every other daemon bool knob:
+    Settings validation rejects it rather than guessing a side."""
     monkeypatch.setenv("CEP_ENABLED", "")
-    assert CepConfig.from_env().enabled is True
+    with pytest.raises(ValidationError):
+        CepConfig.from_env()
 
 
 def test_integer_overrides(monkeypatch: pytest.MonkeyPatch):
@@ -67,9 +72,19 @@ def test_integer_overrides(monkeypatch: pytest.MonkeyPatch):
     assert config.rules_path == "/etc/vigil/cep-rules"
 
 
-def test_garbage_int_falls_back_to_default(monkeypatch: pytest.MonkeyPatch):
+def test_garbage_int_fails_settings_validation(monkeypatch: pytest.MonkeyPatch):
+    """Strict by repo convention: a malformed daemon knob fails Settings
+    validation at startup (compare a malformed DAEMON_TRIAGE_TIMEOUT) —
+    it does not silently fall back and mask a broken deployment."""
     monkeypatch.setenv("CEP_QUEUE_MAX", "not-a-number")
-    assert CepConfig.from_env().queue_max == 1000
+    with pytest.raises(ValidationError):
+        CepConfig.from_env()
+
+
+def test_empty_rules_path_falls_back_to_default(monkeypatch: pytest.MonkeyPatch):
+    """An empty path is an unset default, not a directory name."""
+    monkeypatch.setenv("CEP_RULES_PATH", "")
+    assert CepConfig.from_env().rules_path == "data/cep_rules"
 
 
 def test_below_minimum_is_clamped(monkeypatch: pytest.MonkeyPatch):
