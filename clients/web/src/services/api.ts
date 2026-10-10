@@ -1494,6 +1494,13 @@ export const triageApi = {
   get: (params: TriageQuery = {}) => api.get<TriagePayload>('/triage', { params }),
 }
 
+export const twinApi = {
+  /** The layered digital-twin graph: devices, processes, connections (+ the
+   *  server-side edge derivation), from GET /api/v1/digital-twin/graph. */
+  getTwinGraph: (params: { since?: string; device_id?: string } = {}) =>
+    api.get<Schema<'TwinGraphPayload'>>('/v1/digital-twin/graph', { params }),
+}
+
 export const bootstrapApi = {
   status: () => api.get<BootstrapStatus>('/auth/bootstrap'),
   create: (payload: BootstrapPayload) => api.post('/auth/bootstrap', payload),

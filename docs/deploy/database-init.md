@@ -127,7 +127,8 @@ manual three-step process is what we have.
 
 ## See also
 
-- [`infra/helm/vigil/files/database-init/README.md`](https://github.com/Vigil-SOC/vigil/blob/main/infra/helm/vigil/files/database-init/README.md)
-  — chart-side notes on the same convention.
-- [`.github/workflows/helm-chart.yml`](https://github.com/Vigil-SOC/vigil/blob/main/infra/.github/workflows/helm-chart.yml)
+- [`infra/helm/vigil/files/database-init/`](../../infra/helm/vigil/files/database-init/)
+  — the chart-bundle copy of the same SQL files (no separate notes file exists;
+  this page is the convention doc).
+- [`.github/workflows/helm-chart.yml`](../../.github/workflows/helm-chart.yml)
   — the CI check that enforces directory parity.

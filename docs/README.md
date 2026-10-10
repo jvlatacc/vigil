@@ -85,4 +85,6 @@ Guides written and maintained directly in this repository.
 - [Headless Mode](headless.md) — running Vigil without the console
 - [Logging Levels](logging-levels.md) — log level conventions and tuning
 - [MTD Enablement](mtd-enablement.md) — moving target defense / decoy response
+- [Digital Twin](digital-twin.md) — the environment inventory and layered graph
+- [Medic](medic.md) — the ops-health watcher for a Vigil install
 - [Runbook: Honey Router Cilium Verification](runbooks/honey-router-cilium-verification.md) — verifying the honey router path

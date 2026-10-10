@@ -131,7 +131,7 @@ npm test src/utils/api.test.ts
 
 ### Unit Test Example
 
-**File**: `tests/unit/test_service.py`
+**Example** — a unit test module under `tests/unit/` (illustrative):
 
 ```python
 import pytest
@@ -162,7 +162,7 @@ class TestMyService:
 
 ### Integration Test Example
 
-**File**: `tests/integration/test_api.py`
+**Example** — an integration test module under `tests/integration/` (illustrative):
 
 ```python
 import pytest
@@ -202,7 +202,7 @@ class TestCaseAPI:
 
 ### Frontend Test Example
 
-**File**: `clients/web/src/components/CaseList.test.tsx`
+**Example** — a component test under `clients/web/src/` (illustrative):
 
 ```typescript
 import { describe, it, expect, vi } from 'vitest'

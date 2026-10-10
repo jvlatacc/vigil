@@ -143,7 +143,11 @@ data: {"jsonrpc":"2.0","id":1730000000000,"result":{"content":[{"type":"text","t
 
 Direct questions about the Vigil-side implementation to:
 - Vigil repo: <https://github.com/Vigil-SOC/vigil>
-- Tool client lives in [`core/integrations/vstrike/client.py`](https://github.com/Vigil-SOC/vigil/blob/main/core/integrations/vstrike/client.py) (see
+- Tool client lives in [`core/integrations/vstrike/client.py`](../../core/integrations/vstrike/client.py) (see
   `killchain_replay_in_ui`)
-- API surface: [`services/api/routers/vstrike.py`](https://github.com/Vigil-SOC/vigil/blob/main/services/api/routers/vstrike.py) (`POST /ui/killchain-replay`)
-- Frontend Play button: [`clients/web/src/components/graph/VStrikeIframeHost.tsx`](https://github.com/Vigil-SOC/vigil/blob/main/clients/web/src/components/graph/VStrikeIframeHost.tsx)
+- API surface: [`services/api/routers/vstrike.py`](../../services/api/routers/vstrike.py) (`POST /ui/killchain-replay`)
+- The console no longer hosts the VStrike iframe — the frontend host component
+  (`clients/web/src/components/graph/VStrikeIframeHost.tsx`) was removed in the
+  console repaint, and the VStrike UI session is opened in VStrike's own web UI,
+  which Vigil drives over MCP/WebSocket
+  (`core/integrations/vstrike/client.py::killchain_replay_in_ui`).

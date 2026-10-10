@@ -144,11 +144,11 @@ VIGIL_BOOTSTRAP_ADMIN_PASSWORD='…' ./scripts/headless_onboard.py \
 ## Connect an MCP client
 
 The surface is streamable HTTP at `http://<host>:6987/mcp`, bearer-authed with
-the `vgl_mcp_` credential. It serves 46 tools; the ones mirroring frozen
-`/api/v1` operations are pinned in
-[`tools/mcp/frozen_tools.snapshot.json`](../tools/mcp/frozen_tools.snapshot.json),
+the `vgl_mcp_` credential. It serves 49 tools (26 frozen mirrors of
+`/api/v1` operations, pinned in
+[`tools/mcp/frozen_tools.snapshot.json`](../tools/mcp/frozen_tools.snapshot.json);
 the rest are served under the `0.x` terms in
-[SECURITY.md](../SECURITY.md#supported-versions).
+[SECURITY.md](../SECURITY.md#supported-versions)).
 
 **Claude Desktop** (or any client that takes an `mcpServers` entry) — paste
 the `client_config` the onboarding script printed:

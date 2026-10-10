@@ -66,8 +66,9 @@ automated.
 5. When ready, a maintainer merges the
    release PR. The merge causes release-please to push tag `vX.Y.Z` and
    create a GitHub Release.
-6. The tag push triggers `.github/workflows/release.yml`, which builds
-   and publishes artifacts.
+6. The tag push triggers `.github/workflows/release.yml`, which builds,
+   signs (cosign, keyless), SBOM-attests (syft), scans and publishes the
+   images to GHCR, then annotates the release with the image digests.
 
 The only human decision per release is **when to merge the release PR**.
 
@@ -171,9 +172,10 @@ that overwrites it.
    git tag -s v0.2.0 -m "Release v0.2.0"
    git push origin v0.2.0
    ```
-4. The tag push triggers `release.yml` (build, scan, deploy).
+4. The tag push triggers `release.yml` (build, sign, SBOM-attest, scan,
+   publish to GHCR — no deploy).
 5. **Manually create the GitHub Release** at
-   [github.com/Vigil-SOC/vigil/releases/new](https://github.com/Vigil-SOC/vigil/releases/new),
+   [github.com/jvlatacc/vigil/releases/new](https://github.com/jvlatacc/vigil/releases/new),
    selecting the tag you just pushed. release-please normally creates
    this; in manual mode nothing else will. Use the `CHANGELOG.md`
    section you wrote as the Release body.

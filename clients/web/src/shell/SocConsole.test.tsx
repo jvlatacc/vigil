@@ -271,6 +271,12 @@ vi.mock('../services/api', () => ({
       },
     }),
   },
+  // an empty twin payload keeps the shell test on the screen's Empty state —
+  // no React Flow canvas needed to prove the route resolves
+  twinApi: {
+    getTwinGraph: () =>
+      Promise.resolve({ data: { generated_at: '2026-10-10T08:00:00Z', devices: [], processes: [], connections: [] } }),
+  },
   overviewApi: {
     get: () => Promise.resolve({
       data: {
@@ -385,7 +391,7 @@ describe('SocConsole', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Home')
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     const names = within(nav).getAllByRole('button').map((button) => button.getAttribute('aria-label'))
-    expect(names.slice(0, 6)).toEqual(['Home', 'Overview', 'Triage queue', 'Cases', 'Agents & workflows', 'Settings'])
+    expect(names.slice(0, 7)).toEqual(['Home', 'Overview', 'Triage queue', 'Cases', 'Agents & workflows', 'Digital Twin', 'Settings'])
     expect(screen.getByRole('button', { name: 'Home' }).querySelector('.vg-nav-count')).toBeNull()
     expect(screen.getByRole('button', { name: 'Cases' }).querySelector('.vg-nav-count')).toBeNull()
   })
@@ -464,6 +470,7 @@ describe('SocConsole', () => {
     const screens: [string, string][] = [
       ['Cases', 'Cases'],
       ['Agents & workflows', 'Agents & workflows'],
+      ['Digital Twin', 'Digital Twin'],
       ['Settings', 'Settings'],
       ['Overview', 'Overview'],
       ['Triage queue', 'Triage queue'], // the screen draws its own heading

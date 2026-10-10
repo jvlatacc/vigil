@@ -4,6 +4,8 @@ import {
   connectionTupleLabel,
   deriveTalksToEdges,
   filterTwinGraph,
+  normalizeTwinPayload,
+  resolveSelection,
   DEVICE_X,
   PROCESS_X,
   CONNECTION_X,
@@ -11,9 +13,11 @@ import {
   type TwinDeviceFlowNode,
   type TwinEdgeKind,
   type TwinFlowEdge,
+  type TwinNodeData,
   type TwinProcessFlowNode,
 } from './useTwinGraph'
 import { DEMO_TWIN_PAYLOAD as DEMO } from './fixtures'
+import type { Schema } from '../../services/apiTypes'
 import type { TwinConnection, TwinDevice, TwinGraphPayload } from './types'
 
 // The mappers only touch MarkerType; the full canvas is mocked in TwinGraph.test.tsx
@@ -120,5 +124,60 @@ describe('twin graph mappers', () => {
   it('maps an empty payload to an empty graph', () => {
     const empty: TwinGraphPayload = { generated_at: '2026-10-09T00:00:00Z', devices: [], processes: [], connections: [] }
     expect(buildTwinGraph(empty)).toEqual({ nodes: [], edges: [] })
+  })
+})
+
+describe('normalizeTwinPayload', () => {
+  // the wire shape the API PR ships: optional lists, untyped uuid ids, extra
+  // inventory fields the screen deliberately drops
+  const wireDevice = {
+    ...DEMO.devices[0],
+    device_key: 'seed:0a:1b:2c:3d:4e:01',
+    os_info: null,
+    attributes: null,
+  }
+  const wirePayload = (over: Partial<Schema<'TwinGraphPayload'>> = {}): Schema<'TwinGraphPayload'> => ({
+    generated_at: '2026-10-10T08:00:00Z',
+    devices: [wireDevice],
+    processes: [DEMO.processes[0]],
+    connections: [DEMO.connections[0]],
+    ...over,
+  })
+
+  it('normalizes the wire DTO into the screen payload', () => {
+    const payload = normalizeTwinPayload(wirePayload())
+    expect(payload.generated_at).toBe('2026-10-10T08:00:00Z')
+    expect(payload.devices).toHaveLength(1)
+    expect(payload.devices[0]).toEqual(DEMO.devices[0])
+    expect(payload.processes).toEqual([DEMO.processes[0]])
+    expect(payload.connections).toEqual([DEMO.connections[0]])
+  })
+
+  it('defaults the optional entity lists to empty arrays', () => {
+    const payload = normalizeTwinPayload({ generated_at: '2026-10-10T08:00:00Z' })
+    expect(payload).toEqual({ generated_at: '2026-10-10T08:00:00Z', devices: [], processes: [], connections: [] })
+  })
+
+  it('falls back to unknown for free-form enum fields instead of lying', () => {
+    const payload = normalizeTwinPayload(wirePayload({ devices: [{ ...wireDevice, device_type: 'printer' }] }))
+    expect(payload.devices[0]?.device_type).toBe('unknown')
+  })
+})
+
+describe('resolveSelection', () => {
+  const web = DEMO.devices.find((d) => d.id === 'dev-web-01')!
+  const deviceSelection = (entity: TwinDevice = web): TwinNodeData => ({ kind: 'device', entity })
+
+  it('keeps the selection and hands back the fresh entity when the payload still names it', () => {
+    const bumped: TwinDevice = { ...web, last_seen: '2026-10-10T09:00:00Z' }
+    const payload: TwinGraphPayload = { generated_at: '2026-10-10T09:00:00Z', devices: [bumped], processes: [], connections: [] }
+    expect(resolveSelection(payload, deviceSelection(web))).toEqual({ kind: 'device', entity: bumped })
+  })
+
+  it('closes the panel when a refresh dropped the selected entity', () => {
+    const payload: TwinGraphPayload = { generated_at: '2026-10-10T09:00:00Z', devices: [], processes: [], connections: [] }
+    expect(resolveSelection(payload, deviceSelection())).toBeNull()
+    expect(resolveSelection(null, deviceSelection())).toBeNull()
+    expect(resolveSelection({ ...DEMO }, null)).toBeNull()
   })
 })
