@@ -106,6 +106,12 @@ Enable and configure integrations under **Settings → Integrations**, or genera
 
 **Detection rules.** The detection-engineering integration ([security-detections-mcp](https://www.npmjs.com/package/security-detections-mcp)) indexes community rule sets (Sigma, Splunk ESCU, Elastic, KQL) for search, coverage analysis, and gap identification. Vigil does not ship the rules; fetch them with `./scripts/setup_detection_repos.sh` (or `SETUP_DETECTION_REPOS=1 ./setup_dev.sh`).
 
+## Local Autonomy Mesh (Warden)
+
+Vigil's containment pipeline runs centrally — which makes the control plane a single point of failure for defense: cut the path to it and the segment under attack has no defense at all. **Warden** (`services/warden/`) is an optional edge runtime that deploys onto cluster nodes and VPC gateways: it pulls a signed containment-policy pack while connected, verifies it offline against a baked-in trust root, triages local alerts on-device (an optional quantized SLM, advisory by default), enforces only what the pack's signed autonomy envelope allows while the control plane is unreachable (nftables IP blocks, rate-capped, TTL-bound, self-protecting), and reconciles a tamper-evident decision journal on reconnect.
+
+Fail-closed by construction: a Warden that cannot verify its authority enforces nothing, every decision — allow and refuse — is journaled, and no env var or database row can widen the signed envelope. Deploy it via the compose `edge` profile or the `warden` Helm DaemonSet; the [edge mesh guide](docs/edge-mesh.md) covers deployment, enrollment, the autonomy envelope, enforcement, and reconciliation.
+
 ---
 
 ## Quick Start
@@ -334,6 +340,7 @@ Guides live at **[vigilsoc.org/docs](https://vigilsoc.org/docs/)**:
 | [Configuration](https://vigilsoc.org/docs/configuration/) | Environment variables, secrets, deployment |
 | [Helm](https://vigilsoc.org/docs/helm/) | Chart values, secrets, install |
 | [Splunk testing](https://vigilsoc.org/docs/splunk-testing/) · [Postgres → Splunk](https://vigilsoc.org/docs/postgres-to-splunk/) | Test data and export scripts |
+| [Edge mesh (Warden)](docs/edge-mesh.md) | Edge deployment, enrollment, signed policy packs, enforcement, reconciliation |
 | [Contributing](https://vigilsoc.org/docs/contributing/) | How to contribute, DCO |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting, supported versions, disclosure |
 | [VERSIONING.md](VERSIONING.md) | What is frozen, what is not, and how the contract changes |
