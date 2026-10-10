@@ -156,6 +156,9 @@ async def evaluate_guards(
     Returns ``(verdict)``; every rejection carries the rationale the caller
     renders on the action row, and ``needs_human`` forces the human path.
     """
+    # ORM columns hand back str-subclass enums; the quota keys and the
+    # rationales want the plain string.
+    action_type = str(getattr(action_type, "value", action_type))
     # 1. Never-quarantine invariant: a protected target waits for a person at
     #    any confidence, any severity, any breaker state. The hold feeds the
     #    breaker's probe counter (D4b) — someone may be probing the set.
@@ -397,3 +400,20 @@ class GuardChain:
             evidence_origins,
             spend_quota=spend_quota,
         )
+
+
+_shared_chain: Optional[GuardChain] = None
+
+
+def shared_guard_chain() -> GuardChain:
+    """The process-wide chain: one config build, one breaker, one quota.
+
+    The daemon constructs services freely; the guards are daemon-wide state
+    (the breaker is daemon-wide by spec), so every enforcement site —
+    creation, execution, dry-run — shares one chain. Tests inject their own
+    via the service's ``guards`` argument instead.
+    """
+    global _shared_chain
+    if _shared_chain is None:
+        _shared_chain = GuardChain()
+    return _shared_chain

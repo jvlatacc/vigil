@@ -19,8 +19,8 @@ from core.response.guards import (
     GuardChain,
     GuardState,
     GuardVerdict,
+    shared_guard_chain,
 )
-from core.response.protected_assets import protected_asset_hit
 from core.storage.service import DatabaseService
 
 logger = logging.getLogger(__name__)
@@ -44,22 +44,23 @@ class AutonomousResponseService:
 
         ``config`` defaults to the approval service's band so the two never
         compare against different lines; the no-arg form reads Settings.
-        ``guards`` defaults to a lazily built :class:`GuardChain` (#944) so a
-        service that never responds never pays for one.
+        ``guards`` defaults to the process-wide :class:`GuardChain` (#944)
+        so a service that never responds never pays for one and every
+        enforcement site shares one breaker and one quota.
         """
         self.approval_service = approvals or ApprovalService(config=config)
         self.config = config or self.approval_service.config
         self._guards = guards
 
     def _guard_chain(self) -> GuardChain:
-        """The guard chain, built on first use (#944).
+        """The guard chain — the shared one, on first use (#944).
 
         Instances made via ``__new__`` (the executor's test shape) lack the
-        attribute entirely — the lazy build covers them too.
+        attribute entirely; the shared build covers them too.
         """
         chain = getattr(self, "_guards", None)
         if chain is None:
-            chain = GuardChain()
+            chain = shared_guard_chain()
             self._guards = chain
         return chain
 
@@ -480,36 +481,48 @@ class AutonomousResponseService:
 
                 params = action.parameters or {}
 
-                # Never-quarantine invariant re-check (#944), ahead of the
-                # person-decided guard: a row whose status says "approved"
-                # but names no approver was released by a confidence figure,
-                # and a confidence figure cannot discharge the invariant.
-                # Refused and recorded — never executed, never dropped
-                # silently. A row a person decided (approved_by set)
-                # proceeds; that is the deliberate emergency valve.
+                # The execution re-check (#944, D1): creation and execution
+                # are different transactions, so a row no person decided is
+                # re-judged by the guard chain before anything dispatches —
+                # invariant, breaker, and the hard quota ceiling. The origin
+                # stamps were judged when the action was created; the
+                # executor holds no findings to re-read them from. A held
+                # verdict is refused and durably recorded — never executed,
+                # never dropped silently. A soft quota window does not block
+                # here: the row was already released, and only the hard
+                # ceiling (D3) refuses at execution. A row a person decided
+                # proceeds whatever the chain answers — the deliberate
+                # emergency valve: the breaker suspends machine response,
+                # and a person's decision is not machine response.
                 if not action.approved_by:
-                    protected = protected_asset_hit(
-                        action.target, params.get("hostname")
+                    verdict = self.evaluate_guards(
+                        action.action_type,
+                        action.target,
+                        params.get("hostname"),
+                        spend_quota=False,
                     )
-                    if protected is not None:
+                    if verdict.state not in (
+                        GuardState.ALLOWED,
+                        GuardState.QUOTA_SOFT,
+                    ):
                         logger.warning(
-                            "Action %s targets protected asset %s; refusing execution",
+                            "Action %s held by the execution re-check: %s",
                             action.action_id,
-                            protected.rule(),
+                            verdict.rule,
                         )
                         self.approval_service.refuse_auto_action(
-                            action.action_id, protected.rule()
+                            action.action_id, verdict.rule
                         )
                         continue
 
-                # Released by a confidence figure and no person: whoever
-                # supplied that figure also chose the outcome.
-                if not action.requires_approval and not action.approved_by:
-                    logger.warning(
-                        "Action %s was never decided by a person; not executing",
-                        action.action_id,
-                    )
-                    continue
+                    # Released by a confidence figure and no person: whoever
+                    # supplied that figure also chose the outcome.
+                    if not action.requires_approval:
+                        logger.warning(
+                            "Action %s was never decided by a person; not executing",
+                            action.action_id,
+                        )
+                        continue
 
                 result: Optional[Dict] = None
 
