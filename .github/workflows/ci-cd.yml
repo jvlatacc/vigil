@@ -165,6 +165,16 @@ jobs:
         with:
           dockerfile: infra/docker/Dockerfile.agent
 
+      # Warden's deps stage keeps build tools available (a wheel-less package
+      # in requirements.lock must still compile), so it shares the backend
+      # image's two waivers. Advisory, as backend's is.
+      - name: Run hadolint (warden)
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: infra/docker/Dockerfile.warden
+          ignore: DL3008,DL3009
+        continue-on-error: true
+
   # ============================================================================
   # Agent Image — build, scan, smoke test
   # ============================================================================

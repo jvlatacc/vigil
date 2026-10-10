@@ -1,0 +1,91 @@
+# infra/docker/Dockerfile.warden
+# =============================================================================
+# Warden: the edge containment runtime (Local Autonomy Mesh)
+#
+# Final image runs:  python -m services.warden
+# Health check:      python -m services.warden check   (one GET to its own /health)
+# Exposes ports:     8091 sentinel (alert intake) · 9092 health · 9093 metrics
+#
+# Unlike Medic, Warden imports core.edge (the shared policy, decision, journal
+# surface), so the build context includes core/edge and dependencies come from
+# the app lock (requirements.lock) — Warden is tested in the app environment,
+# not an isolated uv env. The import-linter contract `warden` holds
+# services.warden to core.edge, and the image enforces the same boundary by
+# copying only that domain.
+#
+# Runs as uid/gid 10002 — Medic holds 10001 and Vigil's images run 1000, so
+# each deployable's 0600/0700 data stays out of the others' reach. Works with
+# a read-only root filesystem: the only write path is WARDEN_DATA_DIR, a named
+# volume or PVC. No VOLUME line (the Medic rationale: an anonymous volume
+# would hide a missing mount instead of failing on the read-only root).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: Warden's venv, from the app lock
+# ---------------------------------------------------------------------------
+# PYTHON_VERSION as in the other images: .python-version is the repo's pin.
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS deps
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.lock .
+# A venv, not pip --prefix: the runtime stage copies one self-contained tree
+# and the PATH env below does the rest.
+RUN python -m venv /opt/warden/venv \
+    && /opt/warden/venv/bin/pip install --no-cache-dir -r requirements.lock
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime image
+# ---------------------------------------------------------------------------
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+
+# The data dir is created here, owned by 10002 and mode 0700: Docker copies
+# that ownership into a new, empty named volume. No curl — the healthcheck
+# speaks stdlib urllib, so the runtime stage installs no apt packages.
+RUN groupadd -g 10002 warden \
+    && useradd -u 10002 -g 10002 -M -d /nonexistent -s /usr/sbin/nologin warden \
+    && mkdir -p /var/lib/vigil-warden \
+    && chown 10002:10002 /var/lib/vigil-warden \
+    && chmod 0700 /var/lib/vigil-warden
+
+COPY --from=deps /opt/warden/venv /opt/warden/venv
+
+# Code stays root-owned: Warden can read it, not change it.
+WORKDIR /app
+COPY core/__init__.py ./core/__init__.py
+COPY core/edge/ ./core/edge/
+COPY services/warden/ ./services/warden/
+COPY VERSION ./VERSION
+
+# Compiled now, because a read-only root filesystem can't take __pycache__
+# later. PYTHONDONTWRITEBYTECODE keeps it that way at run time.
+RUN if [ -n "${VIGIL_VERSION}" ]; then echo "${VIGIL_VERSION}" > /app/VERSION; fi \
+    && /opt/warden/venv/bin/python -m compileall -q /app/core /app/services
+
+ENV PATH=/opt/warden/venv/bin:$PATH \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    WARDEN_DATA_DIR=/var/lib/vigil-warden \
+    WARDEN_TRUST_ROOT_PATH=/var/lib/vigil-warden/trust-root.json
+
+USER 10002:10002
+
+EXPOSE 8091 9092 9093
+
+# The check is one local HTTP GET (3 s inside the command), so the 10 s
+# timeout is generous. 60 s start-period covers the first listener setup —
+# the metrics server starts before any component. The probe reads the same
+# /health the Kubernetes probes scrape.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD ["python", "-m", "services.warden", "check"]
+
+CMD ["python", "-m", "services.warden"]
