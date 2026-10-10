@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { agentsApi, aiDecisionsApi, approvalsApi, type AgentSummary } from '../../services/api'
+import { agentsApi, aiDecisionsApi, approvalsApi, fastPathApi, type AgentSummary } from '../../services/api'
 import { mapApiDecision, type ApiDecision } from '../../data/mappers'
 import type { Decision } from '../../data/appData'
 
@@ -212,4 +212,69 @@ export function usePendingApprovals() {
   }, [reloadKey])
 
   return { actions, phase, error, reload }
+}
+
+/** One speculative-era row as GET /api/fast-path/actions returns it. */
+export interface FastPathAction {
+  action_id: string
+  action_type: string
+  title?: string
+  target?: string
+  status: 'speculative' | 'rolled_back' | 'escalated' | 'failed' | string
+  confidence?: number
+  /** The deciding rule at creation, annotated with the resolution on exit. */
+  reason?: string
+  created_at?: string
+  created_by?: string
+  expires_at?: string
+  /** True when the enforcement adapter touched nothing external. */
+  simulated?: boolean
+  outcome?: Record<string, unknown> | null
+  escalation?: Record<string, unknown> | null
+  parameters?: Record<string, unknown> | null
+}
+
+// Polled with the approvals queue: a speculative row's whole point is that it
+// is moving — a countdown rendered against a stale list lies about what is
+// still in force.
+const FAST_PATH_POLL_MS = 15_000
+
+export function useFastPathActions() {
+  const [actions, setActions] = useState<FastPathAction[]>([])
+  const [counts, setCounts] = useState<Record<string, number>>({})
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+
+  useEffect(() => {
+    let cancelled = false
+    setError(null)
+    const tick = () =>
+      fastPathApi
+        .list()
+        .then((res) => {
+          if (cancelled) return
+          const body = res.data as { count?: number; counts?: Record<string, number>; actions?: FastPathAction[] }
+          setActions(body.actions || [])
+          setCounts(body.counts || {})
+          setPhase('ready')
+        })
+        .catch((e) => {
+          if (cancelled) return
+          // A poll that failed is not an empty ledger: keep the last view
+          // rather than reporting that nothing is restricted.
+          setError(errMsg(e, 'Failed to load fast-path actions'))
+          setPhase((p) => (p === 'ready' ? p : 'error'))
+        })
+
+    void tick()
+    const timer = setInterval(tick, FAST_PATH_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [reloadKey])
+
+  return { actions, counts, phase, error, reload }
 }
