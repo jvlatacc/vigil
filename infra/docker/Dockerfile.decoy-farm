@@ -1,0 +1,30 @@
+# =============================================================================
+# Decoy-farm — the farm's Python pieces (fake HTTP app + telemetry shipper)
+#
+# stdlib only: no requirements. Two compose services share this image with
+# different commands:
+#   decoy-http:     python -m services.decoy_farm.http_decoy
+#   decoy-shipper:  python -m services.decoy_farm.shipper
+# A separate trust domain from Vigil: decoys hold no credentials of any kind.
+# Containers run with cap_drop ALL and a read-only rootfs (compose).
+# =============================================================================
+
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+LABEL org.opencontainers.image.title="vigil-decoy-farm"
+
+WORKDIR /app
+
+COPY --chown=root:root services/decoy_farm/ ./services/decoy_farm/
+
+RUN if [ -n "${VIGIL_VERSION}" ]; then echo "${VIGIL_VERSION}" > /app/VERSION; fi
+
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8080
+
+CMD ["python", "-m", "services.decoy_farm.shipper"]

@@ -62,6 +62,12 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "DECOY_CONTROLLER_DECOY_MAP",
     "DECOY_CONTROLLER_PROTOCOLS",
     "DECOY_CONTROLLER_BOOT_DRAIN",
+    "DECOY_FARM_WEBHOOK_URL",
+    "DECOY_FARM_WEBHOOK_TOKEN",
+    "DECOY_FARM_POLL_INTERVAL",
+    "DECOY_FARM_FARM_ID",
+    "DECOY_FARM_SOURCES",
+    "DECOY_FARM_LOG_LEVEL",
     # core.platform.runtime_config ENV_FALLBACKS: DB-first settings whose env var is
     # only the fallback when the system_config row is absent.
     "LOCAL_OLLAMA_RECOVERY_ENABLED",

@@ -129,7 +129,18 @@ service_profile() {
         splunk)  echo "splunk" ;;
         kafka)   echo "kafka" ;;
         jaeger|prometheus|grafana|otel-collector) echo "observability" ;;
+        decoy-controller|decoy-cowrie|decoy-opencanary|decoy-samba|decoy-http|decoy-shipper) echo "deception" ;;
         *)       echo "" ;;
+    esac
+}
+
+# Services that make up a multi-service profile, in dependency-friendly
+# order. Single-service profiles don't need an entry (service_profile covers
+# them); `--with deception` stands up the whole decoy farm, not one decoy.
+profile_services() {
+    case "$1" in
+        deception) echo "decoy-controller decoy-cowrie decoy-opencanary decoy-samba decoy-http decoy-shipper" ;;
+        *)         echo "$1" ;;
     esac
 }
 

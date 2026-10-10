@@ -951,6 +951,30 @@ pgadmin:
       memory: 512Mi
 
 # -----------------------------------------------------------------------------
+# Decoy farm (feature 5, opt-in)
+# -----------------------------------------------------------------------------
+# The decoy lab ships as a docker-compose profile (`deception`); there are no
+# decoy templates in this chart. On Kubernetes, run the farm out-of-band and
+# point the telemetry shipper at the daemon webhook:
+#
+#   1. A namespace dedicated to decoys (e.g. vigil-decoys) with a
+#      default-deny NetworkPolicy for ingress AND egress — decoys are treated
+#      as already-compromised; egress deny is the containment invariant.
+#   2. Cowrie, OpenCanary (watching a Samba decoy share) and the fake-app
+#      decoy as Deployments in that namespace, with the same read-only-rootfs,
+#      cap-drop-ALL and resource-limit hardening the compose profile applies
+#      (infra/docker/docker-compose.yml, profile `deception`). The
+#      decoy-controller (compose service of the same name, or its own
+#      deployment) with driver=cilium programs steering into them via Local
+#      Redirect Policies.
+#   3. The telemetry shipper (services/decoy_farm/shipper.py) in the main
+#      namespace: DECOY_FARM_WEBHOOK_URL pointing at the daemon webhook
+#      service and DECOY_FARM_WEBHOOK_TOKEN equal to DAEMON_WEBHOOK_TOKEN.
+#
+# The daemon-side knobs above (DAEMON_DECEPTION_*) stay unchanged; the farm
+# is deployment plumbing, not a chart concern.
+
+# -----------------------------------------------------------------------------
 # Tests (helm test)
 # -----------------------------------------------------------------------------
 tests:
