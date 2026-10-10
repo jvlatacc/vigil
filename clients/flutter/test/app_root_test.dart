@@ -35,12 +35,12 @@ void main() {
           required userAgent,
         }) =>
             VigilClient(
-              baseUrl: baseUrl,
-              tokenStore: tokenStore,
-              userAgent: userAgent,
-              authAdapter: auth,
-              apiAdapter: api,
-            ),
+          baseUrl: baseUrl,
+          tokenStore: tokenStore,
+          userAgent: userAgent,
+          authAdapter: auth,
+          apiAdapter: api,
+        ),
         initialRoute: initialRoute,
       );
 
@@ -78,15 +78,18 @@ void main() {
     expect(find.text('Connect to Vigil'), findsOneWidget);
   });
 
-  testWidgets('a stored session opens the shell with the server-persisted '
+  testWidgets(
+      'a stored session opens the shell with the server-persisted '
       'scheme', (tester) async {
     final auth = RoutedAdapter((options, r) {
       if (r.path.contains('/api/auth/me')) {
-        return json(200, userBody(permissions: {
-          'ai_decisions.approve': true,
-          'cases.read': true,
-          'settings.read': true,
-        }));
+        return json(
+            200,
+            userBody(permissions: {
+              'ai_decisions.approve': true,
+              'cases.read': true,
+              'settings.read': true,
+            }));
       }
       return defaultAuthHandler(options, r);
     });
@@ -105,8 +108,7 @@ void main() {
       ),
       findsOneWidget,
     );
-    final MaterialApp material =
-        tester.widget(find.byType(MaterialApp));
+    final MaterialApp material = tester.widget(find.byType(MaterialApp));
     expect(material.themeMode, ThemeMode.light,
         reason: 'the server-persisted scheme wins over the dark default');
   });
@@ -117,11 +119,13 @@ void main() {
     // the new scheme.
     final auth = RoutedAdapter((options, r) {
       if (r.path.contains('/api/auth/me')) {
-        return json(200, userBody(permissions: {
-          'ai_decisions.approve': true,
-          'cases.read': true,
-          'settings.read': true,
-        }));
+        return json(
+            200,
+            userBody(permissions: {
+              'ai_decisions.approve': true,
+              'cases.read': true,
+              'settings.read': true,
+            }));
       }
       return defaultAuthHandler(options, r);
     });
@@ -139,8 +143,7 @@ void main() {
     final post = api.call('/api/config/theme')!;
     expect(post.method, 'POST');
     expect((post.body as Map)['theme'], 'dark');
-    final MaterialApp material =
-        tester.widget(find.byType(MaterialApp));
+    final MaterialApp material = tester.widget(find.byType(MaterialApp));
     expect(material.themeMode, ThemeMode.dark);
   });
 
@@ -178,7 +181,9 @@ void main() {
 
   testWidgets('a revoked session falls back to sign-in', (tester) async {
     final auth = RoutedAdapter((options, r) {
-      if (r.path.contains('/api/auth/me')) return json(401, {'detail': 'expired'});
+      if (r.path.contains('/api/auth/me')) {
+        return json(401, {'detail': 'expired'});
+      }
       if (r.path.contains('/api/auth/refresh')) {
         return json(401, {'detail': 'blacklisted'});
       }
@@ -221,11 +226,13 @@ void main() {
       (tester) async {
     final auth = RoutedAdapter((options, r) {
       if (r.path.contains('/api/auth/me')) {
-        return json(200, userBody(permissions: {
-          'ai_decisions.approve': true,
-          'cases.read': true,
-          'settings.read': true,
-        }));
+        return json(
+            200,
+            userBody(permissions: {
+              'ai_decisions.approve': true,
+              'cases.read': true,
+              'settings.read': true,
+            }));
       }
       return defaultAuthHandler(options, r);
     });

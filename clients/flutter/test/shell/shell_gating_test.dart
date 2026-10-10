@@ -98,12 +98,15 @@ void main() {
         (tester) async {
       // Walk every entry of the ported map — a new console gate that is
       // added to screenPerms without a matching expectation fails here.
-      expect(screenPerms.keys.toSet(), {
-        VigilScreen.home,
-        VigilScreen.decisions,
-        VigilScreen.cases,
-        VigilScreen.settings,
-      }, reason: 'the console gates exactly these four; ask stays ungated');
+      expect(
+          screenPerms.keys.toSet(),
+          {
+            VigilScreen.home,
+            VigilScreen.decisions,
+            VigilScreen.cases,
+            VigilScreen.settings,
+          },
+          reason: 'the console gates exactly these four; ask stays ungated');
 
       for (final entry in screenPerms.entries) {
         final screen = entry.key;

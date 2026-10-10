@@ -76,8 +76,7 @@ extension VigilScreenInfo on VigilScreen {
   String get subtitle => switch (this) {
         VigilScreen.home => 'Approvals and escalations land here at the '
             'console cadence.',
-        VigilScreen.decisions =>
-          'Review and provide feedback for AI decisions',
+        VigilScreen.decisions => 'Review and provide feedback for AI decisions',
         VigilScreen.cases => 'Manage investigation cases',
         VigilScreen.ask => 'Investigate alongside Vigil',
         VigilScreen.settings =>

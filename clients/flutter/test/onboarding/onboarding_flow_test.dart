@@ -33,12 +33,12 @@ void main() {
               required userAgent,
             }) =>
                 VigilClient(
-                  baseUrl: baseUrl,
-                  tokenStore: tokenStore,
-                  userAgent: userAgent,
-                  authAdapter: auth,
-                  apiAdapter: api,
-                ),
+              baseUrl: baseUrl,
+              tokenStore: tokenStore,
+              userAgent: userAgent,
+              authAdapter: auth,
+              apiAdapter: api,
+            ),
             onFinished: (client, session) => signedIn.add(session),
           ),
         ),
@@ -92,7 +92,8 @@ void main() {
 
     expect(find.byKey(const Key('server-url-error')), findsOneWidget);
     expect(
-      find.text("Couldn't reach a Vigil server at https://soc.example.com:6987."),
+      find.text(
+          "Couldn't reach a Vigil server at https://soc.example.com:6987."),
       findsOneWidget,
     );
   });
@@ -133,7 +134,8 @@ void main() {
     );
   });
 
-  testWidgets('an empty instance leads to first-admin bootstrap, which '
+  testWidgets(
+      'an empty instance leads to first-admin bootstrap, which '
       'creates the account and signs in', (tester) async {
     final auth = RoutedAdapter((options, r) {
       if (r.path.contains('/api/auth/bootstrap') && r.method == 'GET') {
@@ -148,9 +150,12 @@ void main() {
 
     expect(find.text('Create the first account'), findsOneWidget);
 
-    await tester.enterText(find.byKey(const Key('bootstrap-username')), 'admin');
-    await tester.enterText(find.byKey(const Key('bootstrap-email')), 'admin@corp.example');
-    await tester.enterText(find.byKey(const Key('bootstrap-password')), 'correct horse');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-username')), 'admin');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-email')), 'admin@corp.example');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-password')), 'correct horse');
     await tester.tap(find.byKey(const Key('bootstrap-submit')));
     await tester.pumpAndSettle();
 
@@ -163,7 +168,8 @@ void main() {
     expect((created.body as Map)['email'], 'admin@corp.example');
   });
 
-  testWidgets('a closed bootstrap window falls back to sign-in with the '
+  testWidgets(
+      'a closed bootstrap window falls back to sign-in with the '
       "server's explanation", (tester) async {
     final auth = RoutedAdapter((options, r) {
       if (r.path.contains('/api/auth/bootstrap') && r.method == 'GET') {
@@ -178,9 +184,12 @@ void main() {
     await tester.pumpWidget(flow(auth: auth, api: api));
 
     await connect(tester, 'https://soc.example.com:6987');
-    await tester.enterText(find.byKey(const Key('bootstrap-username')), 'admin');
-    await tester.enterText(find.byKey(const Key('bootstrap-email')), 'admin@corp.example');
-    await tester.enterText(find.byKey(const Key('bootstrap-password')), 'correct horse');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-username')), 'admin');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-email')), 'admin@corp.example');
+    await tester.enterText(
+        find.byKey(const Key('bootstrap-password')), 'correct horse');
     await tester.tap(find.byKey(const Key('bootstrap-submit')));
     await tester.pumpAndSettle();
 

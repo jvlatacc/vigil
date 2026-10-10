@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:vigil_api_v1/vigil_api_v1.dart';
 
 import '../auth/auth_api.dart';
+import '../chat/chat_api.dart';
 import '../auth/errors.dart';
 import '../auth/session.dart';
 import '../auth/token_store.dart';
@@ -81,6 +82,7 @@ class VigilClient {
 
     v1 = VigilApiV1(dio: _apiDio);
     config = ConfigApi(dio: _apiDio);
+    chat = VigilChatClient(dio: _apiDio);
   }
 
   final TokenStore _tokenStore;
@@ -96,6 +98,12 @@ class VigilClient {
   /// Bare `/api` carries no stability promise — the accepted exception,
   /// like [auth] — so only the calls with console parity live here.
   late final ConfigApi config;
+
+  /// Chat surface — the SSE stream endpoint and conversation history, the
+  /// other console-surface exception. Rides the same authenticated Dio, so
+  /// bearer injection, the byte-stable User-Agent, and one-shot
+  /// refresh-then-replay apply to streamed turns too.
+  late final VigilChatClient chat;
 
   /// Whether a session is stored on this device (drives the sign-in gate).
   Future<bool> get hasSession async => (await _tokenStore.readAccess()) != null;

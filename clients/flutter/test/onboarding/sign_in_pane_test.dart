@@ -71,7 +71,8 @@ void main() {
     expect(find.text('Invalid username/email or password'), findsOneWidget);
   });
 
-  testWidgets('a 401 with X-MFA-Required reveals the code field, and the '
+  testWidgets(
+      'a 401 with X-MFA-Required reveals the code field, and the '
       'retry carries mfa_code', (tester) async {
     var loginCalls = 0;
     final auth = RoutedAdapter((options, r) {

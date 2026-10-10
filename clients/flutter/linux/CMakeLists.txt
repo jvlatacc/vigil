@@ -46,6 +46,13 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endfunction()
 
+# Always install into the relocatable bundle directory. The Flutter
+# subdirectory's own install() rules consume
+# CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT, which defeats the guarded
+# set further down and would send the bundle to /usr/local.
+set(BUILD_BUNDLE_DIR "${PROJECT_BINARY_DIR}/bundle")
+set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
+
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
@@ -94,11 +101,9 @@ include(flutter/generated_plugins.cmake)
 
 # === Installation ===
 # By default, "installing" just makes a relocatable bundle in the build
-# directory.
-set(BUILD_BUNDLE_DIR "${PROJECT_BINARY_DIR}/bundle")
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-  set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
-endif()
+# directory. CMAKE_INSTALL_PREFIX is forced to BUILD_BUNDLE_DIR at the top
+# of this file, before add_subdirectory pulls in the Flutter rules; see the
+# comment there.
 
 # Start with a clean build bundle directory every time.
 install(CODE "

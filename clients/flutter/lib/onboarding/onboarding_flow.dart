@@ -107,8 +107,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
       if (!mounted) return;
       setState(() {
         _busy = false;
-        _error =
-            'That URL answered, but not like a Vigil server. Check the '
+        _error = 'That URL answered, but not like a Vigil server. Check the '
             'address and port.';
       });
     } on Exception catch (e) {

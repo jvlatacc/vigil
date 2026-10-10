@@ -20,8 +20,7 @@ class SchemeToggleAction extends StatelessWidget {
       key: const Key('scheme-toggle'),
       tooltip: light ? 'Switch to dark theme' : 'Switch to light theme',
       icon: VigilIcon(light ? VigilIcons.moon : VigilIcons.sun),
-      onPressed: () =>
-          scheme.set(light ? VigilScheme.dark : VigilScheme.light),
+      onPressed: () => scheme.set(light ? VigilScheme.dark : VigilScheme.light),
     );
   }
 }

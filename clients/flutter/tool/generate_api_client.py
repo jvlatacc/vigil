@@ -206,7 +206,6 @@ analyzer:
     deprecated_member_use_from_same_package: ignore
     unused_import: ignore
     duplicate_import: ignore
-    unused_element_parameter: ignore
     strict_raw_type: ignore
 """
 

@@ -5,6 +5,7 @@ import 'api/vigil_client.dart';
 import 'auth/session.dart';
 import 'auth/token_store.dart';
 import 'auth/user_agent.dart';
+import 'chat/chat_session.dart';
 import 'onboarding/onboarding_flow.dart';
 import 'onboarding/server_profile.dart';
 import 'onboarding/sign_in_pane.dart';
@@ -54,6 +55,7 @@ class _VigilAppState extends State<VigilApp> {
   VigilClient? _client;
   UserProfile? _user;
   SchemeController? _scheme;
+  ChatSession? _chatSession;
   VigilScreen? _deepLink;
   _Phase _phase = _Phase.booting;
 
@@ -70,6 +72,7 @@ class _VigilAppState extends State<VigilApp> {
   @override
   void dispose() {
     _scheme?.dispose();
+    _chatSession?.dispose();
     super.dispose();
   }
 
@@ -125,6 +128,11 @@ class _VigilAppState extends State<VigilApp> {
       // Console parity: pull the persisted scheme once a session exists;
       // failures keep the dark default.
       ..load();
+    // One chat session per sign-in: the transcript resets with the account
+    // (the server owns the record; history reloads from /api/conversations).
+    _chatSession?.dispose();
+    final client = _client;
+    _chatSession = client == null ? null : ChatSession(chat: client.chat);
     setState(() {
       _user = user;
       _phase = _Phase.ready;
@@ -143,6 +151,8 @@ class _VigilAppState extends State<VigilApp> {
       }
     }
     if (!mounted) return;
+    _chatSession?.dispose();
+    _chatSession = null;
     setState(() {
       _user = null;
       _deepLink = null;
@@ -165,8 +175,8 @@ class _VigilAppState extends State<VigilApp> {
           : ThemeMode.dark,
       home: switch (_phase) {
         _Phase.booting => _Splash(colors: context.vigilColors),
-        _Phase.bootError =>
-          _BootError(colors: context.vigilColors, error: _error, onRetry: _restore),
+        _Phase.bootError => _BootError(
+            colors: context.vigilColors, error: _error, onRetry: _restore),
         _Phase.onboarding => OnboardingFlow(
             profileStore: _profileStore,
             tokenStore: _tokenStore,
@@ -203,6 +213,7 @@ class _VigilAppState extends State<VigilApp> {
     }
     return VigilShell(
       user: user,
+      chatSession: _chatSession!,
       initialScreen: target ?? _landing(user),
       scheme: _scheme,
       onSignOut: _signOut,
