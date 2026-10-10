@@ -93,7 +93,7 @@ spec:
                 # than hard-fail at the file check. The marker says "the
                 # cluster already accepted these as applied," which is
                 # exactly the contract upgrade-time idempotency relies on.
-                # See https://vigilsoc.org/docs/database-init/ for the
+                # See docs/deploy/database-init.md for the
                 # reserved-filenames warning that prevents these names
                 # being reused.
                 local marker
