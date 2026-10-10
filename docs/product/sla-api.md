@@ -629,8 +629,7 @@ Standard API rate limits apply:
 ## Support
 
 For questions or issues:
-- Check the main documentation: `/docs/SLA_SYSTEM_ENHANCEMENT_PLAN.md`
-- Review the assessment: `/docs/SLA_SYSTEM_ASSESSMENT.md`
+- See the sibling pages: [SLA usage](sla-usage.md) and the [SLA quick reference](sla-quick-reference.md)
 - File issues in the project repository
 
 ---

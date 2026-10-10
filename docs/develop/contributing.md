@@ -71,12 +71,12 @@ git config user.email "your@email.com"
 Vigil follows [Semantic Versioning](https://semver.org/). While in `0.x`,
 minor version bumps may include breaking changes to agent prompts, workflow
 schemas, and MCP integration interfaces. Patch bumps are always backward
-compatible. See [`RELEASING.md`](releasing.md) for the full release process.
+compatible. See [`releasing.md`](releasing.md) for the full release process.
 
 The Helm chart at `infra/helm/vigil/` has two version fields: `appVersion`
 (the Vigil release the chart deploys) and chart `version` (the chart
 packaging version). release-please bumps **both in lockstep** on every
-release. See [`RELEASING.md`](releasing.md) for the rationale and the
+release. See [`releasing.md`](releasing.md) for the rationale and the
 escape hatch for chart-only changes between app releases.
 
 ## What to Work On
@@ -161,7 +161,7 @@ New features should include tests. Place them in `tests/` following existing nam
 We **prefer** [Conventional Commits](https://www.conventionalcommits.org/) so we
 can automate changelogs and version bumps via
 [release-please](https://github.com/googleapis/release-please) (see
-[`RELEASING.md`](releasing.md)). It is not strictly enforced at the
+[`releasing.md`](releasing.md)). It is not strictly enforced at the
 per-commit level — if your individual commits don't match the format, please
 update your **PR title** to follow the convention before requesting review
 (since we squash-merge, the PR title becomes the commit on `main`). If you

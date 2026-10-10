@@ -156,10 +156,8 @@ curl http://localhost:6987/api/sla-policies/
 
 ## 📚 Full Documentation
 
-- **Usage Guide**: `docs/SLA_USAGE_GUIDE.md`
-- **API Reference**: `docs/SLA_POLICY_API_GUIDE.md`
-- **Assessment**: `docs/SLA_SYSTEM_ASSESSMENT.md`
-- **Enhancement Plan**: `docs/SLA_SYSTEM_ENHANCEMENT_PLAN.md`
+- **Usage Guide**: [sla-usage.md](sla-usage.md)
+- **API Reference**: [sla-api.md](sla-api.md)
 
 ## 🆘 Troubleshooting
 

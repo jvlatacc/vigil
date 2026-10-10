@@ -54,7 +54,10 @@ combined = (anomaly_score * 0.6) + (max_mitre_confidence * 0.4)
 <  0.4: low
 ```
 
-## MCP Tools - DeepTempo Findings
+## MCP Tools - Findings
+
+The operational MCP surface is the frozen Vigil server the backend mounts at
+`/mcp` — `tools/mcp/vigil.py`, 26 tools, wired in `services/api/main.py`.
 
 ### `get_finding`
 
@@ -73,47 +76,15 @@ combined = (anomaly_score * 0.6) + (max_mitre_confidence * 0.4)
 }
 ```
 
-### `nearest_neighbors`
+### `update_finding`
 
-Find similar findings by embedding.
+Patches status, severity, assignee, tags, and similar fields — mirrors the
+frozen `PATCH /api/v1/findings/{finding_id}` contract.
 
-```json
-{
-  "query": "f-xxx",
-  "k": 10,
-  "filters": {
-    "data_source": "flow",
-    "min_anomaly_score": 0.5,
-    "techniques": ["T1071"]
-  }
-}
-```
-
-### `technique_rollup`
-
-MITRE technique aggregation.
-
-```json
-{
-  "time_window": { "start": "2024-01-15T00:00:00Z", "end": "2024-01-15T23:59:59Z" },
-  "min_confidence": 0.5
-}
-```
-
-Returns:
-
-```json
-{
-  "techniques": [
-    {
-      "technique_id": "T1071.001",
-      "technique_name": "Application Layer Protocol: Web Protocols",
-      "finding_count": 15,
-      "avg_confidence": 0.82
-    }
-  ]
-}
-```
+(The upstream version of this page also documented `nearest_neighbors` and
+`technique_rollup` as MCP tools; neither exists on the MCP surface at
+current HEAD. Technique rollups are an agent-layer tool —
+`get_technique_rollup` in `core/agents/tool_registry.py`.)
 
 ## MCP Tools - Case Management
 
@@ -160,20 +131,15 @@ Returns:
 }
 ```
 
+The remaining case tools on the MCP surface: `close_case`,
+`add_finding_to_case`, `remove_finding_from_case`, `add_case_evidence`,
+`add_case_ioc`, `bulk_add_iocs`, `get_case_iocs`, `search_cases`,
+`merge_cases`, `export_case_iocs` (`tools/mcp/vigil.py`).
+
 ## MCP Tools - Approval
 
-### `create_approval_action`
-
-```json
-{
-  "action_type": "isolate_host",
-  "title": "Isolate compromised host",
-  "target": "192.168.1.100",
-  "confidence": 0.85,
-  "reason": "Confirmed ransomware activity",
-  "evidence": ["f-xxx"]
-}
-```
+Approval actions are proposed by the response pipeline (agents, workflows) —
+the MCP surface reads and decides them; it does not create them.
 
 ### `list_approval_actions`
 
@@ -184,32 +150,23 @@ Returns:
 }
 ```
 
-## MCP Tools - Attack Layer
+### `get_approval_action`
 
-### `get_attack_layer`
+Fetch one approval action by id.
 
-Returns ATT&CK Navigator layer JSON.
+### `approve_action` / `reject_action`
 
-### `get_technique_rollup`
+Decide a pending action. Either decision on an action bound to a parked
+workflow run resumes that run (`tools/mcp/vigil.py` →
+`core/workflows/run_resume.resume_run`).
 
-```json
-{ "min_confidence": 0.5 }
-```
+## Attack Layer tools (removed)
 
-### `get_findings_by_technique`
-
-```json
-{ "technique_id": "T1071.001" }
-```
-
-### `create_attack_layer`
-
-```json
-{
-  "name": "Investigation Layer",
-  "finding_ids": ["f-xxx", "f-yyy"]
-}
-```
+The upstream version of this page documented `get_attack_layer`,
+`get_technique_rollup`, `get_findings_by_technique` and `create_attack_layer`
+as MCP tools. None of them exist at current HEAD — ATT&CK Navigator layer
+generation is gone from the codebase. Technique rollups remain available to
+agents via `get_technique_rollup` (`core/agents/tool_registry.py`).
 
 ## Access Tiers
 
@@ -278,9 +235,6 @@ Error response format:
 }
 ```
 
-## JSON Schemas
+## API schemas
 
-Available in `data/schemas/`:
-- `finding.schema.json`
-- `case.schema.json`
-- `attack-layer.schema.json`
+The payload models live as Pydantic schemas in [core/storage/schemas/](../../core/storage/schemas/) — `finding.py`, `case.py`, `digital_twin.py`, `workflow.py`, and the rest. There is no standalone JSON-schema directory in the repo. (An earlier version of this page pointed at `data/schemas/*.schema.json`, which does not exist at current HEAD.)

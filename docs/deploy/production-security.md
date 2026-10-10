@@ -113,7 +113,7 @@ Set via the security headers middleware. Defaults are conservative:
 
 ## Rate Limiting
 
-- Applied globally via middleware (`backend/middleware/rate_limit.py`).
+- Applied globally via middleware (`services/api/middleware/rate_limit.py`, built on the token-bucket implementation in `core/rate_limit.py`).
 - Auth endpoints have tighter limits to prevent brute force.
 - Configure with `slowapi` settings in the middleware.
 
@@ -189,3 +189,28 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_recovery_codes JSONB NOT NULL DEF
 Tokens issued before the fingerprint feature won't have the `sfp` claim.
 `verify_session_fingerprint()` returns `True` for tokens without `sfp`,
 so existing sessions won't break. New tokens always include it.
+
+## Image Signing and SBOM (supply chain)
+
+Release images are signed and attested in CI (`.github/workflows/release.yml`):
+each build job signs the pushed multi-arch image digest with cosign
+(keyless), generates an SBOM with syft and attests it, then Trivy scans the
+same immutable digest — never a mutable tag. Verify a deployed image against
+its signature and attestation before trusting it in production.
+
+## Finding-Origin Attestation
+
+Sensor-originated findings can carry a DSSE envelope with an Ed25519
+signature. The webhook verifies the envelope at ingest and stamps the
+finding `origin_verified` / `origin_id`; the response guard chain reads
+those stamps at decision time and holds unverified evidence for a person
+(`core/response/origin.py`, #944). Trust roots are configured via
+`DAEMON_TRUSTED_ORIGINS` (scoped, expiring, revocable; replay nonces are
+remembered).
+
+## Threat-Intel Seed (CISA KEV)
+
+The bundled CISA KEV catalog seeds threat indicators at t=0
+(`core/threat_intel/kev_seed.py`), and the threat-feed refresher applies
+catalog additions *and* removals (`core/threat_intel/threat_feed_service.py`),
+so an entry dropped from the KEV is dropped from the indicators too.

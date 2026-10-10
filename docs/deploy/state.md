@@ -99,7 +99,7 @@ problem. Instead:
   pushes every key in the secrets manager to Bifrost via its admin API
   (`PUT /api/providers/{name}`).
 - On provider create/update/delete in the UI, the corresponding endpoint
-  in `backend/api/llm_providers.py` pushes the new (or empty) value to
+  in `services/api/routers/llm_providers.py` pushes the new (or empty) value to
   Bifrost in the same request.
 
 So the flow is: **UI → secrets_manager → bifrost_admin → Bifrost** in
@@ -113,53 +113,21 @@ overwritten at runtime.
 
 - `data/investigations/` — orchestrator working files (investigation
   transcripts, context docs, agent output).
-- `data/mitre/`, `data/schemas/` — static reference data.
+- `data/registry/`, `data/taxonomy/`, `data/threat_intel/` — static
+  reference data (capability registry, capability taxonomy, threat-intel
+  feeds including CISA KEV).
 - `logs/*.log`, `logs/*.pid` — runtime logs and process pids (started
   via `start.sh`).
 
-## MemPalace (persistent agent memory)
+## Agent memory (episodic memory)
 
-MemPalace is Vigil's cross-session memory layer — agents write IOCs,
-investigation summaries, and knowledge-graph edges here so future
-sessions can reuse the work. It's shipped as a git submodule at
-`./mempalace` (see `.gitmodules`) and installed editable via
-`requirements.txt` (`-e ./mempalace`).
-
-**Palace location: `~/.vigil/mempalace/palace`.** Override with
-`MEMPALACE_PALACE_PATH` in `.env` if you need to relocate (shared NAS,
-different user, etc.). All three consumers — the MCP server
-(`mcp-config.json`), the daemon (`daemon/orchestrator.py`), and the
-web service (`core/llm/harness/claude.py`) — resolve the path through
-`core.platform.mempalace_paths.get_palace_path()`, so the default can't
-drift again.
-
-**Structure:**
-
-```
-~/.vigil/mempalace/palace/
-├── chroma/                               # ChromaDB collection (vector search)
-├── investigations/closed-cases/*.json    # daemon-written investigation snapshots
-└── sessions/*.json                       # ClaudeService session transcripts
-```
-
-**Persistence guarantee.** Survives `docker compose down`,
-`./start.sh` restarts, `venv` rebuilds, and `git submodule update`.
-Does *not* survive `rm -rf ~/.vigil/`.
-
-**Backup.** Tar the directory as a unit:
-
-    tar -czf mempalace-backup-$(date +%Y%m%d).tar.gz ~/.vigil/mempalace/
-
-**Migrating from legacy `~/.mempalace/`.** Earlier builds of the daemon
-defaulted to `~/.mempalace/palace`. If that directory exists, move it
-once:
-
-    mv ~/.mempalace ~/.vigil/mempalace
-
-**Emergency disable.** `MEMPALACE_DAEMON_ENABLED=false` in `.env`
-skips the daemon's palace integration (investigation snapshots won't
-be written). The MCP server side is controlled via
-`mcp-config.json` / `PUT /api/mcp/servers/mempalace/enabled`.
+Cross-session agent memory is no longer a separate service. `core/memory/`
+(episodic memory domain, #727) derives "what a run saw and concluded" from the
+ledger after an investigation reaches a terminal state — see
+`core/memory/__init__.py` and the modules it fronts (`recall.py`,
+`prior_hunts.py`, `learning_episodes.py`). (An earlier version of this section
+described the external MemPalace submodule; that submodule and its dependency
+were removed from the repo.)
 
 ## Docker volumes
 

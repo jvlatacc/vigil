@@ -8,6 +8,11 @@ Accepted. **Amends ADR 0010** — keeps its guarantees, drops its loopback half.
 
 Governs #635 (the agent image, the Helm deployment and the Node CI job).
 
+*Re-verified against the code 2026-10-10:* the bearer token alone gates the
+seam (`core/agents/internal_auth.py`), the chart's `networkPolicies.agentServe`
+block exists (`infra/helm/vigil/values.yaml`), and the agent image builds
+through `release.yml`'s `build-agent` job.
+
 ## Context
 
 ADR 0010 put every remote tool call through one authenticated Python endpoint,

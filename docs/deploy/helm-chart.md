@@ -173,7 +173,7 @@ See `values.yaml` for the full schema. Non-obvious choices:
 | Splunk sidecar | `splunk.enabled` | Dev/demo only |
 | pgAdmin sidecar | `pgadmin.enabled` | Dev/demo only |
 
-See [docs/HELM.md](https://github.com/Vigil-SOC/vigil/blob/main/infra/docs/HELM.md) for end-to-end examples of each.
+See [infra/helm/vigil/README.md](../../infra/helm/vigil/README.md) for end-to-end examples of each. (This page's upstream version linked `infra/docs/HELM.md`, which no longer exists.)
 
 ## Development
 

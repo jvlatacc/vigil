@@ -40,16 +40,16 @@ All agents have access to tools through two integration methods:
 
 ## Workflows
 
-These are executable multi-agent playbooks defined in the [`/workflows/`](/workflows/) directory. Each workflow has a `WORKFLOW.md` file with YAML frontmatter metadata and detailed phase-by-phase instructions.
+These are executable multi-agent playbooks defined in [`core/workflows/definitions/`](../../core/workflows/definitions/). Each workflow has a `WORKFLOW.md` file with YAML frontmatter metadata and detailed phase-by-phase instructions.
 
 Workflows can be executed from the **Workflows** page in the UI or via the `/api/workflows/{id}/execute` API endpoint.
 
 | Workflow | Agents | Use Case | Workflow File |
 |----------|--------|----------|---------------|
-| **Incident Response** | Triage -> Investigator -> Responder -> Reporter | Active incident handling | [`workflows/incident-response/WORKFLOW.md`](/workflows/incident-response/WORKFLOW.md) |
-| **Full Investigation** | Investigator -> MITRE Analyst -> Correlator -> Responder -> Reporter | Deep-dive analysis with ATT&CK mapping | [`workflows/full-investigation/WORKFLOW.md`](/workflows/full-investigation/WORKFLOW.md) |
-| **Threat Hunt** | Hunt Lead over Threat Hunter, Network Analyst, Threat Intel | Proactive hypothesis-driven hunting | [`workflows/threat-hunt/WORKFLOW.md`](/workflows/threat-hunt/WORKFLOW.md) |
-| **Forensic Analysis** | Forensics -> Malware Analyst -> Network Analyst -> Reporter | Post-incident forensics with chain of custody | [`workflows/forensic-analysis/WORKFLOW.md`](/workflows/forensic-analysis/WORKFLOW.md) |
+| **Incident Response** | Triage -> Investigator -> Responder -> Reporter | Active incident handling | [`core/workflows/definitions/incident-response/WORKFLOW.md`](../../core/workflows/definitions/incident-response/WORKFLOW.md) |
+| **Full Investigation** | Investigator -> MITRE Analyst -> Correlator -> Responder -> Reporter | Deep-dive analysis with ATT&CK mapping | [`core/workflows/definitions/full-investigation/WORKFLOW.md`](../../core/workflows/definitions/full-investigation/WORKFLOW.md) |
+| **Threat Hunt** | Hunt Lead over Threat Hunter, Network Analyst, Threat Intel | Proactive hypothesis-driven hunting | [`core/workflows/definitions/threat-hunt/WORKFLOW.md`](../../core/workflows/definitions/threat-hunt/WORKFLOW.md) |
+| **Forensic Analysis** | Forensics -> Malware Analyst -> Network Analyst -> Reporter | Post-incident forensics with chain of custody | [`core/workflows/definitions/forensic-analysis/WORKFLOW.md`](../../core/workflows/definitions/forensic-analysis/WORKFLOW.md) |
 
 **Threat Hunt is the one that is not a phase chain.** It declares `run_kind: hunt`
 in its frontmatter, which routes it to the hypothesis loop: the definition states
@@ -60,12 +60,17 @@ prompts and tool grants live in `services/agent/arch/threathunt.yaml`. The other
 four definitions are compose playbooks and walk their phases in order. A hunt run
 reports hypotheses and their standing where a compose run reports phase rows.
 
+Before a run starts, the console shows a preflight — who runs it, on which
+model, what it may do on its own, and where it stops or pauses — served from
+`GET /api/workflows/{workflow_id}/preflight` (`core/workflows/hunt_preflight.py`).
+A hunt can also hand off to incident response with the case bound to the run.
+
 ### Adding Custom Workflows
 
-Create a new directory under `workflows/` with a `WORKFLOW.md` file:
+Create a new directory under `core/workflows/definitions/` with a `WORKFLOW.md` file:
 
 ```
-workflows/
+core/workflows/definitions/
   my-custom-workflow/
     WORKFLOW.md    # YAML frontmatter + markdown workflow definition
 ```
@@ -161,7 +166,7 @@ The backend discovers workflows automatically on startup. Use `POST /api/workflo
 - Approval workflow integration
 - Autonomous containment
 - Human oversight for low-confidence
-- Cloudflare enforcement: proposes `WAF_BLOCK` (cf_waf_block_ip), `GATEWAY_BLOCK` (cf_gateway_block_domain), `ACCESS_REVOKE` (cf_access_revoke_session). All cf_* write actions route through `services/approval_service.py`; auto-approval requires confidence ≥ 0.90.
+- Cloudflare enforcement: proposes `WAF_BLOCK` (cf_waf_block_ip), `GATEWAY_BLOCK` (cf_gateway_block_domain), `ACCESS_REVOKE` (cf_access_revoke_session). All cf_* write actions route through `core/response/approval_service.py`; auto-approval requires confidence ≥ 0.90.
 
 ## Approval Workflow Integration
 

@@ -1,8 +1,8 @@
 # Kafka Ingestion
 
 Stream security findings into Vigil from Apache Kafka topics. Runs
-alongside the existing REST polling (`daemon/poller.py`) and file/webhook
-upload (`backend/api/ingestion.py`) paths — Kafka messages land in the
+alongside the existing REST polling (`services/daemon/poller.py`) and file/webhook
+upload (`core/ingestion/ingestion_service.py`) paths — Kafka messages land in the
 same processing pipeline (triage, enrichment, autonomous investigation).
 
 ---
@@ -29,10 +29,9 @@ overhead you don't need.
 | PLAINTEXT / SSL / SASL_PLAINTEXT / SASL_SSL          | Per-partition lag metrics / Grafana   |
 | Settings UI config + env-var fallback                | Topic → normalizer mapping            |
 
-See the "Follow-ups" section of
-[plans/please-examine-gh-issue-squishy-hippo.md](https://github.com/Vigil-SOC/vigil/blob/main/.claude/plans/please-examine-gh-issue-squishy-hippo.md)
-or [GH issue #83](https://github.com/Vigil-SOC/vigil/issues/83) for the
-post-MVP roadmap.
+See [GH issue #83](https://github.com/Vigil-SOC/vigil/issues/83) for the
+post-MVP roadmap. (An earlier version of this page also linked a
+`.claude/plans/…` planning file that is not part of the repository.)
 
 ---
 
@@ -340,10 +339,10 @@ counters so the UI still renders.
 
 ## Related files
 
-- [services/kafka_consumer_service.py](https://github.com/Vigil-SOC/vigil/blob/main/services/kafka_consumer_service.py) — consumer loop
-- [daemon/kafka_ingestor.py](https://github.com/Vigil-SOC/vigil/blob/main/daemon/kafka_ingestor.py) — start/stop wrapper
-- [daemon/dedup.py](https://github.com/Vigil-SOC/vigil/blob/main/daemon/dedup.py) — Redis-backed dedup shared with the poller
-- [backend/api/kafka.py](https://github.com/Vigil-SOC/vigil/blob/main/backend/api/kafka.py) — REST endpoints
-- [clients/web/src/components/settings/KafkaTab.tsx](https://github.com/Vigil-SOC/vigil/blob/main/clients/web/src/components/settings/KafkaTab.tsx) — UI
-- [infra/docker/docker-compose.yml](https://github.com/Vigil-SOC/vigil/blob/main/infra/docker/docker-compose.yml) — `kafka` profile
-- [tests/unit/test_dedup.py](https://github.com/Vigil-SOC/vigil/blob/main/tests/unit/test_dedup.py), [tests/unit/test_kafka_consumer.py](https://github.com/Vigil-SOC/vigil/blob/main/tests/unit/test_kafka_consumer.py) — unit tests
+- [core/ingestion/kafka_consumer_service.py](../../core/ingestion/kafka_consumer_service.py) — consumer loop
+- [services/daemon/kafka_ingestor.py](../../services/daemon/kafka_ingestor.py) — start/stop wrapper
+- [core/ingestion/dedup.py](../../core/ingestion/dedup.py) — Redis-backed dedup shared with the poller
+- [core/ingestion/kafka_router.py](../../core/ingestion/kafka_router.py) — REST endpoints
+- [clients/web/src/screens/settings/DataIngestion.tsx](../../clients/web/src/screens/settings/DataIngestion.tsx) — UI
+- [infra/docker/docker-compose.yml](../../infra/docker/docker-compose.yml) — `kafka` profile
+- [tests/unit/ingestion/test_dedup.py](../../tests/unit/ingestion/test_dedup.py), [tests/unit/ingestion/test_kafka_consumer.py](../../tests/unit/ingestion/test_kafka_consumer.py) — unit tests

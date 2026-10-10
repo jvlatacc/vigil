@@ -286,7 +286,7 @@ Result Confirmation to User
 
 You can add more case management tools by:
 
-1. Adding new functions to `tools/deeptempo_findings.py`
+1. Adding new functions to `tools/mcp/vigil.py` (the `list_findings` / `update_finding` family)
 2. Using the `@mcp.tool()` decorator
 3. Following the existing patterns for error handling and JSON responses
 4. Restarting the MCP server to load new tools
@@ -307,7 +307,7 @@ You can add more case management tools by:
 
 ### Tools not available
 - Ensure MCP server is running: check `mcp-config.json`
-- Verify `tools/deeptempo_findings.py` is accessible
+- Verify `tools/mcp/vigil.py` is accessible
 - Restart backend services if needed
 
 ## Security & Audit Trail

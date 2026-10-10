@@ -30,18 +30,22 @@ The workflows are currently configured for **Continuous Integration** only - the
 
 ### 2. `release-please.yml` - Automated Release PRs
 - **Triggers**: Push to `main`, manual dispatch
-- **Purpose**: Read Conventional Commits since the last tag; open or update a release PR that bumps `VERSION`, `infra/helm/vigil/Chart.yaml` (both `appVersion` and `version`, in lockstep), `clients/web/package.json`, and `clients/web/package-lock.json`, and updates `CHANGELOG.md`. On merge, push the `vX.Y.Z` tag and create the GitHub Release. See `RELEASING.md`.
-- **Deployment**: None (tagging only — downstream `release.yml` handles deploys)
+- **Purpose**: Read Conventional Commits since the last tag; open or update a release PR that bumps `VERSION`, `infra/helm/vigil/Chart.yaml` (both `appVersion` and `version`, in lockstep), `clients/web/package.json`, and `clients/web/package-lock.json`, and updates `CHANGELOG.md`. On merge, push the `vX.Y.Z` tag and create the GitHub Release. See [`releasing.md`](releasing.md).
+- **Deployment**: None (tagging only — downstream `release.yml` handles the image publish)
 
 ### 3. `release.yml` - Tag-Triggered Image Build & Publish
 - **Triggers**: Version tags (`v*.*.*`)
-- **Purpose**: Build and push the `vigil-backend` and `vigil-daemon` images to GHCR, smoke-test that they start, and annotate the GitHub Release with the image digests. The GitHub Release object itself is created by `release-please.yml`, not this workflow.
-- **Deployment**: None — this workflow publishes images only, it does not deploy. (`scripts/deploy_to_vm.sh` is an unwired manual VM-deploy helper kept for the future; see `docs/DEPLOYMENT_GUIDE.md`.)
+- **Purpose**: Build and push the `vigil-backend`, `vigil-daemon` and `vigil-agent` images to GHCR, signing each pushed digest with cosign (keyless), generating and attesting an SBOM (syft), Trivy-scanning the signed digest, smoke-testing that the images start, and annotating the GitHub Release with the image digests. The GitHub Release object itself is created by `release-please.yml`, not this workflow.
+- **Deployment**: None — this workflow publishes images only, it does not deploy. (`scripts/deploy_to_vm.sh` is an unwired manual VM-deploy helper kept for the future.)
 
 ### 4. `nightly.yml` - Scheduled Testing
 - **Triggers**: Daily at 2 AM UTC
 - **Purpose**: Comprehensive testing and security audits
 - **Deployment**: None
+
+### 5. `medic.yml` - Medic Service Gates
+- **Triggers**: Push/PR touching `services/medic/` or `infra/docker/Dockerfile.medic`
+- **Purpose**: The Medic service has its own lock and its own gates, so it runs as its own path-filtered workflow rather than steps in `ci-cd.yml`. Needs no secrets, so it also runs on forks.
 
 ## No Secrets Required!
 
@@ -69,8 +73,7 @@ docker-compose up -d
 ## Future: Enabling Deployment
 
 When you're ready to auto-deploy, see:
-- `docs/CI_CD_GUIDE.md` - Full CI/CD documentation
-- `docs/DEPLOYMENT_GUIDE.md` - VM deployment guide
+- [`ci-cd.md`](ci-cd.md) - CI/CD documentation
 
 To enable:
 1. Uncomment the `deploy-staging` job in `ci-cd.yml`

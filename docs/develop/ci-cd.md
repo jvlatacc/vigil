@@ -100,10 +100,11 @@ Vigil uses **GitHub Actions** for CI/CD with three main workflows:
 
 **Jobs**:
 1. `version` - Resolve the `vX.Y.Z` version from the pushed tag
-2. `build-backend` - Build & push `ghcr.io/vigil-soc/vigil-backend` (also reused by the llm-worker)
-3. `build-daemon` - Build & push `ghcr.io/vigil-soc/vigil-daemon`
-4. `smoke-test` - Pull the published images and verify they start
-5. `update-release` - Append the image digests to the GitHub Release notes
+2. `build-backend` - Build & push `ghcr.io/vigil-soc/vigil-backend` (also reused by the llm-worker); signs the pushed digest with cosign (keyless), generates an SBOM (syft) and attests it, Trivy-scans the signed digest
+3. `build-daemon` - Same sign/attest/scan pipeline for `ghcr.io/vigil-soc/vigil-daemon`
+4. `build-agent` - Same sign/attest/scan pipeline for `ghcr.io/vigil-soc/vigil-agent` (TypeScript agent: worker + serve, #635)
+5. `smoke-test` - Pull the published images and verify they start
+6. `update-release` - Append the image digests to the GitHub Release notes
 
 > **No deployment runs here.** `release.yml` publishes images only; it does
 > not SSH anywhere or deploy. The GitHub Release object itself is created by
@@ -371,7 +372,7 @@ hand-pushing tags:
 2. On merge, `release-please` pushes the `vX.Y.Z` tag and creates the GitHub
    Release; that tag push triggers `release.yml` (above).
 
-See `RELEASING.md` for the full process.
+See [`releasing.md`](releasing.md) for the full process.
 
 ### Rollback Procedure
 
