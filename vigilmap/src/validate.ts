@@ -8,8 +8,9 @@
  * entity node whose entityKey does not start with its entityType.
  */
 
-import type { MemoryGraphDocument } from "./types";
+import type { LinkRelation, MemoryGraphDocument, NodeKind } from "./types";
 import { ENTITY_TYPES, NODE_KINDS, VERDICT_OUTCOMES, LINK_RELATIONS } from "./types";
+import { LINK_TABLE } from "./graph";
 
 export interface ValidateOk {
   ok: true;
@@ -63,6 +64,7 @@ export function validate(candidate: unknown): ValidationResult {
   }
 
   const nodeIds = new Set<string>();
+  const nodeKinds = new Map<string, NodeKind>();
 
   if (Array.isArray(doc.nodes)) {
     for (const node of doc.nodes) {
@@ -73,12 +75,15 @@ export function validate(candidate: unknown): ValidationResult {
         }
         nodeIds.add(node.id);
       }
+      if (isNodeWithKnownKind(node)) {
+        nodeKinds.set(node.id, node.kind);
+      }
     }
   }
 
   if (Array.isArray(doc.links)) {
     for (const link of doc.links) {
-      errors.push(...validateLink(link, nodeIds));
+      errors.push(...validateLink(link, nodeIds, nodeKinds));
     }
   }
 
@@ -93,6 +98,14 @@ export function validate(candidate: unknown): ValidationResult {
 
 function isNodeWithId(node: unknown): node is { id: string } {
   return typeof node === "object" && node !== null && typeof (node as { id?: unknown }).id === "string";
+}
+
+function isNodeWithKnownKind(node: unknown): node is { id: string; kind: NodeKind } {
+  return (
+    isNodeWithId(node) &&
+    typeof (node as { kind?: unknown }).kind === "string" &&
+    NODE_KINDS.includes((node as { kind?: unknown }).kind as NodeKind)
+  );
 }
 
 function validateNode(node: unknown): string[] {
@@ -174,7 +187,11 @@ function validateNode(node: unknown): string[] {
   return errors;
 }
 
-function validateLink(link: unknown, nodeIds: Set<string>): string[] {
+function validateLink(
+  link: unknown,
+  nodeIds: Set<string>,
+  nodeKinds: Map<string, NodeKind>,
+): string[] {
   if (typeof link !== "object" || link === null) {
     return ["link must be a JSON object"];
   }
@@ -182,7 +199,9 @@ function validateLink(link: unknown, nodeIds: Set<string>): string[] {
   const l = link as Record<string, unknown>;
   const errors: string[] = [];
 
-  if (typeof l.relation !== "string" || !isLinkRelation(l.relation)) {
+  const relation: LinkRelation | null =
+    typeof l.relation === "string" && isLinkRelation(l.relation) ? (l.relation as LinkRelation) : null;
+  if (relation === null) {
     errors.push(
       `link: unknown relation ${JSON.stringify(l.relation ?? null)} — expected one of ${LINK_RELATIONS.join(", ")}`,
     );
@@ -198,6 +217,23 @@ function validateLink(link: unknown, nodeIds: Set<string>): string[] {
     errors.push(`link: target must be a non-empty node id`);
   } else if (!nodeIds.has(l.target)) {
     errors.push(`dangling link: target "${l.target}" matches no node id`);
+  }
+
+  // The relation table (spec "Which links are legal"): a known relation between
+  // known-kind endpoints must match the source→target kind pair, or a producer
+  // bug is surfacing as such.
+  if (relation !== null && typeof l.source === "string" && typeof l.target === "string") {
+    const table = LINK_TABLE[relation];
+    const sourceKind = nodeKinds.get(l.source);
+    const targetKind = nodeKinds.get(l.target);
+    if (sourceKind !== undefined && targetKind !== undefined) {
+      if (sourceKind !== table.source || targetKind !== table.target) {
+        errors.push(
+          `link ${l.source}→${l.target}: relation ${l.relation} requires ` +
+            `${table.source}→${table.target}, found ${sourceKind}→${targetKind}`,
+        );
+      }
+    }
   }
 
   return errors;

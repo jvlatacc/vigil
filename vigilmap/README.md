@@ -7,11 +7,6 @@ filter, and inspect. No Postgres, no Vigil API: the app reads a validated
 `MemoryGraphDocument` (schema version 1, defined in
 [`src/types.ts`](src/types.ts)) and nothing else.
 
-> **Status — scaffold.** This PR ships the data contract, the load-time
-> validator, source resolution, and the app shell (loading / error / empty /
-> ready states). The 3D graph, filters, and detail panel land in the next PR
-> of the series; the Python exporter after that.
-
 ## Run
 
 ```sh
@@ -20,9 +15,13 @@ npm run dev
 ```
 
 …then open the printed URL. With no `?data=` parameter the app loads the
-bundled sample at `public/data/sample-memory.json` (a small hand-written
-placeholder for now — the deterministic seeded generator replaces it in a
-later PR of this series).
+bundled sample at `public/data/sample-memory.json` — a deterministic seeded
+scenario (two hunts over one phishing→C2 campaign) covering every verdict
+outcome, every entity type, gaps, and a learning episode.
+
+Regenerate it with `python3 scripts/generate_sample.py --output
+public/data/sample-memory.json`; the output is byte-identical across runs,
+and CI diffs a fresh regeneration against the checked-in file.
 
 ## Load your own data
 
@@ -33,20 +32,37 @@ contract is rejected with a named error, never half-rendered:
 - **`?data=<url>`** — fetch any URL serving a `MemoryGraphDocument`.
 - **Drop a file** — drop a `.json` document anywhere on the page.
 
-## Export (coming)
+An empty-but-valid document renders an empty scene with a note, not a blank
+screen. WebGL is required; browsers without it get a plain-language error.
 
-`export/export_memory.py` will read a live deployment's episodic tables
+## Export live memory
+
+`export/export_memory.py` reads a live deployment's episodic tables
 (`episodic_sightings`, `episodic_verdicts`, `episodic_verdict_sources`,
-`episodic_gaps`, `episodic_distil_markers`) and emit the document the app
+`episodic_gaps`, `episodic_distil_markers`) and emits the document the app
 reads:
 
 ```sh
 DATABASE_URL=postgres://… python vigilmap/export/export_memory.py --output memory.json [--since 2026-09-01]
 ```
 
-It will mint entity keys with `core.memory.entity_keys` when run inside the
-repo, falling back to `export/key_rule.py` — a stated copy guarded by a CI
-drift test, so the two can never disagree.
+Then serve it any way you like and open the app with `?data=<url>` — or drop
+`memory.json` onto the page. Entity keys are minted with
+`core.memory.entity_keys` when run inside the repo, falling back to
+`export/key_rule.py` — a stated copy guarded by a CI drift test, so the two
+can never disagree.
+
+## The explorer
+
+Click a node to select it and open its detail panel; click the background or
+press `Esc` to clear. Hovering highlights a node's direct neighborhood and
+dims the rest. `/` focuses search — Enter jumps to and selects the best
+match. Filters (kinds, entity types, verdict outcomes, time window) hide
+rather than delete; a selected node that gets filtered out clears. The
+camera is free-orbit; `recenter` (top bar) frames the selection. Auto-rotate
+defaults off and honors `prefers-reduced-motion`. Sightings show their
+labels on zoom-in only; large exports cap the initial visible set (sightings
+first) and say how many they trimmed.
 
 ## The document contract
 
@@ -69,6 +85,9 @@ version and says so otherwise.
 | `npm test` | vitest, one run |
 
 Tests live in [`tests/`](tests/): contract validation (every rejection case
-with the named error asserted), source resolution for all three paths, and
-store derivations. CI (`.github/workflows/vigilmap.yml`) runs all of the
-above on every PR touching `vigilmap/**`.
+with the named error asserted), graph build, filters, detail mapping, source
+resolution for all three paths, sample validity, and store derivations. The
+Python exporter's suite is under [`export/tests/`](export/tests/). CI
+(`.github/workflows/vigilmap.yml`) runs the Node gates, the exporter suite
+with the key-rule drift guard, and the sample-determinism diff on every PR
+touching `vigilmap/**`.

@@ -87,7 +87,18 @@ jobs:
       - name: Test exporter
         run: pytest vigilmap/
 
-  # TODO(determinism): regenerate vigilmap/public/data/sample-memory.json with
-  # vigilmap/scripts/generate_sample.py into a temp dir and diff against the
-  # checked-in file, so the bundled demo cannot rot. Lands with the
-  # sample-generator PR.
+  # The bundled demo cannot rot: the generator is deterministic (fixed seed,
+  # ordered-by-construction output), so regenerating it must reproduce the
+  # checked-in JSON byte for byte. diff exits non-zero on any drift.
+  determinism:
+    name: Sample dataset determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # runner.temp survives across steps and stays outside the checkout.
+      - name: Regenerate the sample into a temp dir
+        run: python3 vigilmap/scripts/generate_sample.py --output "${{ runner.temp }}/sample-memory.json"
+
+      - name: Diff against the checked-in file
+        run: diff -u vigilmap/public/data/sample-memory.json "${{ runner.temp }}/sample-memory.json"
