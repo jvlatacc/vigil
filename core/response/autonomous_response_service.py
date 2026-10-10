@@ -1,7 +1,8 @@
 """Autonomous response service with approval workflow integration."""
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from core.agents.builtins import AgentId
 from core.response.approval_service import (
@@ -12,7 +13,15 @@ from core.response.approval_service import (
     PendingAction,
 )
 from core.response.config import ResponseConfig, is_recon_probe
-from core.response.protected_assets import protected_asset_hit
+from core.response.guards import (
+    GUARD_EVALUATION_TIMEOUT_SECONDS,
+    FindingOriginStatus,
+    GuardChain,
+    GuardState,
+    GuardVerdict,
+    shared_guard_chain,
+)
+from core.storage.service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +38,110 @@ class AutonomousResponseService:
         self,
         approvals: Optional[ApprovalService] = None,
         config: Optional[ResponseConfig] = None,
+        guards: Optional[GuardChain] = None,
     ):
         """Initialize autonomous response service.
 
         ``config`` defaults to the approval service's band so the two never
         compare against different lines; the no-arg form reads Settings.
+        ``guards`` defaults to the process-wide :class:`GuardChain` (#944)
+        so a service that never responds never pays for one and every
+        enforcement site shares one breaker and one quota.
         """
         self.approval_service = approvals or ApprovalService(config=config)
         self.config = config or self.approval_service.config
+        self._guards = guards
+
+    def _guard_chain(self) -> GuardChain:
+        """The guard chain — the shared one, on first use (#944).
+
+        Instances made via ``__new__`` (the executor's test shape) lack the
+        attribute entirely; the shared build covers them too.
+        """
+        chain = getattr(self, "_guards", None)
+        if chain is None:
+            chain = shared_guard_chain()
+            self._guards = chain
+        return chain
+
+    def evaluate_guards(
+        self,
+        action_type: str,
+        target_ip: Optional[str],
+        hostname: Optional[str],
+        evidence_origins: Sequence[FindingOriginStatus] = (),
+        *,
+        spend_quota: bool = True,
+    ) -> GuardVerdict:
+        """The guard chain's verdict for one would-be action (#944, D1).
+
+        Ordered invariant, breaker, origin, quota; every rejection forces
+        the human-approval path. ``spend_quota=False`` is the dry-run shape
+        (judge the windows without consuming a slot).
+        """
+        return self._guard_chain().evaluate_sync(
+            action_type, target_ip, hostname, evidence_origins, spend_quota=spend_quota
+        )
+
+    def _log_guard_denial(
+        self,
+        action_id: str,
+        verdict: GuardVerdict,
+        action_type: str,
+        confidence: float,
+        evidence: Sequence[str],
+        refused: str = "guard",
+    ) -> None:
+        """Record a denied-action rationale in ai_decision_logs (#944, D6).
+
+        The action row carries the same rule; this is the decision-log twin.
+        A failed audit write must never block enforcement — create_ai_decision
+        degrades to None and logs, and an unexpected shape here is caught and
+        logged for the same reason.
+        """
+        try:
+            DatabaseService().create_ai_decision(
+                decision_id=f"guard-{refused}-{action_id}",
+                agent_id=AgentId.AUTO_RESPONDER.value,
+                decision_type="response_guard",
+                confidence_score=float(confidence),
+                reasoning=verdict.rule,
+                recommended_action=action_type,
+                decision_metadata={
+                    "guard_state": verdict.state.value,
+                    "needs_human": verdict.needs_human,
+                    "evidence": list(evidence),
+                },
+            )
+        except Exception as e:  # noqa: BLE001 — audit must never block enforcement
+            logger.error(
+                "Guard denial audit write failed for action %s: %s", action_id, e
+            )
+
+    def _claim_escalation(self, verdict: GuardVerdict) -> bool:
+        """Whether this hold may fire the once-per-OPEN escalation (#944, D4).
+
+        A breaker-open hold escalates once per OPEN period — the flood that
+        opened the breaker must not drown the queue in per-action pages —
+        and so does the hold whose own note tripped the breaker. Any other
+        hold escalates unconditionally: each pending row is a containment
+        decision a person should see. A failed claim answers False; the
+        breaker has already logged what happened.
+        """
+        if verdict.state is not GuardState.BREAKER_OPEN and not verdict.tripped:
+            return True
+        try:
+            return bool(
+                self._guard_chain().run(
+                    asyncio.wait_for(
+                        self._guard_chain().breaker.claim_escalation(),
+                        GUARD_EVALUATION_TIMEOUT_SECONDS,
+                    )
+                )
+            )
+        except Exception as e:  # noqa: BLE001 — logged above by the breaker
+            logger.error("Escalation claim failed; not escalating this hold: %s", e)
+            return False
 
     def correlate_alerts(
         self,
@@ -176,10 +281,17 @@ class AutonomousResponseService:
         reason: str,
         evidence: List[str],
         correlation_data: Dict,
+        evidence_origins: Optional[Sequence[FindingOriginStatus]] = None,
     ) -> Optional[Dict]:
         """
         Create an isolation action (auto-executes when the approval gate
         approves it, i.e. at or above ``config.confidence_threshold``).
+
+        The guard chain runs first (#944, D1): invariant, breaker, origin
+        and quota checks interpose between the Responder's decision and the
+        approval gate. Any rejection forces pending approval — with the
+        gate's rationale on the row and in ai_decision_logs — the action is
+        never dropped and never executed against a held target.
 
         Args:
             ip_address: Target IP address
@@ -188,6 +300,10 @@ class AutonomousResponseService:
             reason: Reason for isolation
             evidence: List of evidence IDs
             correlation_data: Data from correlation analysis
+            evidence_origins: Origin stamps of the evidencing findings, as
+                stamped at ingest. The daemon pipeline always supplies them;
+                a caller that does not is judged on zero statuses (the origin
+                gate passes vacuously, logged at debug).
 
         Returns:
             Action result
@@ -199,14 +315,18 @@ class AutonomousResponseService:
             ip_address if ip_address and ip_address != "unknown" else f"host:{hostname}"
         )
 
-        # Never-quarantine invariant (#944): an operator-declared asset waits
-        # for a person at any confidence or severity. Checked before the
-        # approval gate here, and re-checked in execute_approved_actions
-        # before anything dispatches. A hit does not drop the action: it
-        # forces human approval and renders the invariant's rationale as the
-        # deciding rule.
-        protected = protected_asset_hit(ip_address, hostname)
-        gate_rule = None if protected is None else protected.rule()
+        # The guard chain (#944, D1): invariant, breaker, origin, quota —
+        # cheapest-and-most-specific first. Checked before the approval gate
+        # here, and re-checked in execute_approved_actions before anything
+        # dispatches. A rejection does not drop the action: it forces human
+        # approval and renders the gate's rationale as the deciding rule.
+        verdict = self.evaluate_guards(
+            ActionType.ISOLATE_HOST.value,
+            ip_address,
+            hostname,
+            evidence_origins or (),
+        )
+        gate_rule = verdict.rule if verdict.needs_human else None
 
         try:
             action, inserted = self.approval_service._put_action(
@@ -282,13 +402,32 @@ class AutonomousResponseService:
                 logger.info(
                     f"Action {action.action_id} pending approval (confidence: {confidence:.2%})"
                 )
-                return {
+                # A held action carries its gate's rationale on the result
+                # and the row, lands it in ai_decision_logs (#944, D6), and
+                # escalates through Slack/PagerDuty — nothing is dropped
+                # silently. While the breaker is OPEN the escalation is
+                # claimed once per OPEN period (D4), not once per action.
+                result: Dict = {
                     "status": "pending_approval",
                     "action_id": action.action_id,
                     "message": "Isolation action created, awaiting analyst approval",
                     "confidence": confidence,
                     "requires_approval": True,
                 }
+                if verdict.needs_human:
+                    result["guard"] = {
+                        "state": verdict.state.value,
+                        "rule": verdict.rule,
+                    }
+                    self._log_guard_denial(
+                        action.action_id,
+                        verdict,
+                        ActionType.ISOLATE_HOST.value,
+                        confidence,
+                        evidence,
+                    )
+                    result["guard_escalate"] = self._claim_escalation(verdict)
+                return result
 
         except Exception as e:
             logger.error(f"Error creating isolation action: {e}")
@@ -342,36 +481,48 @@ class AutonomousResponseService:
 
                 params = action.parameters or {}
 
-                # Never-quarantine invariant re-check (#944), ahead of the
-                # person-decided guard: a row whose status says "approved"
-                # but names no approver was released by a confidence figure,
-                # and a confidence figure cannot discharge the invariant.
-                # Refused and recorded — never executed, never dropped
-                # silently. A row a person decided (approved_by set)
-                # proceeds; that is the deliberate emergency valve.
+                # The execution re-check (#944, D1): creation and execution
+                # are different transactions, so a row no person decided is
+                # re-judged by the guard chain before anything dispatches —
+                # invariant, breaker, and the hard quota ceiling. The origin
+                # stamps were judged when the action was created; the
+                # executor holds no findings to re-read them from. A held
+                # verdict is refused and durably recorded — never executed,
+                # never dropped silently. A soft quota window does not block
+                # here: the row was already released, and only the hard
+                # ceiling (D3) refuses at execution. A row a person decided
+                # proceeds whatever the chain answers — the deliberate
+                # emergency valve: the breaker suspends machine response,
+                # and a person's decision is not machine response.
                 if not action.approved_by:
-                    protected = protected_asset_hit(
-                        action.target, params.get("hostname")
+                    verdict = self.evaluate_guards(
+                        action.action_type,
+                        action.target,
+                        params.get("hostname"),
+                        spend_quota=False,
                     )
-                    if protected is not None:
+                    if verdict.state not in (
+                        GuardState.ALLOWED,
+                        GuardState.QUOTA_SOFT,
+                    ):
                         logger.warning(
-                            "Action %s targets protected asset %s; refusing execution",
+                            "Action %s held by the execution re-check: %s",
                             action.action_id,
-                            protected.rule(),
+                            verdict.rule,
                         )
                         self.approval_service.refuse_auto_action(
-                            action.action_id, protected.rule()
+                            action.action_id, verdict.rule
                         )
                         continue
 
-                # Released by a confidence figure and no person: whoever
-                # supplied that figure also chose the outcome.
-                if not action.requires_approval and not action.approved_by:
-                    logger.warning(
-                        "Action %s was never decided by a person; not executing",
-                        action.action_id,
-                    )
-                    continue
+                    # Released by a confidence figure and no person: whoever
+                    # supplied that figure also chose the outcome.
+                    if not action.requires_approval:
+                        logger.warning(
+                            "Action %s was never decided by a person; not executing",
+                            action.action_id,
+                        )
+                        continue
 
                 result: Optional[Dict] = None
 
