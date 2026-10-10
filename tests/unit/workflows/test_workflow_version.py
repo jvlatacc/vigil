@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.agents import run_start
 from core.api.v1 import agent_runs_router
 from core.workflows.workflows_service import (
     WorkflowDefinition,
@@ -87,7 +88,13 @@ class TestAgentRunPath:
             side_effect=versions or (lambda self, wid: 1),
             autospec=True,
         ):
-            agent_runs_router._begin_run_row("r-1", request)
+            run_start._begin_run_row(
+                "r-1",
+                run_kind=request.run_kind,
+                playbook=request.playbook,
+                prompt=request.prompt,
+                triggered_by="api",
+            )
         return runs.begin_run.call_args.kwargs
 
     def test_named_workflow_stores_its_version(self):
