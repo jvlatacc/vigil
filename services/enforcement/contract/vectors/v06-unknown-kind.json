@@ -1,0 +1,21 @@
+{
+  "id": "v06-unknown-kind",
+  "description": "An unknown kind is refused with unsupported_kind (422) — the v1 kind vocabulary is closed.",
+  "steps": [
+    {
+      "name": "unknown kind",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4421",
+          "kind": "drop_everything",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 3600,
+          "reason": "not a real primitive",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 422, "error": "unsupported_kind" }
+    }
+  ]
+}

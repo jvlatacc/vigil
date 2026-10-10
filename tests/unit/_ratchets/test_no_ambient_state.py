@@ -81,6 +81,8 @@ def _python_files():
         for path in sorted((REPO_ROOT / package).rglob("*.py")):
             if "__pycache__" in path.parts:
                 continue
+            if _venv_marker(path.parts):
+                continue
             yield path.relative_to(REPO_ROOT)
 
 
@@ -151,6 +153,13 @@ def _lazy_singleton_accessors(rel_path: Path):
                 continue
             if any(isinstance(t, ast.Name) and t.id in declared for t in stmt.targets):
                 yield node.lineno, node.name, callee
+
+
+def _venv_marker(parts) -> bool:
+    """Gitignored virtualenvs inside a scanned package are artifacts, not
+    source: `uv sync --project services/edge` creates one in the scan tree,
+    and vendored site-packages would drown the scan in false positives."""
+    return any(part in (".venv", "venv") for part in parts)
 
 
 @pytest.mark.unit

@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
-from core.agents import run_limits
+from core.agents import run_limits, run_start
 from core.agents.directives import (
     DIRECTIVE_FIELDS,
     DIRECTIVE_KINDS,
@@ -20,17 +18,12 @@ from core.agents.directives import (
     UnknownRun,
     enqueue_directive,
 )
-from core.agents.queue import (
-    RUN_KINDS,
-    build_start_job,
-    enqueue_run,
-    new_run_id,
-)
+from core.agents.queue import RUN_KINDS
+from core.agents.run_status import run_status as run_status_of
 from core.auth.current_user import get_current_user
 from core.auth.permissions import permission_gate
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
 from core.storage.models import User
-from core.workflows.enablement import disabled_message, is_enabled
 
 router = APIRouter()
 
@@ -43,10 +36,6 @@ ROUTER_META = RouterMeta(
     legacy_prefixes=("/api/agent-runs",),
 )
 logger = logging.getLogger(__name__)
-
-# The scheme the agent layer resolves against /internal/playbooks
-# (services/agent/core/playbooks.ts::WORKFLOW_SCHEME).
-WORKFLOW_SCHEME = "workflow:"
 
 
 class StartRunRequest(BaseModel):
@@ -127,137 +116,42 @@ def list_runs(
     return RunListResponse(runs=items, count=len(items))
 
 
-# Mint a run id and enqueue it. The worker opens the ledger, not this call.
+# Start and status delegate to core.agents.run_start / core.agents.run_status:
+# the MCP server's start_agent_run and get_agent_run drive the same code, so a
+# run started over either surface is begun and reported the same way.
 @router.post(
     "", dependencies=_RUN_AGENTS, response_model=StartRunResponse, status_code=202
 )
 async def start_run(request: StartRunRequest) -> StartRunResponse:
-    if request.run_kind not in RUN_KINDS:
-        raise HTTPException(
-            status_code=400, detail=f"unknown run_kind: {request.run_kind}"
-        )
-
-    # A run that names a workflow is a start of that workflow.
-    named = request.playbook.removeprefix(WORKFLOW_SCHEME).strip()
-    if request.playbook.startswith(WORKFLOW_SCHEME) and not is_enabled(named):
-        raise HTTPException(status_code=409, detail=disabled_message(named))
-
     try:
-        run_limits.check_overrides(request.overrides)
+        started = await run_start.start_run(
+            run_kind=request.run_kind,
+            playbook=request.playbook,
+            config=request.config,
+            arch=request.arch,
+            prompt=request.prompt,
+            overrides=request.overrides,
+            tenant_id=request.tenant_id,
+            enqueued_by="api",
+        )
+    except run_start.UnknownRunKind as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except run_start.WorkflowDisabled as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from None
     except run_limits.OverrideRefused as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except run_start.RunQueueUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
-    run_id = new_run_id()
-    payload: Dict[str, Any] = {
-        "arch": request.arch,
-        "playbook": request.playbook,
-        "config": request.config,
-        "prompt": request.prompt,
-    }
-    if request.overrides is not None:
-        payload["overrides"] = request.overrides
-
-    # Best-effort: without a workflow_runs row a parked run cannot raise an
-    # answerable checkpoint. Like every write to that table, the ledger is truth.
-    _begin_run_row(run_id, request)
-
-    job = build_start_job(
-        run_id=run_id,
-        run_kind=request.run_kind,
-        request=payload,
-        enqueued_by="api",
-        tenant_id=request.tenant_id,
-    )
-    try:
-        job_id = await enqueue_run(job)
-    except Exception as exc:  # the queue is the only thing this endpoint can fail on
-        logger.error("failed to enqueue agent run %s: %s", run_id, exc)
-        raise HTTPException(status_code=503, detail="run queue unavailable") from exc
-
-    return StartRunResponse(run_id=run_id, job_id=job_id)
+    return StartRunResponse(**started)
 
 
-# The playbook reference names the workflow when there is one; a run started from
-# file paths is named for the loop it runs, which is all the console needs to list it.
-def _begin_run_row(run_id: str, request: StartRunRequest) -> None:
-    from core.workflows.workflow_run_service import WorkflowRunService
-    from core.workflows.workflows_service import WorkflowsService
-
-    named = request.playbook.removeprefix(WORKFLOW_SCHEME).strip()
-    workflow_id = (
-        named if request.playbook.startswith(WORKFLOW_SCHEME) else request.run_kind
-    )
-    # A bare run_kind names no definition, so it has no version to record.
-    try:
-        version = (
-            WorkflowsService().version_of(workflow_id)
-            if request.playbook.startswith(WORKFLOW_SCHEME)
-            else None
-        )
-    except Exception as exc:  # noqa: BLE001 — the row is best-effort
-        logger.warning("no workflow version for %s: %s", workflow_id, exc)
-        version = None
-    WorkflowRunService().begin_run(
-        workflow_id=workflow_id,
-        workflow_name=workflow_id,
-        workflow_source="agent",
-        workflow_version=version,
-        trigger_context={"run_kind": request.run_kind, "prompt": request.prompt},
-        triggered_by="api",
-        run_id=run_id,
-    )
-
-
-def _has_run_row(session: Any, run_id: str) -> bool:
-    row = session.execute(
-        text("SELECT 1 FROM workflow_runs WHERE run_id = :run_id"),
-        {"run_id": run_id},
-    ).one_or_none()
-    return row is not None
-
-
-# Reports from state the worker persisted, using only the two permitted reads
-# against agent_events; workflow_runs says whether the run was accepted at all.
 @router.get("/{run_id}", response_model=RunStatusResponse)
 def get_run(run_id: str, session: UnitOfWorkSession) -> RunStatusResponse:
-    # Canonical form: workflow_runs.run_id is text, so the compare there is exact.
-    try:
-        run_id = str(uuid.UUID(run_id))
-    except ValueError:
+    status = run_status_of(session, run_id)
+    if status is None:
         raise HTTPException(status_code=404, detail=f"no such run: {run_id}") from None
-
-    counted = session.execute(
-        text(
-            "SELECT count(*) AS events FROM agent_events WHERE run_id = CAST(:run_id AS uuid)"
-        ),
-        {"run_id": run_id},
-    ).one_or_none()
-    events = int(counted.events) if counted is not None else 0
-    if events == 0:
-        # Only the worker writes agent_events; POST wrote workflow_runs. A run with
-        # that row and no events is accepted but not picked up yet, not unknown.
-        if _has_run_row(session, run_id):
-            return RunStatusResponse(run_id=run_id, status="queued", events=0)
-        raise HTTPException(status_code=404, detail=f"no such run: {run_id}")
-
-    terminal = session.execute(
-        text(
-            "SELECT payload FROM agent_events "
-            "WHERE run_id = CAST(:run_id AS uuid) AND kind = 'terminal' ORDER BY seq LIMIT 1"
-        ),
-        {"run_id": run_id},
-    ).one_or_none()
-    if terminal is None:
-        return RunStatusResponse(run_id=run_id, status="running", events=events)
-
-    payload = terminal.payload
-    return RunStatusResponse(
-        run_id=run_id,
-        status="terminal",
-        events=events,
-        outcome=payload.get("outcome"),
-        reason=payload.get("reason"),
-    )
+    return RunStatusResponse(**status)
 
 
 class DirectiveRequest(BaseModel):

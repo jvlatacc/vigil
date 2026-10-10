@@ -1,0 +1,11 @@
+{
+  "id": "v05-unauthenticated-rejected",
+  "description": "A request without the bearer token is rejected with 401 before any engine logic runs — the whole /v1 subtree is gated.",
+  "steps": [
+    {
+      "name": "no auth header",
+      "request": { "method": "POST", "path": "/v1/actions", "auth": false, "body": {} },
+      "expect": { "status": 401, "error": "unauthorized" }
+    }
+  ]
+}

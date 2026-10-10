@@ -1,0 +1,36 @@
+{
+  "id": "v08-conflicting-reuse",
+  "description": "Reusing an action_id for a different request is a conflict (409), not an enforcement — action_id is the idempotency anchor and must never silently admit two different kernel states.",
+  "steps": [
+    {
+      "name": "first enforcement",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4423",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 3600,
+          "reason": "original block",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 201, "state": "enforced" }
+    },
+    {
+      "name": "same id, different request",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4423",
+          "kind": "xdp_drop",
+          "target": { "ip": "198.51.100.9" },
+          "ttl_seconds": 3600,
+          "reason": "a different block wearing the same id",
+          "idempotency_key": "xdp_block_ip:198.51.100.9"
+        }
+      },
+      "expect": { "status": 409, "error": "action_id_conflict" }
+    }
+  ]
+}

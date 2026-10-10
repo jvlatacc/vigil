@@ -26,8 +26,19 @@ from core.config import get_settings
 from core.federation.runner import FederationRunner
 from core.ingestion.dedup import RedisDedupSet
 from core.integrations._base.ids import FINDING_ID_MAX, fit_id
+from core.response.breaker import ContainmentBreaker
+from core.response.origin import (
+    ATTESTATION_HEADER,
+    O_COVERAGE,
+    O_REPLAY,
+    OriginReplayCache,
+    OriginTrustIndex,
+    attestation_covers,
+    security_logger,
+)
 from core.time import utcnow
 from core.webhook_rejections import (
+    BAD_SIGNATURE,
     BAD_TOKEN,
     DISABLED,
     NO_SECRET,
@@ -134,6 +145,19 @@ class DataPoller:
         self._elastic_dedup = RedisDedupSet("poller:elastic")
         self._webhook_dedup = RedisDedupSet("poller:webhook")
 
+        # Origin attestation (#944): the webhook verifies
+        # X-Vigil-Origin-Attestation and stamps findings. Trust roots are
+        # config-only (DAEMON_TRUSTED_ORIGINS); a seed list that cannot be
+        # honored raises here, so a misconfigured daemon never ingests as if
+        # origins were trusted — fail closed.
+        self._origin_index = OriginTrustIndex.from_settings()
+        self._origin_replay = OriginReplayCache()
+        # The breaker's origin-flood face (#944, D4c): per-process instance,
+        # shared through Redis with the guard chain and the admin API, the
+        # same pattern as the breaker router's status surface. Tests replace
+        # this attribute with a recorder.
+        self._origin_flood_sink = ContainmentBreaker()
+
         # Services (lazy loaded)
         self._splunk_service = None
         self._crowdstrike_service = None
@@ -161,6 +185,7 @@ class DataPoller:
             "opensearch_polls": 0,
             "opensearch_findings": 0,
             "webhook_findings": 0,
+            "webhook_origin_unverified": 0,
             "dropped": 0,
             "errors": 0,
             "webhook_rejections": {},
@@ -623,6 +648,63 @@ class DataPoller:
             "mitre_predictions": mitre_predictions,
         }
 
+    async def _note_unverified_origin(
+        self, request: Any, codes: set, count: int
+    ) -> None:
+        """Count, log, and feed the breaker an invalid attestation; findings
+        still ingest, unverified.
+
+        A present-but-invalid header is an attack signal: it feeds the
+        breaker's origin-flood trip condition (#944, D4c) one event per
+        rejected request — ``count`` (findings in the request) feeds the
+        stats counter, the breaker counts attempts. When the note trips the
+        breaker, the resulting rule is logged; the state change is the
+        daemon's to announce. ``detail`` carries only fixed code names —
+        never signatures, keys or bodies.
+        """
+        detail = ", ".join(sorted(codes))
+        record_rejection(
+            f"daemon{request.path}", BAD_SIGNATURE, request.remote, detail=detail
+        )
+        self.stats["webhook_rejections"] = rejection_counts("daemon/")
+        self.stats["webhook_origin_unverified"] += count
+        security_logger.warning("origin attestation rejected (%s)", detail)
+        trip_rule = await self._origin_flood_sink.note_origin_unverified()
+        if trip_rule is not None:
+            security_logger.warning("containment breaker opened: %s", trip_rule)
+
+    async def _attestation_stamp(
+        self, request: Any, body: Any
+    ) -> tuple[bool, Optional[str]]:
+        """Verify the attestation header; return ``(origin_verified, origin_id)``.
+
+        An absent header is not an attack signal: the finding ingests
+        unverified and the guard chain holds it for a person. A present but
+        invalid header (bad signature, unknown key, stale ``iat``, replayed
+        nonce, or a payload that does not cover this body) is still stored,
+        unverified, through the rejection path.
+        """
+        header = request.headers.get(ATTESTATION_HEADER)
+        if header is None:
+            return False, None
+        count = len(body) if isinstance(body, list) else 1
+        verdict = self._origin_index.verify(header.encode())
+        if not verdict.ok:
+            await self._note_unverified_origin(request, verdict.codes, count)
+            return False, None
+        # Replay: record every nonce from signatures that verified; any one
+        # already seen is a replay of the whole envelope.
+        for jti in verdict.nonces:
+            if await self._origin_replay.seen_or_record(jti):
+                await self._note_unverified_origin(request, {O_REPLAY}, count)
+                return False, None
+        # Binding: the verified payload must be the body being ingested, or
+        # the attestation was transplanted onto different content.
+        if not attestation_covers(verdict, body):
+            await self._note_unverified_origin(request, {O_COVERAGE}, count)
+            return False, None
+        return True, verdict.origin_id
+
     async def _run_webhook_server(self, shutdown_event: asyncio.Event):
         """Run a simple webhook server for external ingestion."""
         from aiohttp import web
@@ -683,7 +765,16 @@ class DataPoller:
                         status=503,
                     )
 
+                # Origin attestation (#944): verified against the pristine body
+                # BEFORE the per-finding normalization below mutates it — the
+                # signature binds the content the sender actually sent.
+                origin_verified, origin_id = await self._attestation_stamp(
+                    request, data
+                )
                 for finding_data in findings:
+                    finding_data["origin_verified"] = origin_verified
+                    finding_data["origin_id"] = origin_id
+
                     finding_id = finding_data.get("finding_id")
                     if not finding_id:
                         import uuid
@@ -718,7 +809,13 @@ class DataPoller:
                             count += 1
 
                 self.stats["webhook_findings"] += count
-                return web.json_response({"status": "ok", "ingested": count})
+                return web.json_response(
+                    {
+                        "status": "ok",
+                        "ingested": count,
+                        "origin_verified": origin_verified,
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Webhook error: {e}")

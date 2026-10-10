@@ -3315,6 +3315,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/containment/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Leases
+         * @description List containment leases, newest first. Read-only — the Fast-Path's
+         *     fates are decided by the daemon; humans act through the approvals API.
+         */
+        get: operations["get_api_containment_leases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/containment/leases/{lease_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Lease
+         * @description One lease by id, terminal states included.
+         */
+        get: operations["get_api_containment_leases_lease_id"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/conversations/": {
         parameters: {
             query?: never;
@@ -3821,6 +3862,78 @@ export interface paths {
          *         Results for each source update
          */
         post: operations["post_api_detection-rules_update-all"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Devices
+         * @description The flat device list — tables and debugging, ``device_key`` included.
+         */
+        get: operations["get_api_digital-twin_devices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Graph
+         * @description The whole twin in one payload: devices, processes, connections, edges.
+         *
+         *     Every node carries its entity attributes — MAC, serial, PID, the
+         *     connection 5-tuple, type. Edges: device ``runs`` process, process
+         *     ``binds`` connection, and the heuristic device ``talks-to`` device where
+         *     a connection's ``remote_ip`` matches another known device's last-known
+         *     ``ip_address`` (``heuristic=true`` — reused addresses can fabricate one).
+         */
+        get: operations["get_api_digital-twin_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Observations
+         * @description Idempotent upsert of device/process/connection observations.
+         *
+         *     The server derives each row's natural key from the observation, so
+         *     re-posting a batch updates ``last_seen`` and changes no row counts —
+         *     the "still here" signal a polling feed sends. References between rows
+         *     (a process's device, a connection's process) are natural keys the batch
+         *     or an earlier ingest created; an unknown one is a 422 naming the field.
+         */
+        post: operations["post_api_digital-twin_ingest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5407,7 +5520,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List All Credentials
+         * @description Every user's MCP credentials. The admin view offboarding needs.
+         *
+         *     Tokens are hashes at rest and were shown once at mint; this list carries
+         *     ids, labels, owners and revocation state, never a token or its hash.
+         */
+        get: operations["get_api_mcp_surface_credentials"];
         put?: never;
         /**
          * Mint Credential
@@ -5435,7 +5555,11 @@ export interface paths {
         post?: never;
         /**
          * Revoke Credential
-         * @description Withdraw a credential. What it could reach, it can no longer reach.
+         * @description Withdraw a credential — yours, or anyone's on the admin path.
+         *
+         *     An administrator retiring a leaver's standing access must not need the
+         *     leaver's cooperation, so the self-only rule of the earlier route is
+         *     superseded here; the audit row records who pulled it.
          */
         delete: operations["delete_api_mcp_surface_credentials_credential_id"];
         options?: never;
@@ -5902,6 +6026,99 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/breaker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Breaker Status
+         * @description Current breaker state, trip counters, and cooldown remaining.
+         */
+        get: operations["get_api_response_breaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/breaker/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Breaker Reset
+         * @description Manually close the breaker and clear the trip counters. Audited.
+         *
+         *     The audit entry joins no transaction — the breaker resets first, then
+         *     the write happens; a failed audit surfaces as a failed request with the
+         *     reset already applied (a retry records it; the reset itself is
+         *     idempotent). Swallowing the audit failure would let a safety reset
+         *     commit with no record.
+         */
+        post: operations["post_api_response_breaker_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/protected-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assets
+         * @description List protected assets, newest first (active only by default).
+         */
+        get: operations["get_api_response_protected-assets"];
+        put?: never;
+        /**
+         * Create Asset
+         * @description Declare an asset the Responder may never auto-contain against.
+         *
+         *     The row is active immediately: the in-memory index drops its cache and
+         *     the next evaluated action sees the invariant.
+         */
+        post: operations["post_api_response_protected-assets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/response/protected-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Asset
+         * @description Retire an asset's protection (soft delete; the row's history stays).
+         */
+        delete: operations["delete_api_response_protected-assets_asset_id"];
         options?: never;
         head?: never;
         patch?: never;
@@ -7596,6 +7813,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/digital-twin/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Devices
+         * @description The flat device list — tables and debugging, ``device_key`` included.
+         */
+        get: operations["get_api_v1_digital-twin_devices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/digital-twin/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Graph
+         * @description The whole twin in one payload: devices, processes, connections, edges.
+         *
+         *     Every node carries its entity attributes — MAC, serial, PID, the
+         *     connection 5-tuple, type. Edges: device ``runs`` process, process
+         *     ``binds`` connection, and the heuristic device ``talks-to`` device where
+         *     a connection's ``remote_ip`` matches another known device's last-known
+         *     ``ip_address`` (``heuristic=true`` — reused addresses can fabricate one).
+         */
+        get: operations["get_api_v1_digital-twin_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/digital-twin/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Observations
+         * @description Idempotent upsert of device/process/connection observations.
+         *
+         *     The server derives each row's natural key from the observation, so
+         *     re-posting a batch updates ``last_seen`` and changes no row counts —
+         *     the "still here" signal a polling feed sends. References between rows
+         *     (a process's device, a connection's process) are natural keys the batch
+         *     or an earlier ingest created; an unknown one is a 422 naming the field.
+         */
+        post: operations["post_api_v1_digital-twin_ingest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/findings": {
         parameters: {
             query?: never;
@@ -7683,6 +7972,99 @@ export interface paths {
          *         Updated finding
          */
         patch: operations["patch_api_v1_findings_finding_id"];
+        trace?: never;
+    };
+    "/api/v1/response/breaker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Breaker Status
+         * @description Current breaker state, trip counters, and cooldown remaining.
+         */
+        get: operations["get_api_v1_response_breaker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/breaker/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Breaker Reset
+         * @description Manually close the breaker and clear the trip counters. Audited.
+         *
+         *     The audit entry joins no transaction — the breaker resets first, then
+         *     the write happens; a failed audit surfaces as a failed request with the
+         *     reset already applied (a retry records it; the reset itself is
+         *     idempotent). Swallowing the audit failure would let a safety reset
+         *     commit with no record.
+         */
+        post: operations["post_api_v1_response_breaker_reset"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/protected-assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Assets
+         * @description List protected assets, newest first (active only by default).
+         */
+        get: operations["get_api_v1_response_protected-assets"];
+        put?: never;
+        /**
+         * Create Asset
+         * @description Declare an asset the Responder may never auto-contain against.
+         *
+         *     The row is active immediately: the in-memory index drops its cache and
+         *     the next evaluated action sees the invariant.
+         */
+        post: operations["post_api_v1_response_protected-assets"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/response/protected-assets/{asset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Asset
+         * @description Retire an asset's protection (soft delete; the row's history stays).
+         */
+        delete: operations["delete_api_v1_response_protected-assets_asset_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/workflows": {
@@ -8016,6 +8398,10 @@ export interface paths {
          *
          *     Rejects any pending approval action on the run and finalises it
          *     as ``cancelled`` with the supplied reason.
+         *
+         *     The gates and the hand-off live in core.workflows.run_control, shared
+         *     with the MCP cancel tool, so a run cancelled either way is cancelled
+         *     the same way.
          */
         post: operations["post_api_workflows_runs_run_id_cancel"];
         delete?: never;
@@ -8088,6 +8474,10 @@ export interface paths {
          *     Looks up the run's pending approval action, approves it, and
          *     re-enters the phase loop. If there is no pending approval action
          *     linked to the run, returns 409.
+         *
+         *     The gates and the hand-off live in core.workflows.run_control, shared
+         *     with the MCP resume tool, so a run resumed either way is resumed the
+         *     same way.
          */
         post: operations["post_api_workflows_runs_run_id_resume"];
         delete?: never;
@@ -8831,6 +9221,56 @@ export interface components {
             breached_cases?: {
                 [key: string]: unknown;
             }[];
+        };
+        /** BreakerResetRequest */
+        BreakerResetRequest: {
+            /**
+             * Reason
+             * @description Why the breaker is being manually reset; recorded in the config audit log.
+             */
+            reason: string;
+        };
+        /** BreakerResetResponse */
+        BreakerResetResponse: {
+            after: components["schemas"]["BreakerStatusResponse"];
+            before: components["schemas"]["BreakerStatusResponse"];
+            /**
+             * Rule
+             * @default response.breaker_reset=manual
+             */
+            rule: string;
+        };
+        /**
+         * BreakerStatusResponse
+         * @description Frozen shape of one breaker observation (mirrors ``BreakerStatus``).
+         */
+        BreakerStatusResponse: {
+            /** Counters */
+            counters?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * Escalation Fired
+             * @default false
+             */
+            escalation_fired: boolean;
+            /** Opened At */
+            opened_at?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Rule */
+            rule?: string | null;
+            /** Seconds Left */
+            seconds_left?: number | null;
+            /** State */
+            state: string;
+            /**
+             * Store
+             * @default redis
+             */
+            store: string;
         };
         /** BudgetSettingsResponse */
         BudgetSettingsResponse: {
@@ -9928,6 +10368,54 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** ContainmentLeaseListResponse */
+        ContainmentLeaseListResponse: {
+            /** Count */
+            count: number;
+            /** Leases */
+            leases?: components["schemas"]["ContainmentLeaseOut"][];
+        };
+        /**
+         * ContainmentLeaseOut
+         * @description Read-only view of one containment lease (mirrors ``LeaseView`` minus
+         *     the undo payload, which stays daemon-internal).
+         */
+        ContainmentLeaseOut: {
+            /** Action Type */
+            action_type: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Decision Rule */
+            decision_rule: string;
+            /** Entity Id */
+            entity_id: string;
+            /** Entity Type */
+            entity_type: string;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Finding Id */
+            finding_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Is Shadow */
+            is_shadow: boolean;
+            /** Lease Id */
+            lease_id: string;
+            /**
+             * Observed
+             * @description Gate-time telemetry snapshot (severity, confidence, detector).
+             */
+            observed?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @description pending_apply | applied | rolled_back | escalated | failed
+             */
+            status: string;
+            /** Ttl Seconds */
+            ttl_seconds?: number | null;
+        };
         /**
          * ContentBlock
          * @description Content block for message (text or image).
@@ -9999,6 +10487,29 @@ export interface components {
              * @description Workflow ID
              */
             workflow_id?: string | null;
+        };
+        /** CreateProtectedAssetRequest */
+        CreateProtectedAssetRequest: {
+            /**
+             * Asset Class
+             * @description dns | domain_controller | gateway | dhcp | database | other.
+             */
+            asset_class: string;
+            /**
+             * Label
+             * @description Why it is protected — shown on every held action.
+             */
+            label: string;
+            /**
+             * Match Kind
+             * @description How to match the asset: 'ip', 'cidr', or 'hostname'.
+             */
+            match_kind: string;
+            /**
+             * Match Value
+             * @description The asset to protect — one address (10.0.0.53), one network in CIDR notation (10.0.0.0/24), or one exact hostname (dc.corp.example.com).
+             */
+            match_value: string;
         };
         /**
          * CreateUserRequest
@@ -11637,6 +12148,44 @@ export interface components {
             /** Priority */
             priority: string;
         };
+        /** ProtectedAssetListResponse */
+        ProtectedAssetListResponse: {
+            /** Assets */
+            assets?: components["schemas"]["ProtectedAssetResponse"][];
+            /** Count */
+            count: number;
+        };
+        /**
+         * ProtectedAssetResponse
+         * @description Frozen key set of one protected-asset row (beta: shape may settle).
+         */
+        ProtectedAssetResponse: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Asset Class */
+            asset_class: string;
+            /** Asset Id */
+            asset_id: string;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Label */
+            label: string;
+            /** Match Kind */
+            match_kind: string;
+            /** Match Value */
+            match_value: string;
+            /** Removal Reason */
+            removal_reason?: string | null;
+            /** Removed At */
+            removed_at?: string | null;
+            /** Removed By */
+            removed_by?: string | null;
+        };
         /**
          * RecalculateCostRequest
          * @description Body for POST /analytics/recalculate-cost.
@@ -11715,6 +12264,14 @@ export interface components {
             related_case_id: string;
             /** Relationship Type */
             relationship_type: string;
+        };
+        /** RemoveProtectedAssetRequest */
+        RemoveProtectedAssetRequest: {
+            /**
+             * Reason
+             * @description Why the asset's protection is being retired.
+             */
+            reason?: string | null;
         };
         /**
          * ResolutionStepAdd
@@ -12443,6 +13000,315 @@ export interface components {
             start_time?: string | null;
             /** Total */
             total: number;
+        };
+        /**
+         * TwinConnectionIn
+         * @description One connection observation.
+         *
+         *     A connection belongs to its device — named directly by ``device`` or,
+         *     when the source could attribute it, implied by the owning ``process``
+         *     (whose ``device`` is the connection's device). Naming neither is the one
+         *     shape the twin cannot place, so it is refused here.
+         */
+        TwinConnectionIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "socket" | "stream" | "session";
+            /**
+             * Device
+             * @description device_key, or the hostname the device was observed under; implied by `process` when omitted, and when both are given they must resolve to the same device
+             */
+            device?: string | null;
+            /** Direction */
+            direction?: ("inbound" | "outbound") | null;
+            /** Local Ip */
+            local_ip?: string | null;
+            /** Local Port */
+            local_port?: number | null;
+            process?: components["schemas"]["TwinProcessRef"] | null;
+            /** Protocol */
+            protocol?: string | null;
+            /** Remote Ip */
+            remote_ip?: string | null;
+            /** Remote Port */
+            remote_port?: number | null;
+            /** Started At */
+            started_at?: string | null;
+            /** State */
+            state?: string | null;
+        };
+        /**
+         * TwinConnectionOut
+         * @description A connection as the API returns it — the identifying 5-tuple included.
+         */
+        TwinConnectionOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "socket" | "stream" | "session";
+            /** Device Id */
+            device_id: unknown;
+            /** Direction */
+            direction?: string | null;
+            /** First Seen */
+            first_seen: string;
+            /** Id */
+            id: unknown;
+            /** Last Seen */
+            last_seen: string;
+            /** Local Ip */
+            local_ip?: string | null;
+            /** Local Port */
+            local_port?: number | null;
+            /** Process Id */
+            process_id?: unknown | null;
+            /** Protocol */
+            protocol?: string | null;
+            /** Remote Ip */
+            remote_ip?: string | null;
+            /** Remote Port */
+            remote_port?: number | null;
+            /** Source */
+            source: string;
+            /** Started At */
+            started_at?: string | null;
+            /** State */
+            state?: string | null;
+        };
+        /**
+         * TwinDeviceIn
+         * @description One device observation.
+         *
+         *     The identity fields (``hostname``, ``mac_address``, ``serial_number``) are
+         *     what the ingest derives the ``device_key`` from, so at least one is
+         *     required; everything else is the last-known state of the machine.
+         */
+        TwinDeviceIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Device Type */
+            device_type?: string | null;
+            /** Hostname */
+            hostname?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Mac Address */
+            mac_address?: string | null;
+            /** Os Info */
+            os_info?: string | null;
+            /** Serial Number */
+            serial_number?: string | null;
+        };
+        /**
+         * TwinDeviceListResponse
+         * @description The flat device list tables and debugging read; ``device_key`` is here.
+         */
+        TwinDeviceListResponse: {
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * TwinDeviceOut
+         * @description A device as the API returns it — physical identity plus last-known state.
+         */
+        TwinDeviceOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Device Key */
+            device_key: string;
+            /** Device Type */
+            device_type: string;
+            /** First Seen */
+            first_seen: string;
+            /** Hostname */
+            hostname?: string | null;
+            /** Id */
+            id: unknown;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Last Seen */
+            last_seen: string;
+            /** Mac Address */
+            mac_address?: string | null;
+            /** Os Info */
+            os_info?: string | null;
+            /** Serial Number */
+            serial_number?: string | null;
+            /** Source */
+            source: string;
+        };
+        /**
+         * TwinEdgeOut
+         * @description One derived relationship between two graph nodes.
+         *
+         *     ``source``/``target`` are the entity ids the payload's own lists use, so
+         *     a client can join edges to nodes without a second lookup. ``runs`` and
+         *     ``binds`` are structural facts; ``talks-to`` is the v1 heuristic (a
+         *     connection's ``remote_ip`` matching another device's last-known
+         *     ``ip_address``) and carries ``heuristic=True`` — reused or overlapping
+         *     addresses can fabricate one.
+         */
+        TwinEdgeOut: {
+            /**
+             * Heuristic
+             * @default false
+             */
+            heuristic: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "runs" | "binds" | "talks-to";
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+        };
+        /**
+         * TwinGraphPayload
+         * @description The whole twin in one payload; every node carries its entity attributes.
+         *
+         *     The three entity lists are the wire shape the console screen consumes;
+         *     ``edges`` is the same derivation server-side (``runs`` device→process,
+         *     ``binds`` process→connection, heuristic ``talks-to`` device→device) for
+         *     callers that would rather not re-derive it.
+         */
+        TwinGraphPayload: {
+            /** Connections */
+            connections?: components["schemas"]["TwinConnectionOut"][];
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceOut"][];
+            /** Edges */
+            edges?: components["schemas"]["TwinEdgeOut"][];
+            /** Generated At */
+            generated_at: string;
+            /** Processes */
+            processes?: components["schemas"]["TwinProcessOut"][];
+        };
+        /**
+         * TwinIngestBatch
+         * @description One observation envelope from one feed: the source and what it saw.
+         *
+         *     Re-posting a batch is safe and meaningful — it is how a feed says "still
+         *     here": row counts stay stable and every re-observed row's ``last_seen``
+         *     moves forward. A feed aggregating several vendors posts one batch per
+         *     source.
+         */
+        TwinIngestBatch: {
+            /** Connections */
+            connections?: components["schemas"]["TwinConnectionIn"][];
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceIn"][];
+            /** Processes */
+            processes?: components["schemas"]["TwinProcessIn"][];
+            /** Source */
+            source: string;
+        };
+        /**
+         * TwinIngestResult
+         * @description Counts of observations the batch carried, per entity class.
+         *
+         *     These echo the batch, not the database: idempotency means a re-post
+         *     returns the same numbers while the row counts stay put.
+         */
+        TwinIngestResult: {
+            /** Connections */
+            connections: number;
+            /** Devices */
+            devices: number;
+            /** Processes */
+            processes: number;
+            /** Source */
+            source: string;
+        };
+        /**
+         * TwinProcessIn
+         * @description One process observation, on the device named by ``device``.
+         */
+        TwinProcessIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Command */
+            command?: string | null;
+            /**
+             * Device
+             * @description device_key of the device the process ran on, or the hostname the device was observed under
+             */
+            device: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
+            /** Started At */
+            started_at?: string | null;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * TwinProcessOut
+         * @description A process as the API returns it.
+         */
+        TwinProcessOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Command */
+            command?: string | null;
+            /** Device Id */
+            device_id: unknown;
+            /** First Seen */
+            first_seen: string;
+            /** Id */
+            id: unknown;
+            /** Last Seen */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
+            /** Source */
+            source: string;
+            /** Started At */
+            started_at?: string | null;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * TwinProcessRef
+         * @description Names an already-observed process by its natural key.
+         */
+        TwinProcessRef: {
+            /**
+             * Device
+             * @description device_key of the device the process ran on, or the hostname the device was observed under
+             */
+            device: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
         };
         /**
          * UpdateConversationRequest
@@ -18728,6 +19594,78 @@ export interface operations {
             };
         };
     };
+    get_api_containment_leases: {
+        parameters: {
+            query?: {
+                /** @description active (pending_apply or applied, the default) or all (every row, newest first, terminal states included — the recent view). */
+                status?: string;
+                /** @description Filter by entity class: ip | user | host | domain. */
+                entity_type?: string | null;
+                /** @description Filter by the contained principal's id. */
+                entity_id?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainmentLeaseListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_containment_leases_lease_id: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContainmentLeaseOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_conversations: {
         parameters: {
             query?: {
@@ -19590,6 +20528,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_digital-twin_devices": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinDeviceListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_digital-twin_graph": {
+        parameters: {
+            query?: {
+                /** @description Keep only entities re-observed at or after this instant. */
+                since?: string | null;
+                /** @description Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names. */
+                device_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinGraphPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_digital-twin_ingest": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwinIngestBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinIngestResult"];
                 };
             };
             /** @description Validation Error */
@@ -22326,6 +23366,39 @@ export interface operations {
             };
         };
     };
+    get_api_mcp_surface_credentials: {
+        parameters: {
+            query?: {
+                include_revoked?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_api_mcp_surface_credentials: {
         parameters: {
             query?: never;
@@ -23143,6 +24216,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_response_breaker: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_response_breaker_reset: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BreakerResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerResetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_response_protected-assets": {
+        parameters: {
+            query?: {
+                /** @description Include soft-removed rows. */
+                include_removed?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_response_protected-assets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProtectedAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_response_protected-assets_asset_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RemoveProtectedAssetRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
                 };
             };
             /** @description Validation Error */
@@ -25961,6 +27206,108 @@ export interface operations {
             };
         };
     };
+    "get_api_v1_digital-twin_devices": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinDeviceListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_v1_digital-twin_graph": {
+        parameters: {
+            query?: {
+                /** @description Keep only entities re-observed at or after this instant. */
+                since?: string | null;
+                /** @description Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names. */
+                device_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinGraphPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_v1_digital-twin_ingest": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwinIngestBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinIngestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_v1_findings: {
         parameters: {
             query?: {
@@ -26097,6 +27444,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FindingUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_v1_response_breaker: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_v1_response_breaker_reset: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BreakerResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BreakerResetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_v1_response_protected-assets": {
+        parameters: {
+            query?: {
+                /** @description Include soft-removed rows. */
+                include_removed?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_v1_response_protected-assets": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProtectedAssetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_v1_response_protected-assets_asset_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RemoveProtectedAssetRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedAssetResponse"];
                 };
             };
             /** @description Validation Error */

@@ -83,6 +83,39 @@ class TestConfiguredFloors:
         dry._response_service.create_isolation_action.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_dry_run_asks_the_guards_and_executes_nothing(self, caplog):
+        """#944, Verification row 8: dry run creates nothing, but the
+        operator still sees what the gates would have said — state and
+        rationale logged, no quota slot spent (spend_quota=False)."""
+        from core.response.guards import GuardState, GuardVerdict
+
+        finding = {
+            "finding_id": "f-944-dry",
+            "severity": "critical",
+            "triage_confidence": 0.75,
+            "entity_context": {"src_ips": ["10.0.0.53"]},
+        }
+        dry = self._responder(dry_run=True)
+        dry._response_service.evaluate_guards = Mock(
+            return_value=GuardVerdict(
+                GuardState.PROTECTED_ASSET,
+                True,
+                "response.protected_asset=10.0.0.53 (asset_class=dns)",
+            )
+        )
+
+        with caplog.at_level("INFO", logger="services.daemon.responder"):
+            await dry._evaluate_response(finding)
+
+        call = dry._response_service.evaluate_guards.call_args
+        assert call.args[0] == "isolate"
+        assert call.args[1] == "10.0.0.53"
+        assert call.kwargs["spend_quota"] is False
+        assert "[DRY RUN] Guard evaluation for isolate: protected_asset" in caplog.text
+        assert "response.protected_asset=10.0.0.53 (asset_class=dns)" in caplog.text
+        dry._response_service.create_isolation_action.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_reused_isolation_is_not_counted_as_auto_executed(self):
         """#1217: a reused isolation (collapsed by the idempotency key) must not
         be logged or counted the same as a fresh auto-execution."""

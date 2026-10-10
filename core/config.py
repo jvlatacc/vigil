@@ -293,6 +293,111 @@ class Settings(BaseSettings):
     # Comma-separated IPs/CIDRs exempt from steering (sanctioned scanners,
     # shared NAT).
     daemon_deception_allowlist: str = ""
+    # Speculative-containment Fast-Path: deterministic, LLM-free micro-
+    # containment decided in the store-to-triage window. See
+    # core.response.fastpath. Ships apply-disabled and in shadow mode;
+    # enabling is an operator decision backed by shadow-replay data.
+    daemon_fastpath_enabled: bool = False
+    daemon_fastpath_shadow_mode: bool = True
+    # Lease TTL: the default a fresh lease carries, clamped by the gate into
+    # [min, max] so no setting can outlive the ceiling.
+    daemon_fastpath_default_ttl_seconds: int = 300
+    daemon_fastpath_min_ttl_seconds: int = 60
+    daemon_fastpath_max_ttl_seconds: int = 900
+    # Blast-radius caps, each enforced by the gate on its own.
+    daemon_fastpath_max_leases_per_entity: int = 1
+    daemon_fastpath_max_leases_per_window: int = 20
+    daemon_fastpath_window_seconds: int = 3600
+    # Anti-flap: minimum seconds between a rollback and the next apply on
+    # the same entity. A stuck pending intent older than the apply timeout
+    # is reconciled by the TTL sweeper.
+    daemon_fastpath_anti_flap_rollback_floor_seconds: int = 600
+    daemon_fastpath_apply_timeout_seconds: int = 60
+    # The daemon's lease sweep cadence. Expiry is datastore-enforced — the
+    # scan reads rows, not memory — so the sweep runs regardless of the
+    # enable switch: disabling stops NEW leases; it never orphans live
+    # ones.
+    daemon_fastpath_lease_sweep_interval: int = 60
+    # The confidence band, mirroring the response band above but tunable
+    # independently: the millisecond path may need a higher bar than the
+    # deliberation loop it precedes.
+    daemon_fastpath_confidence_threshold: float = 0.90
+    daemon_fastpath_review_threshold: float = 0.85
+    daemon_fastpath_monitor_threshold: float = 0.70
+    daemon_fastpath_critical_action_floor: float = 0.70
+    daemon_fastpath_high_action_floor: float = 0.80
+    # Severity band eligible for a lease, and the micro-containment
+    # vocabulary the gate may choose from (see core.response.fastpath).
+    daemon_fastpath_allowed_severities: Annotated[List[str], NoDecode] = [
+        "critical",
+        "high",
+    ]
+    daemon_fastpath_allowed_action_types: Annotated[List[str], NoDecode] = [
+        "challenge",
+        "rate_limit",
+        "tarpit",
+        "latency_injection",
+        "pin_session",
+    ]
+    # Critical-asset allowlist: principals the gate never leases against,
+    # regardless of severity.
+    daemon_fastpath_deny_targets: Annotated[List[str], NoDecode] = []
+    # Signed edge-endpoint contract for the edge-containment verbs
+    # (tarpit, latency_injection, pin_session — EdgeContainmentExecutor):
+    # one operator-run endpoint Vigil calls with HMAC-signed requests.
+    # Leave either unset and the edge verbs are simply not offered — the
+    # registry registers the executor only when both are configured, and
+    # the gate never issues what the registry cannot execute.
+    daemon_fastpath_edge_endpoint_url: Optional[str] = None
+    daemon_fastpath_edge_signing_secret: Optional[str] = None
+
+    # Kernel enforcement actions (xdp_block_ip, socket_redirect,
+    # interdict_process) wait for a person: the env reader for the INTENT.md
+    # enforcement block. Setting it false relaxes the declared posture; the
+    # executor's person-decided guard still applies at execution.
+    daemon_enforcement_force_approval: bool = True
+    # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
+    # and validates them; nothing else reads them here. Origin enforcement is
+    # ON by default: unregistered-key deployments get human approval instead
+    # of auto-execution — registering keys restores machine speed.
+    daemon_containment_quotas_enabled: bool = True
+    # Quota scope derives from the target IP at this prefix length (0-32); a
+    # /24 yields 254 usable hosts, so 5%/min means 12 actions per minute.
+    daemon_subnet_scope_prefix: int = 24
+    daemon_containment_quota_subnet_pct_per_min: float = 5.0
+    daemon_containment_quota_global_per_min: int = 30
+    # The hourly ceiling is the breaker trip, not just a pend.
+    daemon_containment_quota_global_per_hour: int = 200
+    # While the breaker is open every action waits for a person; it opens for
+    # this long, then auto-closes. It also trips on protected-asset probes or
+    # unverified-origin floods inside a 10-minute window.
+    daemon_breaker_cooldown_seconds: int = 900
+    daemon_breaker_invariant_probe_trip: int = 3
+    daemon_breaker_origin_flood_trip: int = 10
+    # Boot seed of never-quarantine invariants: JSON array of objects.
+    daemon_protected_assets: Annotated[List[dict], NoDecode] = []
+    # Ed25519 origin trust roots: JSON array of objects.
+    daemon_trusted_origins: Annotated[List[dict], NoDecode] = []
+    # Automated MTD / honey-routing. core.response.config.MtdConfig bridges
+    # these; nothing else reads them here. Default off: enabling is a human
+    # configuration act, not a code change. The floor is its own band — it
+    # never rides the isolate/block thresholds, so raising one band's number
+    # can never widen the other's reach.
+    daemon_mtd_enabled: bool = False
+    daemon_mtd_confidence_floor: float = 0.60
+    daemon_mtd_session_ttl_seconds: int = 3600
+    daemon_mtd_internal_only: bool = True
+
+    # Decoy environment (services/decoy) — the workloads are gated twice: the
+    # compose `decoys` profile / Helm decoy values decide whether the process
+    # is even started, and this in-code switch decides whether a started
+    # process serves. Default off: enabling it is a human configuration act.
+    decoy_enabled: bool = False
+    # Where session events are POSTed — the daemon's webhook ingest.
+    decoy_ingest_url: str = "http://soc-daemon:8081/ingest"
+    # Maximum session length: long sessions are closed and emitted at the TTL
+    # so a held-open session cannot defer its capture indefinitely.
+    decoy_session_ttl_seconds: int = 3600
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
@@ -349,6 +454,10 @@ class Settings(BaseSettings):
     cloudy_ingestion_enabled: bool = False
     cloudy_webhook_max_body_kb: int = 1024
     threat_feed_poll_interval: int = 900
+    # Daily CISA KEV refresher (services/daemon/threat_feed_poller.py): keeps
+    # the bundled t=0 seed current from the official, key-less feed. Off only
+    # when an install's egress policy forbids reaching cisa.gov.
+    vigil_threat_feed_kev_enabled: bool = True
 
     # Sandbox
     sandbox_auto_submit: bool = False
@@ -366,6 +475,9 @@ class Settings(BaseSettings):
     @field_validator(
         "extension_connector_allowlist",
         "daemon_escalate_severities",
+        "daemon_fastpath_allowed_severities",
+        "daemon_fastpath_allowed_action_types",
+        "daemon_fastpath_deny_targets",
         "kafka_topics",
         mode="before",
     )
@@ -373,6 +485,23 @@ class Settings(BaseSettings):
     def _split_csv(cls, v: Any) -> Any:
         if isinstance(v, str):
             return [p.strip() for p in v.split(",") if p.strip()]
+        return v
+
+    @field_validator(
+        "daemon_protected_assets",
+        "daemon_trusted_origins",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_list(cls, v: Any) -> Any:
+        # NoDecode hands the raw env string over: parse it here so a malformed
+        # seed fails validation (and boot, via validate_settings_or_exit)
+        # instead of reaching a reader as a string that reads as empty. A
+        # blank value means no seed, matching _blank_is_unset's leniency.
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            return json.loads(v)
         return v
 
     @field_validator(

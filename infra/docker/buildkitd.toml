@@ -1,0 +1,13 @@
+# Buildkit daemon config for CI image builds.
+#
+# Route docker.io pulls through Google's public registry mirror: anonymous
+# pulls from GitHub Actions runners share Docker Hub quotas and get throttled
+# with 429s before the build even starts (the same failure that pushed the
+# chart workflow to vendored, checksummed subcharts). Buildkit falls back to
+# docker.io for any manifest the mirror does not have.
+#
+# Reference from a workflow's docker/setup-buildx-action step:
+#   with:
+#     config: infra/docker/buildkitd.toml
+[registry."docker.io"]
+  mirrors = ["mirror.gcr.io"]

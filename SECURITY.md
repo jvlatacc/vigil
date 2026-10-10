@@ -210,11 +210,11 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 - **`DEV_MODE=true` bypassing authentication.** That is its documented purpose.
   It defaults to `false` in `core/config.py` and in `env.example`; a developer
   opts into it for a local instance, and the backend announces the bypass on
-  every startup. See [DEV_MODE](https://vigilsoc.org/docs/dev-mode/).
+  every startup. See [DEV_MODE](docs/develop/dev-mode.md).
 - **Default credentials in development material** — the default PostgreSQL
   password in `infra/docker/docker-compose.yml`, documented as
   must-change-before-production in
-  [production security](https://vigilsoc.org/docs/production-security/). No
+  [production security](docs/deploy/production-security.md). No
   default admin login ships; the first account is created through
   `/api/auth/bootstrap`.
 - **Placeholder values in `env.example`.** They are a template, not a
@@ -222,7 +222,7 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 - **Findings that require a misconfiguration we already document as unsafe** —
   for example exposing port 6987 to the internet with `DEV_MODE=true`, or
   running with the report-only CSRF switch turned on in production. If you find
-  a case [production security](https://vigilsoc.org/docs/production-security/) does *not*
+  a case [production security](docs/deploy/production-security.md) does *not*
   cover, that gap is worth reporting.
 - **Vulnerabilities in an upstream product Vigil integrates with** (Splunk,
   CrowdStrike, VirusTotal, and the rest). Report those to that vendor. If
@@ -244,22 +244,93 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 Most incidents we would expect to see are configuration, not code. Before you
 run Vigil anywhere real:
 
-- **[Production security](https://vigilsoc.org/docs/production-security/)** — the
+- **[Production security](docs/deploy/production-security.md)** — the
   auditable checklist of every security-relevant switch and its production
   value. Start here.
-- **[DEV_MODE](https://vigilsoc.org/docs/dev-mode/)** — what the auth bypass does and why it must
+- **[DEV_MODE](docs/develop/dev-mode.md)** — what the auth bypass does and why it must
   never be enabled in production.
-- **[State and secrets](https://vigilsoc.org/docs/state/)** — where secrets live, and why provider
+- **[State and secrets](docs/deploy/state.md)** — where secrets live, and why provider
   keys and integration credentials belong in the UI and the encrypted store
   rather than in `.env`.
-- **[Helm secrets](https://vigilsoc.org/docs/helm-secrets/)** — secret management for
+- **[Helm secrets](docs/deploy/helm-secrets.md)** — secret management for
   Kubernetes deployments.
-- **[Deployment guide](https://vigilsoc.org/docs/deployment/)** — network exposure,
+- **[Deployment guide](docs/deploy/deployment.md)** — network exposure,
   TLS termination, and reverse-proxy placement.
 
 Non-negotiables: set `DEV_MODE=false`, generate a real `JWT_SECRET_KEY`, change
 the default database password, terminate TLS in front of the API, and never
 commit a credential.
+
+### Integration opt-outs Vigil ships off
+
+Three integration capabilities ship disabled. Each is a per-deployment
+decision to make deliberately, and each is enforced in code, not convention:
+
+- **Page-extension connector origins — `EXTENSION_CONNECTOR_ALLOWLIST`.**
+  A comma-separated list of the origins (`https://host[:port]`) a
+  page-extension connector may live on. Entries are canonicalized before
+  matching — scheme and host case-insensitively, an explicit port is part
+  of the origin, and a malformed entry is dropped rather than trusted — so
+  a typo narrows the list, it never widens it. When the allowlist is set, a
+  connector whose `connectorUrl` is not on it is refused at session mint.
+  When it is unset — the shipped default — the trust gate applies the
+  scheme rule alone (`https`, or `http` on loopback), and the
+  Content-Security-Policy is what keeps a configured connector's bundle out
+  of the browser until its origin is listed. If connectors are configured
+  while the allowlist is empty, the backend says so at startup.
+
+- **MCP child environments — `required_env_vars`.** Spawned MCP servers do
+  not inherit the backend's environment. A child receives the MCP SDK's
+  default variables, the CA-bundle variables, `VIGIL_DIR` and `PYTHONPATH`,
+  and the `env` its own `mcp-config.json` entry declares — nothing else. If
+  a server legitimately needs a variable from the backend environment that
+  is not in that set, name it in that entry's `required_env_vars` (or
+  reference it as `${VAR}` in the entry's `env` or `args`). That list is
+  the only door from the backend environment to a child process, so read it
+  as the credentials you are handing that server.
+
+- **PagerDuty write tools — `--enable-write-tools`.** The shipped
+  `pagerduty` entry runs read-only: `create_incident`, `manage_incidents`,
+  `add_responders` and the other write tools are not registered, and a
+  mutating call queues at Vigil's approval gate instead of executing. To
+  let the integration write to PagerDuty directly, re-add
+  `--enable-write-tools` to the entry's `args` in `mcp-config.json` — the
+  same disabled-by-default posture as `atomic-red-team`. Keep it off unless
+  a deployment needs it.
+
+### Supply-chain pins and verified publishers (October 2026)
+
+Every runtime-fetched MCP server in `mcp-config.json` pins an exact artifact,
+and `tests/unit/_ratchets/test_mcp_runtime_pins.py` enforces it: exact npm/PyPI
+versions, Docker image digests, and — since the E8/E9 hardening — a full
+40-hex commit SHA for every git ref and for local `uv --directory` clones.
+Tags are rejected as pins because they are server-side mutable.
+
+Publishers were verified against the registries in October 2026:
+
+- **Official:** `falcon-mcp` (CrowdStrike), `google-secops-mcp` / `gti-mcp` /
+  `scc-mcp` (Google SecOps Team, `google/mcp-security`),
+  `awslabs.well-architected-security-mcp-server` (AWS Labs), and
+  `pagerduty-mcp` (built from PagerDuty's own `PagerDuty/pagerduty-mcp-server`
+  — its `pyproject.toml` is PyPI's `pagerduty-mcp`; the similarly named PyPI
+  package `pagerduty-mcp-server` is an unrelated community project, do not
+  swap them).
+- **Community, named maintainers:** `security-detections-mcp` (`mhaggis`),
+  `@pebbletek/cribl-mcp` (`aby@pebbletek.ai`, `pebbletek/cribl-mcp`).
+- **Community, pseudonymous:** `@burtthecoder/mcp-virustotal` and
+  `@burtthecoder/mcp-shodan` (maintainer `burtmacklin`, code under the
+  `w0h1v` GitHub account). The exact-version pins are the control; re-verify
+  before moving one.
+- **Third-party vendor, not Okta itself:** `mcp/okta-mcp-fctr` is Fctr's
+  (`fctr.io`) Okta MCP server, listed in Docker's MCP Catalog with source
+  `fctr-id/okta-mcp-server`. It is not an Okta-published image; the digest
+  pin is the control.
+
+`mcp-remote` stays on `0.1.49`: past the `0.1.16` fix for CVE-2025-6514, and
+past the `0.1.39` remediation level reported for the 2026 SSRF/transport
+advisories (CVE-2026-51994…52001, whose upstream version metadata is
+incomplete). Jumping minor lines (0.8.x, 0.14.x) is a separate decision; the
+durable fix is retiring `mcp-remote` for an in-process streamable-HTTP client.
 
 ---
 
@@ -269,7 +340,9 @@ Contributions are held to the same bar, enforced in CI (`ci-cd.yml`, plus the
 nightly audit in `nightly.yml`):
 
 - `bandit` for Python and `npm audit` for the web client.
-- Trivy scans of released container images.
+- Trivy scans of the agent image built in CI (a PR-time gate, not a scan of
+  released images — released images get SBOMs and attestations instead, see
+  [SBOMs for Releases](#sboms-for-releases)).
 - Dependabot for dependency updates (`.github/dependabot.yml`).
 - Ratchet tests that fail the build on ambient state — new `os.getenv` calls
   must go through `core.config` or `core.secrets`
@@ -280,6 +353,51 @@ nightly audit in `nightly.yml`):
 If you are fixing a reported vulnerability, coordinate with the maintainers
 **before** opening a public pull request — a PR that describes the bug
 discloses it. We will work with you in the private advisory fork instead.
+
+---
+
+## SBOMs for Releases
+
+Every release publishes a software bill of materials for what it ships, as
+CycloneDX 1.6 JSON, generated by `.github/workflows/release.yml`:
+
+- **Released images** — one SBOM per published image (`vigil-backend`,
+  `vigil-daemon`, `vigil-agent`), generated from the same multi-arch index
+  digest that is signed. Each image also carries a keyless CycloneDX
+  attestation in the registry, bound to that digest and produced by the same
+  GitHub OIDC identity as the signature. Image SBOMs describe the
+  `linux/amd64` platform (syft resolves the index to the scanning platform);
+  the source-side SBOMs cover the tree for all platforms.
+- **Source side** — the Python lock (`requirements.lock`), the four npm
+  lockfiles (web, desktop, agent, MCP connectors), and a scan of the whole
+  source tree — the only inventory that covers the medic service's
+  `uv.lock`, since the medic image is not published.
+
+All nine SBOMs are attached to the GitHub Release with a `.sha256` sibling
+each (`sha256sum -c <file>.sha256` — the same convention as the support
+tarball).
+
+Verify an image's attestation, with the same identity the signature check
+above pins:
+
+```bash
+cosign verify-attestation \
+  --type cyclonedx \
+  --certificate-identity https://github.com/Vigil-SOC/vigil/.github/workflows/release.yml@refs/tags/v<version> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/vigil-soc/vigil-backend:<version>
+```
+
+To read the attestation's SBOM payload instead of verifying it:
+
+```bash
+cosign download attestation \
+  ghcr.io/vigil-soc/vigil-backend:<version> --predicate-type https://cyclonedx.org/bom
+```
+
+SBOMs are component inventories, not vulnerability scans — see the Trivy note
+in [Security in Development](#security-in-development) for what is scanned
+and when.
 
 ---
 

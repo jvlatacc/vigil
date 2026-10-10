@@ -42,6 +42,7 @@ class _Service:
     def __init__(self, rows):
         self._rows = rows
         self.executed = []
+        self.refused = []
 
     def list_actions(self, status=None, **_):
         return self._rows
@@ -51,6 +52,11 @@ class _Service:
 
     def mark_failed(self, action_id, error):
         self.executed.append(action_id)
+
+    def refuse_auto_action(self, action_id, reason):
+        # The executor records an invariant refusal durably (#944); the stub
+        # mirrors the service method it calls.
+        self.refused.append((action_id, reason))
 
 
 def _row(action_id, *, requires_approval, approved_by):

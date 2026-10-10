@@ -16,6 +16,7 @@ const CATALOG_TO_SERVER: Record<string, string> = {
   'aws-security-hub': 'aws-security',
   'elastic-siem': 'elastic',
   'splunk': 'splunk-selfhosted',
+  'honey_router': 'honey-router',
 }
 const serverFor = (catalogId: string) => CATALOG_TO_SERVER[catalogId] ?? catalogId
 

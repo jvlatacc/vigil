@@ -14,6 +14,7 @@ from core.deception.backends import DryRunBackend
 from core.response.approval_service import PendingAction
 from core.response.autonomous_response_service import AutonomousResponseService
 from core.response.config import ResponseConfig
+from core.response.guards import GuardChain
 
 pytestmark = pytest.mark.unit
 
@@ -93,6 +94,11 @@ def _service(rows) -> AutonomousResponseService:
     service = AutonomousResponseService.__new__(AutonomousResponseService)
     service.approval_service = _ApprovalSpy(rows)
     service.config = ResponseConfig(honey_route_enabled=True)
+    # A chain of our own: the shared_guard_chain() fallback would record the
+    # person-less re-check's invariant-probe note on the process-global
+    # breaker, and the response suite's guard tests count on that breaker
+    # staying under its trip threshold for the tests that follow them.
+    service._guards = GuardChain()
     return service
 
 

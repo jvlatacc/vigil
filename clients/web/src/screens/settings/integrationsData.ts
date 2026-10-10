@@ -5,6 +5,7 @@ export const SERVER_TO_INTEGRATION = new Map(Object.entries({
   'aws-security': 'aws-security-hub',
   'elastic': 'elastic-siem',
   'splunk-selfhosted': 'splunk',
+  'honey-router': 'honey_router',
 }))
 
 export function getIntegrationForServer(serverName: string): IntegrationMetadata | undefined {

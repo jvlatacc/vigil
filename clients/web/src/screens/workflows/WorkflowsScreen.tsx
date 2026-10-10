@@ -533,7 +533,7 @@ function looksUnfinished(line: string): boolean {
  *  the operator is told before submitting, and ratcheted against
  *  `workflows/hunt/types.ts` by `test_recall_contract_agrees` — a list that
  *  drifts tells them a key is fine that no reader will ever query. */
-const ENTITY_TYPES = ['ip', 'domain', 'host', 'url', 'email', 'hash', 'arn', 'aws_key', 'user', 'process']
+const ENTITY_TYPES = ['ip', 'domain', 'host', 'url', 'email', 'hash', 'arn', 'aws_key', 'user', 'process', 'cve']
 
 /** `type:value`, comma separated — the form the hunt already writes an entity in.
  *  Split on the first colon, because a url value carries its own. */

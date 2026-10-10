@@ -15,7 +15,7 @@ import pytest
 from tests.unit.deception.fixtures import FakeProbeSignals, recon_finding
 
 from core.deception.config import DeceptionConfig
-from core.response.config import ResponseConfig
+from core.response.config import MtdConfig, ResponseConfig
 from services.daemon.config import SchedulerConfig
 from services.daemon.scheduler import TaskScheduler, _deception_sweep_interval
 from services.daemon.processor import FindingProcessor
@@ -54,6 +54,10 @@ def _processor(response_config, service=None, queue=None):
     processor = FindingProcessor.__new__(FindingProcessor)
     processor.response_config = response_config
     processor._deception_signal_service = service
+    # Main's bands beside the deception arm, both shipped-disabled: the MTD
+    # candidate band and the Fast-Path gate (None reads the disabled default).
+    processor.mtd_config = MtdConfig()
+    processor.fastpath_config = None
     processor._response_queue = queue if queue is not None else asyncio.Queue()
     processor.stats = defaultdict(int)
     return processor

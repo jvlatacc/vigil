@@ -861,6 +861,34 @@ export const INTEGRATIONS: IntegrationMetadata[] = [
     ],
   },
   {
+    id: 'honey_router',
+    name: 'Honey Router',
+    category: 'Network Security',
+    description:
+      'MTD honey-routing enforcement through Cilium Local Redirect Policies: steers a suspicious source\u2019s matching traffic into the decoy workloads on a TTL lease. No secret fields \u2014 the backend talks to the Kubernetes API with the pod\u2019s in-cluster service account (or the operator\u2019s kubeconfig), never a Vigil-stored credential.',
+    functionality_type: 'Network Protection',
+    fields: [
+      {
+        name: 'backend',
+        label: 'Enforcement Backend',
+        type: 'text',
+        required: true,
+        default: 'cilium',
+        helpText:
+          'Which enforcement backend applies routes. Only "cilium" exists; anything else is an honest failure at route time, not a silent no-op.',
+      },
+      {
+        name: 'namespace',
+        label: 'Decoy Namespace',
+        type: 'text',
+        required: true,
+        default: 'default',
+        helpText:
+          'Namespace the decoy workloads and their redirect policies live in. The policy object is namespaced, so this must be where the decoy pods actually run.',
+      },
+    ],
+  },
+  {
     id: 'cloudforce_one',
     name: 'Cloudflare Cloudforce One',
     category: 'Threat Intelligence',
@@ -1192,6 +1220,53 @@ export const INTEGRATIONS: IntegrationMetadata[] = [
       },
     ],
     docs_url: 'https://cloudcurrent.biz/vstrike',
+  },
+  {
+    id: 'ebpf-xdp',
+    name: 'Kernel Enforcement (eBPF/XDP)',
+    category: 'Network Security',
+    description:
+      'Kernel-level containment through the per-host enforcement daemon (services/enforcement): approved actions drop a source IP in the NIC driver (XDP), steer socket flows to a capture sink, or interdict a process — each self-expiring via TTL and returning kernel evidence. Dormant until the daemon URL and token are set.',
+    functionality_type: 'Network Protection',
+    fields: [
+      {
+        name: 'enforcement_url',
+        label: 'Enforcement Daemon URL',
+        type: 'url',
+        required: true,
+        default: 'http://127.0.0.1:6986',
+        placeholder: 'http://127.0.0.1:6986',
+        helpText:
+          'Loopback-only API of the services/enforcement daemon on this host (VIGIL_ENFORCEMENT_URL).',
+      },
+      {
+        name: 'enforcement_token',
+        label: 'Enforcement Token',
+        type: 'password',
+        required: true,
+        helpText:
+          'Bearer token shared with the daemon (VIGIL_ENFORCEMENT_TOKEN) — the same value the daemon was started with.',
+      },
+      {
+        name: 'default_interface',
+        label: 'Default Interface',
+        type: 'text',
+        required: false,
+        default: 'eth0',
+        helpText:
+          'Host NIC the XDP program attaches to when an action does not name one.',
+      },
+      {
+        name: 'default_ttl_seconds',
+        label: 'Default TTL (seconds)',
+        type: 'number',
+        required: false,
+        default: 3600,
+        helpText:
+          'TTL applied to enforcement actions that do not carry their own. The daemon enforces a 60-second floor.',
+      },
+    ],
+    docs_url: 'https://github.com/jvlatacc/vigil/tree/main/services/enforcement',
   },
 ]
 

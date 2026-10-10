@@ -70,6 +70,11 @@ class TaskScheduler:
             "probes_scored": 0,
             "reports_generated": 0,
             "cleanups_run": 0,
+            "fastpath_leases_rolled_back": 0,
+            "fastpath_intents_reconciled": 0,
+            "fastpath_shadow_rows_closed": 0,
+            "mtd_routes_unrouted": 0,
+            "mtd_canaries_rotated": 0,
             "errors": 0,
         }
 
@@ -110,6 +115,49 @@ class TaskScheduler:
                     run_on_start=False,
                 )
             )
+
+        # Speculative-containment lease sweep (core.response.fastpath).
+        # Expiry is datastore-enforced — the scan reads rows, not memory —
+        # so this runs regardless of the fastpath enable switch:
+        # disabling stops NEW leases; it never orphans live ones.
+        self._tasks.append(
+            ScheduledTask(
+                name="fastpath_lease_sweep",
+                func=self._run_fastpath_lease_sweep,
+                interval=self.config.fastpath_lease_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # Honey-route TTL sweep (core.integrations.honey_router), the same
+        # datastore-enforcement logic: releasing executed routes must run
+        # whether or not the MTD enable switch is on — disabling stops NEW
+        # routes; it never strands an attacker pinned to a decoy.
+        self._tasks.append(
+            ScheduledTask(
+                name="mtd_route_sweep",
+                func=self._run_mtd_route_sweep,
+                interval=self.config.mtd_route_sweep_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # Canary-credential rotation (core.response.decoy_rotation), the
+        # containment invariant the spec locks: decoys hold canary
+        # credentials only, rotated on a schedule. Also not gated on the MTD
+        # enable switch — deactivating MTD must never leave stale canaries
+        # behind in active decoys.
+        self._tasks.append(
+            ScheduledTask(
+                name="mtd_canary_rotation",
+                func=self._run_mtd_canary_rotation,
+                interval=self.config.mtd_canary_rotation_interval,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
 
         # Hourly tick; the day-scoped finding_id makes the injection once a day.
         if self.config.probes_enabled:
@@ -178,6 +226,28 @@ class TaskScheduler:
                 run_on_start=False,
             )
         )
+
+        # CISA KEV refresher — keeps the bundled t=0 seed current from the
+        # official feed. Hourly tick; the refresher itself runs at most once
+        # a day (watermark in threat_feed_poller). The bundled snapshot seeds
+        # t=0, so no run_on_start fetch delays boot behind the network.
+        try:
+            from services.daemon.threat_feed_poller import (
+                KEV_TICK_INTERVAL_SECONDS,
+                kev_refresh_enabled,
+            )
+
+            self._tasks.append(
+                ScheduledTask(
+                    name="kev_refresh",
+                    func=self._run_kev_refresh,
+                    interval=KEV_TICK_INTERVAL_SECONDS,
+                    enabled=kev_refresh_enabled(),
+                    run_on_start=False,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("KEV refresher unavailable: %s", e)
 
     async def _run_deception_lease_sweep(self):
         """Reconcile deception leases once; counts land in responder.stats."""
@@ -464,6 +534,120 @@ class TaskScheduler:
             "read_log_removed": reads,
         }
 
+    async def _run_fastpath_lease_sweep(self):
+        """Roll back expired containment leases and reconcile stuck intents.
+
+        Both drivers do their DB reads and executor calls off-thread
+        (asyncio.to_thread) with no session open across an executor call —
+        the same shape as the cleanup sweep above, and the spec's
+        priority-inversion guard: expiry fires regardless of queue depth.
+        Expiry here is datastore-enforced: the scan reads rows, not
+        memory, so a crashed or restarted daemon never leaves a lease
+        alive.
+        """
+        from core.response.fastpath.adjudication import close_expired_shadow_rows
+        from core.response.fastpath.config import FastPathConfig
+        from core.response.fastpath.executors import default_registry
+        from core.response.fastpath.ledger import (
+            ContainmentLedger,
+            reconcile_stale_intents,
+            sweep_expired,
+        )
+
+        ledger = ContainmentLedger()
+        registry = default_registry()
+
+        rolled = await sweep_expired(ledger, registry)
+        self.stats["fastpath_leases_rolled_back"] += rolled["rolled_back"]
+
+        reconciled = await reconcile_stale_intents(
+            ledger,
+            registry,
+            FastPathConfig.from_settings().apply_timeout_seconds,
+        )
+        self.stats["fastpath_intents_reconciled"] += (
+            reconciled["retried_applied"] + reconciled["aborted_failed"]
+        )
+
+        # Shadow rows never apply, so the expiry scan above never sees
+        # them; closing expired ones here (off-thread, same cadence) frees
+        # their idempotency keys before they pin an entity's next live
+        # lease (deferred from PR-3 to this slice).
+        shadow_closed = await asyncio.to_thread(close_expired_shadow_rows)
+        self.stats["fastpath_shadow_rows_closed"] += shadow_closed
+
+        if rolled["expired"] or reconciled["stale"] or shadow_closed:
+            logger.info(
+                "Fastpath lease sweep: %d expired (%d rolled back, %d errors), "
+                "%d stale intents (%d retried, %d aborted), "
+                "%d shadow rows closed",
+                rolled["expired"],
+                rolled["rolled_back"],
+                rolled["errors"],
+                reconciled["stale"],
+                reconciled["retried_applied"],
+                reconciled["aborted_failed"],
+                shadow_closed,
+            )
+
+        return {
+            "expired_scanned": rolled["expired"],
+            "rolled_back": rolled["rolled_back"],
+            "expired_errors": rolled["errors"],
+            "stale_scanned": reconciled["stale"],
+            "retried_applied": reconciled["retried_applied"],
+            "aborted_failed": reconciled["aborted_failed"],
+            "shadow_rows_closed": shadow_closed,
+        }
+
+    async def _run_mtd_canary_rotation(self):
+        """Rotate the canary credentials the active decoy registry references.
+
+        Delegates to core.response.decoy_rotation.rotate_active_canaries,
+        which runs the credential-store writes and the rotated_at stamps
+        off-thread (the route sweep's shape). A canary that could not be
+        written counts as failed and is retried next tick — the registry's
+        rotated_at never claims a rotation that did not happen.
+        """
+        from core.response.decoy_rotation import rotate_active_canaries_async
+
+        result = await rotate_active_canaries_async()
+        self.stats["mtd_canaries_rotated"] += result["rotated"]
+        if result["rotated"] or result["failed"]:
+            logger.info(
+                "MTD canary rotation: %d rotated, %d failed (of %d active decoy rows)",
+                result["rotated"],
+                result["failed"],
+                result["scanned"],
+            )
+        return result
+
+    async def _run_mtd_route_sweep(self):
+        """Release honey-routes whose session TTL expired.
+
+        Delegates to core.integrations.honey_router.sweep_expired_routes,
+        which runs the scan and the unroute calls off-thread with no
+        session open across an executor call — the fastpath sweep's
+        priority-inversion guard, again. Runs regardless of the MTD
+        enable switch: disabling stops NEW routes; it never strands an
+        attacker pinned to a decoy.
+        """
+        from core.integrations.honey_router.route import sweep_expired_routes
+
+        result = await sweep_expired_routes()
+        self.stats["mtd_routes_unrouted"] += result["unrouted"]
+        if result["expired"] or result["failed"]:
+            logger.info(
+                "MTD route sweep: %d expired (%d unrouted, %d failed, "
+                "%d retried next tick), scanned %d",
+                result["expired"],
+                result["unrouted"],
+                result["failed"],
+                result["expired"] - result["unrouted"] - result["failed"],
+                result["scanned"],
+            )
+        return result
+
     async def _run_probe_sweep(self):
         """Score the probes past their hour (#924), then queue today's (#923)."""
         if self._processor_queue is None or not self._data_service:
@@ -502,6 +686,12 @@ class TaskScheduler:
             return
         poller = ThreatFeedPoller()
         return await poller.run_once()
+
+    async def _run_kev_refresh(self):
+        """Pull the official CISA KEV catalog into threat_indicators (daily)."""
+        from services.daemon.threat_feed_poller import run_kev_refresh_once
+
+        return await run_kev_refresh_once()
 
     async def _run_health_check(self):
         """Run system health check."""

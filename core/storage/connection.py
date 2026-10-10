@@ -1171,6 +1171,12 @@ def init_database(echo: bool = False, create_tables: bool = True):
     # the backend can create these tables, and marks it applied for good.
     if create_tables:
         seed_reference_tables(db_manager)
+        # Bundled CISA KEV seeding is intentionally NOT here: the
+        # shared-infrastructure contract forbids core.storage from importing a
+        # capability domain (core.threat_intel), and this lazy import was the
+        # single edge rooting every violation chain. The composition roots
+        # that call init_database(create_tables=True) seed it instead — same
+        # in-process reasoning, same idempotent upsert triple.
         # Only once create_all and the drift check have returned: a stamp
         # the schema never reached would hide the version it is really at.
         try:

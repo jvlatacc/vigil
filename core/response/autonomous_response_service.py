@@ -1,18 +1,35 @@
 """Autonomous response service with approval workflow integration."""
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from core.agents.builtins import AgentId
 from core.response.approval_service import (
+    KERNEL_ACTION_TYPES,
     ActionStatus,
     ActionType,
     ApprovalService,
+    PendingAction,
     Reversibility,
 )
-from core.response.config import ResponseConfig
+from core.response.config import ResponseConfig, is_recon_probe
+from core.response.guards import (
+    GUARD_EVALUATION_TIMEOUT_SECONDS,
+    FindingOriginStatus,
+    GuardChain,
+    GuardState,
+    GuardVerdict,
+    shared_guard_chain,
+)
+from core.storage.service import DatabaseService
 
 logger = logging.getLogger(__name__)
+
+# An enforcement that outlives its reason is a new finding: the executor
+# refuses to dispatch a kernel action whose TTL is below the daemon's own
+# floor (contract error ttl_below_floor) instead of paying for the round trip.
+KERNEL_TTL_FLOOR_SECONDS = 60
 
 
 class AutonomousResponseService:
@@ -22,14 +39,110 @@ class AutonomousResponseService:
         self,
         approvals: Optional[ApprovalService] = None,
         config: Optional[ResponseConfig] = None,
+        guards: Optional[GuardChain] = None,
     ):
         """Initialize autonomous response service.
 
         ``config`` defaults to the approval service's band so the two never
         compare against different lines; the no-arg form reads Settings.
+        ``guards`` defaults to the process-wide :class:`GuardChain` (#944)
+        so a service that never responds never pays for one and every
+        enforcement site shares one breaker and one quota.
         """
         self.approval_service = approvals or ApprovalService(config=config)
         self.config = config or self.approval_service.config
+        self._guards = guards
+
+    def _guard_chain(self) -> GuardChain:
+        """The guard chain — the shared one, on first use (#944).
+
+        Instances made via ``__new__`` (the executor's test shape) lack the
+        attribute entirely; the shared build covers them too.
+        """
+        chain = getattr(self, "_guards", None)
+        if chain is None:
+            chain = shared_guard_chain()
+            self._guards = chain
+        return chain
+
+    def evaluate_guards(
+        self,
+        action_type: str,
+        target_ip: Optional[str],
+        hostname: Optional[str],
+        evidence_origins: Sequence[FindingOriginStatus] = (),
+        *,
+        spend_quota: bool = True,
+    ) -> GuardVerdict:
+        """The guard chain's verdict for one would-be action (#944, D1).
+
+        Ordered invariant, breaker, origin, quota; every rejection forces
+        the human-approval path. ``spend_quota=False`` is the dry-run shape
+        (judge the windows without consuming a slot).
+        """
+        return self._guard_chain().evaluate_sync(
+            action_type, target_ip, hostname, evidence_origins, spend_quota=spend_quota
+        )
+
+    def _log_guard_denial(
+        self,
+        action_id: str,
+        verdict: GuardVerdict,
+        action_type: str,
+        confidence: float,
+        evidence: Sequence[str],
+        refused: str = "guard",
+    ) -> None:
+        """Record a denied-action rationale in ai_decision_logs (#944, D6).
+
+        The action row carries the same rule; this is the decision-log twin.
+        A failed audit write must never block enforcement — create_ai_decision
+        degrades to None and logs, and an unexpected shape here is caught and
+        logged for the same reason.
+        """
+        try:
+            DatabaseService().create_ai_decision(
+                decision_id=f"guard-{refused}-{action_id}",
+                agent_id=AgentId.AUTO_RESPONDER.value,
+                decision_type="response_guard",
+                confidence_score=float(confidence),
+                reasoning=verdict.rule,
+                recommended_action=action_type,
+                decision_metadata={
+                    "guard_state": verdict.state.value,
+                    "needs_human": verdict.needs_human,
+                    "evidence": list(evidence),
+                },
+            )
+        except Exception as e:  # noqa: BLE001 — audit must never block enforcement
+            logger.error(
+                "Guard denial audit write failed for action %s: %s", action_id, e
+            )
+
+    def _claim_escalation(self, verdict: GuardVerdict) -> bool:
+        """Whether this hold may fire the once-per-OPEN escalation (#944, D4).
+
+        A breaker-open hold escalates once per OPEN period — the flood that
+        opened the breaker must not drown the queue in per-action pages —
+        and so does the hold whose own note tripped the breaker. Any other
+        hold escalates unconditionally: each pending row is a containment
+        decision a person should see. A failed claim answers False; the
+        breaker has already logged what happened.
+        """
+        if verdict.state is not GuardState.BREAKER_OPEN and not verdict.tripped:
+            return True
+        try:
+            return bool(
+                self._guard_chain().run(
+                    asyncio.wait_for(
+                        self._guard_chain().breaker.claim_escalation(),
+                        GUARD_EVALUATION_TIMEOUT_SECONDS,
+                    )
+                )
+            )
+        except Exception as e:  # noqa: BLE001 — logged above by the breaker
+            logger.error("Escalation claim failed; not escalating this hold: %s", e)
+            return False
 
     def correlate_alerts(
         self,
@@ -82,6 +195,17 @@ class AutonomousResponseService:
                 confidence += 0.15
                 reasoning.append("Lateral movement detected (T1021)")
                 indicators.append("lateral_movement")
+
+            # A scanning probe (T1046/T1595) is the deception candidate, not a
+            # containment one: a small boost that on its own stays below the
+            # review line, and an indicator the recommendation ladder reads
+            # as deceive instead of letting the finding fall into the
+            # monitor-only bands. The shared predicate is the one definition
+            # of what counts (is_recon_probe in core.response.config).
+            if is_recon_probe(mitre_predictions):
+                confidence += 0.10
+                reasoning.append("Reconnaissance scanning detected (T1046/T1595)")
+                indicators.append("recon_scanning")
 
         # Correlate CrowdStrike alerts
         if crowdstrike_alert:
@@ -139,6 +263,12 @@ class AutonomousResponseService:
             return "AUTO-ISOLATE: Confidence threshold met for automatic isolation"
         elif confidence >= self.config.review_threshold:
             return "ISOLATE WITH APPROVAL: High confidence, recommend isolation with quick approval"
+        elif "recon_scanning" in indicators:
+            # The containment bands keep precedence: a scan with enough
+            # corroborating signal to reach the review line is still an
+            # isolation case. Below it, a recon-tagged finding deceives
+            # instead of landing in the monitor-only bands.
+            return "DECEIVE: Reconnaissance probe; candidate for honey-routing into a decoy environment"
         elif confidence >= self.config.monitor_threshold:
             return "MANUAL REVIEW: Moderate confidence, requires analyst review"
         else:
@@ -152,10 +282,17 @@ class AutonomousResponseService:
         reason: str,
         evidence: List[str],
         correlation_data: Dict,
+        evidence_origins: Optional[Sequence[FindingOriginStatus]] = None,
     ) -> Optional[Dict]:
         """
         Create an isolation action (auto-executes when the approval gate
         approves it, i.e. at or above ``config.confidence_threshold``).
+
+        The guard chain runs first (#944, D1): invariant, breaker, origin
+        and quota checks interpose between the Responder's decision and the
+        approval gate. Any rejection forces pending approval — with the
+        gate's rationale on the row and in ai_decision_logs — the action is
+        never dropped and never executed against a held target.
 
         Args:
             ip_address: Target IP address
@@ -164,6 +301,10 @@ class AutonomousResponseService:
             reason: Reason for isolation
             evidence: List of evidence IDs
             correlation_data: Data from correlation analysis
+            evidence_origins: Origin stamps of the evidencing findings, as
+                stamped at ingest. The daemon pipeline always supplies them;
+                a caller that does not is judged on zero statuses (the origin
+                gate passes vacuously, logged at debug).
 
         Returns:
             Action result
@@ -174,6 +315,19 @@ class AutonomousResponseService:
         target_key = (
             ip_address if ip_address and ip_address != "unknown" else f"host:{hostname}"
         )
+
+        # The guard chain (#944, D1): invariant, breaker, origin, quota —
+        # cheapest-and-most-specific first. Checked before the approval gate
+        # here, and re-checked in execute_approved_actions before anything
+        # dispatches. A rejection does not drop the action: it forces human
+        # approval and renders the gate's rationale as the deciding rule.
+        verdict = self.evaluate_guards(
+            ActionType.ISOLATE_HOST.value,
+            ip_address,
+            hostname,
+            evidence_origins or (),
+        )
+        gate_rule = verdict.rule if verdict.needs_human else None
 
         try:
             action, inserted = self.approval_service._put_action(
@@ -189,6 +343,7 @@ class AutonomousResponseService:
                 created_by=AgentId.AUTO_RESPONDER.value,
                 parameters={"hostname": hostname, "correlation": correlation_data},
                 idempotency_key=f"{ActionType.ISOLATE_HOST.value}:{target_key}",
+                gate_rule=gate_rule,
             )
 
             if not inserted:
@@ -248,16 +403,35 @@ class AutonomousResponseService:
                 logger.info(
                     f"Action {action.action_id} pending approval (confidence: {confidence:.2%})"
                 )
-                return {
+                # A held action carries its gate's rationale on the result
+                # and the row, lands it in ai_decision_logs (#944, D6), and
+                # escalates through Slack/PagerDuty — nothing is dropped
+                # silently. While the breaker is OPEN the escalation is
+                # claimed once per OPEN period (D4), not once per action.
+                result: Dict = {
                     "status": "pending_approval",
                     "action_id": action.action_id,
                     "message": "Isolation action created, awaiting analyst approval",
                     "confidence": confidence,
                     "requires_approval": True,
                 }
+                if verdict.needs_human:
+                    result["guard"] = {
+                        "state": verdict.state.value,
+                        "rule": verdict.rule,
+                    }
+                    self._log_guard_denial(
+                        action.action_id,
+                        verdict,
+                        ActionType.ISOLATE_HOST.value,
+                        confidence,
+                        evidence,
+                    )
+                    result["guard_escalate"] = self._claim_escalation(verdict)
+                return result
 
         except Exception as e:
-            logger.error(f"Error creating isolation action: {e}")
+            logger.error("Error creating isolation action: %s", e)
             return {"error": str(e)}
 
     def _execute_isolation(
@@ -287,6 +461,7 @@ class AutonomousResponseService:
         confidence: float,
         reason: str,
         evidence: List[str],
+        evidence_origins: Optional[Sequence[FindingOriginStatus]] = None,
     ) -> Optional[Dict]:
         """Create a honey-route action (feature 5) for a corroborated recon source.
 
@@ -296,10 +471,31 @@ class AutonomousResponseService:
         (``config.honey_route_floor``): at or above it the row auto-approves
         and executes inline through the steering backend; below it the row
         waits for an analyst exactly as everything else does.
+
+        The guard chain runs first, the same fail-closed gate
+        ``create_isolation_action`` passes (#944, D1): a transparent
+        redirect is still machine-speed response, so invariant, breaker,
+        origin and quota verdicts interpose before the approval gate, and
+        the execution re-check re-judges the row like every other.
+        ``evidence_origins`` mirrors the isolation contract; a caller that
+        does not supply them is judged on zero statuses (the origin gate
+        passes vacuously, logged at debug).
         """
         if not attacker_ip or attacker_ip == "unknown":
             logger.warning("Honey-route action skipped: no actionable source IP")
             return None
+
+        # The guard chain (#944, D1): invariant, breaker, origin, quota —
+        # cheapest-and-most-specific first. The target is the SOURCE, so the
+        # never-quarantine invariant reads the attacker IP (a protected
+        # source waits for a person); a honey-route row names no hostname.
+        verdict = self.evaluate_guards(
+            ActionType.HONEY_ROUTE.value,
+            attacker_ip,
+            None,
+            evidence_origins or (),
+        )
+        gate_rule = verdict.rule if verdict.needs_human else None
 
         try:
             action, inserted = self.approval_service._put_action(
@@ -320,6 +516,7 @@ class AutonomousResponseService:
                 },
                 reversibility=Reversibility.REVERSIBLE,
                 idempotency_key=f"{ActionType.HONEY_ROUTE.value}:{attacker_ip}",
+                gate_rule=gate_rule,
             )
 
             if not inserted:
@@ -369,19 +566,62 @@ class AutonomousResponseService:
                     f"Honey-route action {action.action_id} pending approval "
                     f"(confidence: {confidence:.2%})"
                 )
-                return {
+                result: Dict = {
                     "status": "pending_approval",
                     "action_id": action.action_id,
                     "message": "Honey-route action created, awaiting analyst approval",
                     "confidence": confidence,
                     "requires_approval": True,
                 }
+                if verdict.needs_human:
+                    # A held action carries its gate's rationale on the
+                    # result and the row, lands it in ai_decision_logs
+                    # (#944, D6), and escalates through Slack/PagerDuty —
+                    # nothing is dropped silently. While the breaker is
+                    # OPEN the escalation is claimed once per OPEN period
+                    # (D4), not once per action.
+                    result["guard"] = {
+                        "state": verdict.state.value,
+                        "rule": verdict.rule,
+                    }
+                    self._log_guard_denial(
+                        action.action_id,
+                        verdict,
+                        ActionType.HONEY_ROUTE.value,
+                        confidence,
+                        evidence,
+                    )
+                    result["guard_escalate"] = self._claim_escalation(verdict)
+                return result
 
         except Exception as e:
             logger.error("Error creating honey-route action: %s", e)
             return {"error": str(e)}
 
-    def _execute_honey_route(self, action, ttl_seconds: Optional[int] = None) -> Dict:
+    def _execute_honey_route(
+        self, action, ttl_seconds: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Execute one approved honey_route row through its steering backend.
+
+        Two row shapes share the ``honey_route`` action type after the
+        release merge, so the executor dispatches on the row's own
+        parameter shape: rows carrying ``decoy_id`` were minted by the MTD
+        band and route through the honey_router integration (the registry
+        contract); rows carrying ``attacker_ip``/``destination_ips``/``ports``
+        were minted by the feature-5 spine and steer through the
+        DeceptionLeaseService backend — the dry-run default and the
+        rollback handle in the result. Neither branch can see the other's
+        rows (the creators write disjoint parameter sets), and both keep
+        their own honest-failure contract.
+        """
+        params = getattr(action, "parameters", None) or {}
+        if params.get("decoy_id"):
+            return self._execute_honey_route_via_registry(action)
+        return self._execute_honey_route_via_lease(action, ttl_seconds)
+
+    def _execute_honey_route_via_lease(
+        self, action, ttl_seconds: Optional[int] = None
+    ) -> Dict:
         """Steer one approved honey-route action; the first real rollback arm.
 
         Mints the lease row (or reuses the one a crashed attempt left),
@@ -460,6 +700,14 @@ class AutonomousResponseService:
         """
         Execute all approved actions that haven't been executed yet.
 
+        Re-checks the never-quarantine invariant (#944) before dispatching:
+        the create path and this path are different transactions, and an
+        auto-approval released at creation time is not a decision that
+        survives a protected asset declared in between. A person-approved
+        row proceeds — the deliberate emergency valve; an auto-approved row
+        against a protected asset is refused and recorded, never executed
+        and never dropped silently.
+
         Returns:
             List of execution results
         """
@@ -474,16 +722,52 @@ class AutonomousResponseService:
                 # Skip if already executed
                 if action.executed_at:
                     continue
-                # Released by a confidence figure and no person: whoever
-                # supplied that figure also chose the outcome.
-                if not action.requires_approval and not action.approved_by:
-                    logger.warning(
-                        "Action %s was never decided by a person; not executing",
-                        action.action_id,
-                    )
-                    continue
 
                 params = action.parameters or {}
+
+                # The execution re-check (#944, D1): creation and execution
+                # are different transactions, so a row no person decided is
+                # re-judged by the guard chain before anything dispatches —
+                # invariant, breaker, and the hard quota ceiling. The origin
+                # stamps were judged when the action was created; the
+                # executor holds no findings to re-read them from. A held
+                # verdict is refused and durably recorded — never executed,
+                # never dropped silently. A soft quota window does not block
+                # here: the row was already released, and only the hard
+                # ceiling (D3) refuses at execution. A row a person decided
+                # proceeds whatever the chain answers — the deliberate
+                # emergency valve: the breaker suspends machine response,
+                # and a person's decision is not machine response.
+                if not action.approved_by:
+                    verdict = self.evaluate_guards(
+                        action.action_type,
+                        action.target,
+                        params.get("hostname"),
+                        spend_quota=False,
+                    )
+                    if verdict.state not in (
+                        GuardState.ALLOWED,
+                        GuardState.QUOTA_SOFT,
+                    ):
+                        logger.warning(
+                            "Action %s held by the execution re-check: %s",
+                            action.action_id,
+                            verdict.rule,
+                        )
+                        self.approval_service.refuse_auto_action(
+                            action.action_id, verdict.rule
+                        )
+                        continue
+
+                    # Released by a confidence figure and no person: whoever
+                    # supplied that figure also chose the outcome.
+                    if not action.requires_approval:
+                        logger.warning(
+                            "Action %s was never decided by a person; not executing",
+                            action.action_id,
+                        )
+                        continue
+
                 result: Optional[Dict] = None
 
                 if action.action_type == "isolate_host":
@@ -506,6 +790,9 @@ class AutonomousResponseService:
                     )
                 elif action.action_type == "honey_route":
                     result = self._execute_honey_route(action)
+
+                elif action.action_type in KERNEL_ACTION_TYPES:
+                    result = self._execute_kernel_action(action=action)
 
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.
@@ -604,3 +891,143 @@ class AutonomousResponseService:
         except Exception as e:  # noqa: BLE001
             logger.exception("Cloudflare action %s failed", action_type)
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # MTD honey-route executor
+    # ------------------------------------------------------------------
+
+    def _execute_honey_route_via_registry(self, action) -> Dict[str, Any]:
+        """Execute an approved honey_route through the honey_router integration.
+
+        The MTD band's row shape (``decoy_id`` parameter): the backend is
+        the honey_router integration's registry contract, unchanged from
+        main. Lazy import and the ``is_integration_enabled`` gate are the
+        Cloudflare precedent: the enforcement modules (and their storage
+        imports) stay off installs that never enable the integration. With
+        no backend configured this returns an honest structured failure —
+        the ``isolate_host`` rule: a fabricated success would record a
+        routing that never happened, and the attacker would keep probing
+        production.
+        """
+        from core.config import is_integration_enabled
+
+        if not is_integration_enabled("honey_router"):
+            return {
+                "success": False,
+                "error": "unsupported_action_type",
+                "message": "No enforcement backend is configured for honey-routing",
+            }
+
+        params = action.parameters or {}
+        decoy_id = params.get("decoy_id")
+        if not decoy_id:
+            return {
+                "success": False,
+                "error": "missing_decoy_id",
+                "message": "honey_route action carries no decoy_id parameter",
+            }
+
+        try:
+            from core.integrations.honey_router import route as honey_router
+        except Exception as e:  # noqa: BLE001
+            return {
+                "success": False,
+                "error": f"core.integrations.honey_router unavailable: {e}",
+            }
+
+        return honey_router.route(
+            attacker_ip=action.target,
+            decoy_id=str(decoy_id),
+            ttl_seconds=params.get("session_ttl_seconds"),
+        )
+
+    # ------------------------------------------------------------------
+    # Kernel enforcement executor (services/enforcement daemon)
+    # ------------------------------------------------------------------
+
+    def _execute_kernel_action(self, action: PendingAction) -> Dict[str, Any]:
+        """Execute an approved kernel action through the ebpf_xdp helpers.
+
+        The slice's module-level helpers own config resolution and the
+        idempotency_key convention (``xdp_block_ip:{ip}`` and siblings); this
+        branch supplies the approval row's ``action_id`` — so a retried
+        dispatch replays against the daemon's idempotency instead of
+        double-enforcing — the TTL from the action's ``parameters``, and the
+        reason. A success reply carries the daemon's kernel evidence, which
+        ``mark_executed`` stores verbatim; refusals and transport failures are
+        ``success: False`` results for ``mark_failed`` — never a faked success.
+        """
+        params = action.parameters or {}
+
+        # TTL rides the action's parameters — no approval_actions schema change.
+        raw_ttl = params.get("ttl_seconds")
+        if raw_ttl is not None:
+            try:
+                ttl = int(raw_ttl)
+            except (TypeError, ValueError):
+                return {
+                    "success": False,
+                    "error": "ttl_invalid",
+                    "message": f"ttl_seconds {raw_ttl!r} is not an integer",
+                }
+            if ttl < KERNEL_TTL_FLOOR_SECONDS:
+                return {
+                    "success": False,
+                    "error": "ttl_below_floor",
+                    "message": (
+                        f"ttl_seconds={ttl} is below the "
+                        f"{KERNEL_TTL_FLOOR_SECONDS}s floor"
+                    ),
+                }
+        else:
+            ttl = None  # the integration's configured default applies
+
+        # Lazy import so environments that never enable kernel enforcement do
+        # not pay for the integration package — the Cloudflare convention.
+        try:
+            from core.integrations.ebpf_xdp import tool as kernel_tool
+        except Exception as e:  # noqa: BLE001
+            return {
+                "success": False,
+                "error": f"core.integrations.ebpf_xdp.tool unavailable: {e}",
+            }
+
+        try:
+            if action.action_type == ActionType.XDP_BLOCK_IP.value:
+                return kernel_tool.xdp_block_ip(
+                    ip=params.get("ip") or action.target,
+                    reason=action.reason,
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+            if action.action_type == ActionType.SOCKET_REDIRECT.value:
+                return kernel_tool.xdp_redirect_socket(
+                    ip=params.get("ip") or action.target,
+                    reason=action.reason,
+                    port=int(params.get("port") or 0),
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+            if action.action_type == ActionType.INTERDICT_PROCESS.value:
+                raw_pid = params.get("pid") or action.target
+                try:
+                    pid = int(raw_pid)
+                except (TypeError, ValueError):
+                    return {
+                        "success": False,
+                        "error": "pid_invalid",
+                        "message": f"pid {raw_pid!r} is not an integer",
+                    }
+                return kernel_tool.xdp_interdict_process(
+                    pid=pid,
+                    reason=action.reason,
+                    ttl_seconds=ttl,
+                    action_id=action.action_id,
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.exception("Kernel action %s failed", action.action_type)
+            return {"success": False, "error": str(e)}
+        return {
+            "success": False,
+            "error": f"unknown kernel action {action.action_type}",
+        }

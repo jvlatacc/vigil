@@ -591,6 +591,52 @@ ATTACK_LAYER_TOOLS = [
     },
 ]
 
+# Decoy-session intel — the read side of the MTD capture plane. The backend
+# tool lives beside the capture module it reads (core.cases.decoy_session_
+# capture), and the transcripts it answers with are evidence: attacker-typed
+# credentials ride in them as payload. That is why this family is read-only
+# and principal-scoped — an unattributed caller is refused, not logged as
+# "unknown" like a recall read.
+DECOY_TOOLS = [
+    {
+        "name": "query_decoy_sessions",
+        "description": (
+            "Read decoy sessions captured by the MTD capture plane, newest "
+            "first: one row per session with the decoy it landed on, the "
+            "attacker's entity key, the session window, the routing action "
+            "that diverted it, auth attempts, commands run, files dropped, "
+            "and the ATT&CK techniques observed. Filter by exact session_id "
+            "or decoy_service. Read-only: this never routes, unrouties, or "
+            "changes anything. For an attacker-scoped view across sessions, "
+            "recall_entity their ip:* key instead. Requires a principal: a "
+            "call with no one bound is refused."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": (
+                        "Exact session id (the decoy session's finding id). "
+                        "Omit to list newest first."
+                    ),
+                },
+                "decoy_service": {
+                    "type": "string",
+                    "description": (
+                        "Filter to one decoy, e.g. 'ssh-decoy-01'. Omit for all."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum sessions to return (capped at 200)",
+                    "default": 20,
+                },
+            },
+        },
+    },
+]
+
 # Approval Tools
 APPROVAL_TOOLS = [
     {
@@ -898,6 +944,7 @@ ALL_TOOLS = (
     + DEEPTEMPO_FINDING_TOOLS
     + ATTACK_LAYER_TOOLS
     + THREAT_INTEL_TOOLS
+    + DECOY_TOOLS
     + APPROVAL_TOOLS
     + DECEPTION_TOOLS
     + MEMORY_TOOLS

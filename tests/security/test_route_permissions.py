@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("JWT_SECRET_KEY", "test-only-secret-not-for-prod")
@@ -121,6 +122,88 @@ def test_a_route_refuses_a_user_who_lacks_its_permission(
         app.dependency_overrides.pop(auth_module.get_current_user, None)
 
     assert response.status_code == 403, (method, path, response.text[:200])
+
+
+# Reads of integration configuration expose which vendors are configured,
+# which credentials are set, and previews of the credentials themselves
+# (E6). Holding either read grant is enough — the rows list every name a
+# route may accept, and the caller below is granted none of them.
+READS_GATED = [
+    ("GET", "/api/config/integrations", ("integrations.read", "settings.read")),
+    (
+        "GET",
+        "/api/config/integrations/status",
+        ("integrations.read", "settings.read"),
+    ),
+    ("GET", "/api/config/github", ("integrations.read", "settings.read")),
+    ("GET", "/api/config/darktrace", ("integrations.read", "settings.read")),
+]
+
+
+@pytest.mark.parametrize("method,path,permissions", READS_GATED)
+def test_a_read_route_refuses_a_caller_who_holds_none_of_its_permissions(
+    method, path, permissions, monkeypatch
+):
+    viewer = User(
+        user_id="viewer",
+        username="vera_viewer",
+        email="v@test.local",
+        password_hash="",
+        role_id="role-viewer",
+        is_active=True,
+        mfa_enabled=False,
+    )
+
+    # Holds everything except every permission the route may ask for.
+    def _check(user_id, perm, session=None):
+        return perm not in permissions
+
+    monkeypatch.setattr("core.auth.auth_service.AuthService.check_permission", _check)
+    app = backend_main.app
+    app.dependency_overrides[auth_module.get_current_active_user] = lambda: viewer
+    app.dependency_overrides[auth_module.get_current_user] = lambda: viewer
+    try:
+        response = TestClient(app).request(method, path)
+    finally:
+        app.dependency_overrides.pop(auth_module.get_current_active_user, None)
+        app.dependency_overrides.pop(auth_module.get_current_user, None)
+
+    assert response.status_code == 403, (method, path, response.text[:200])
+    # The refusal names the grant the deployment can turn on, not just a number.
+    assert "integrations.read or settings.read" in response.text, response.text[:200]
+
+
+def test_the_integration_read_gate_accepts_either_grant(monkeypatch):
+    """Either read grant opens an integration read — any-of, not all-of.
+
+    The default Analyst role holds both names; a deployment that narrows a
+    role to one of them keeps its reads working. The refusal half of this
+    semantics is the READS_GATED rows above.
+    """
+    from core.auth.permissions import require_permission
+
+    held = {"integrations.read"}
+
+    def _check(user_id, perm, session=None):
+        return perm in held
+
+    monkeypatch.setattr("core.auth.auth_service.AuthService.check_permission", _check)
+    user = User(
+        user_id="analyst",
+        username="andy_analyst",
+        email="a@test.local",
+        password_hash="",
+        role_id="role-analyst",
+        is_active=True,
+        mfa_enabled=False,
+    )
+    check = require_permission("integrations.read", "settings.read")
+    assert check(request=None, user=user) is user  # type: ignore[arg-type]
+
+    held.clear()
+    with pytest.raises(HTTPException) as denied:
+        check(request=None, user=user)  # type: ignore[arg-type]
+    assert denied.value.status_code == 403
 
 
 def test_every_config_write_asks_for_a_permission():
