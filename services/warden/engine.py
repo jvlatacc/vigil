@@ -362,7 +362,11 @@ class DecisionLoop:
                     now=now,
                 )
                 self._record_decision(
-                    decision, rule, target, now=now, folded=candidate.folded
+                    decision,
+                    candidate.rule,
+                    candidate.target,
+                    now=now,
+                    folded=candidate.folded,
                 )
 
     def _count_slm_outcome(self, candidate: MatchedCandidate) -> None:

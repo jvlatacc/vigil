@@ -557,7 +557,13 @@ class TestEngineWiring:
 
         records = journal_records(journal)
         assert len(records) == 1
-        assert records[0]["execution"]["status"] == "refused"
+        # The wire's execution vocabulary has no "refused" — refusals are
+        # non-enforcement records (action_type "none", executor
+        # "decision") with the refusal code riding decision_rule.
+        assert records[0]["action_type"] == "none"
+        assert records[0]["execution"]["status"] == "failed"
+        assert records[0]["execution"]["executor"] == "decision"
+        assert "below-confidence-floor" in records[0]["decision_rule"]
         assert "slm 0.80" in records[0]["decision_rule"]
         assert slm_metrics(loop._deps.metrics) == {"deciding": 1.0}
 
