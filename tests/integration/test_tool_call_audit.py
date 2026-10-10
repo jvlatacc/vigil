@@ -259,8 +259,7 @@ class TestTriggerAndWriterAgree:
         with owner.connect() as conn:
             target = conn.execute(
                 text(
-                    "SELECT id FROM tool_call_audit "
-                    "ORDER BY id ASC OFFSET 1 LIMIT 1"
+                    "SELECT id FROM tool_call_audit " "ORDER BY id ASC OFFSET 1 LIMIT 1"
                 )
             ).scalar_one()
             conn.execute(

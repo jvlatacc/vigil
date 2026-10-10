@@ -9,15 +9,13 @@ real Postgres in tests/integration/test_tool_call_audit.py.
 from __future__ import annotations
 
 from contextlib import contextmanager
-
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from opentelemetry import trace
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 from core.audit import tool_calls
 from core.storage.models import ToolCallAudit
@@ -100,9 +98,7 @@ class TestTheTraceId:
     def test_an_unreadable_context_is_telemetry_off(self, monkeypatch):
         # An instrumented stand-in whose trace id is not an int is the same
         # as telemetry being off: the row lands, the id stays empty.
-        monkeypatch.setattr(
-            trace, "get_current_span", lambda: self._span("not-an-int")
-        )
+        monkeypatch.setattr(trace, "get_current_span", lambda: self._span("not-an-int"))
         assert tool_calls.current_trace_id() is None
 
 
@@ -166,9 +162,9 @@ class TestTheVerifier:
             _record(store, tool_name=f"tool_{i}")
         target = _rows(store)[1]
 
-        store.query(ToolCallAudit).filter(
-            ToolCallAudit.id == target.id
-        ).update({"outcome": "ok-but-edited"})
+        store.query(ToolCallAudit).filter(ToolCallAudit.id == target.id).update(
+            {"outcome": "ok-but-edited"}
+        )
         store.commit()
 
         verdict = tool_calls.verify_chain()

@@ -698,9 +698,7 @@ def test_a_second_id_token_verifies_from_the_cached_key_set(stub):
         client_id=stub.CLIENT_ID,
         scopes=("openid",),
         groups_claim="groups",
-        http_client=httpx.AsyncClient(
-            transport=httpx.MockTransport(counting_handler)
-        ),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(counting_handler)),
     )
     for nonce in ("nonce-1", "nonce-2"):
         token = stub.sign(id_token_claims(nonce=nonce))

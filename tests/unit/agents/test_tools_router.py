@@ -56,9 +56,7 @@ def _sqlite_store(*tables, users=()):
     session = sessionmaker(bind=engine)()
     if users:
         for role_id in {u[2] for u in users}:
-            permissions = (
-                {TOOL_EXECUTE_PERMISSION: True} if role_id == "r-yes" else {}
-            )
+            permissions = {TOOL_EXECUTE_PERMISSION: True} if role_id == "r-yes" else {}
             session.add(
                 Role(
                     role_id=role_id,

@@ -18,12 +18,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from core.agents import internal_auth, tool_registry, tools_router
+from core.agents import internal_auth, tools_router
 from core.audit import tool_calls
 from core.auth import tool_principal
 from core.integrations.mcp.registry import MCPRegistry
 from core.storage.models import ToolCallAudit
-
 from tests.unit.agents.test_tools_router import _ground_audit_and_permission_store
 
 BOUNDS = {"max_rows": 5, "timeout_ms": 5000}
@@ -120,9 +119,7 @@ class TestDenialAtTheBoundary:
 
 class TestAllowance:
     def test_a_caller_with_the_grant_runs_and_is_recorded(self, app, store):
-        response = _invoke(
-            app, principal=tool_principal.mint("rory"), run_id="run-77"
-        )
+        response = _invoke(app, principal=tool_principal.mint("rory"), run_id="run-77")
 
         assert response.status_code == 200
         assert response.json()["ok"] is True

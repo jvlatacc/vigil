@@ -119,18 +119,16 @@ def invoke(monkeypatch, registry):
     monkeypatch.setattr(mcp_client, "process_mcp_client", lambda: fake)
     # Every call is audited now; these runs carry no principal, so the rows
     # name the agent. The store is SQLite, as in test_tools_router.py.
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
     from contextlib import contextmanager as _cm
-
-    from core.audit import tool_calls
-    from core.storage.models import ToolCallAudit
-    from core.storage.models.base import Base
 
     from sqlalchemy import BigInteger, create_engine
     from sqlalchemy.ext.compiler import compiles
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
+
+    from core.audit import tool_calls
+    from core.storage.models import ToolCallAudit
+    from core.storage.models.base import Base
 
     @compiles(BigInteger, "sqlite")
     def _bigint_is_integer_on_sqlite(type_, compiler, **kw):  # pragma: no cover

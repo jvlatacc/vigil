@@ -44,14 +44,12 @@ class _StubServer:
 
 @pytest.fixture
 def store(monkeypatch):
-    from sqlalchemy import create_engine
+    from sqlalchemy import BigInteger, create_engine
+    from sqlalchemy.ext.compiler import compiles
     from sqlalchemy.orm import sessionmaker
 
     from core.storage.models import ToolCallAudit
     from core.storage.models.base import Base
-
-    from sqlalchemy import BigInteger
-    from sqlalchemy.ext.compiler import compiles
 
     @compiles(BigInteger, "sqlite")
     def _bigint_is_integer_on_sqlite(type_, compiler, **kw):  # pragma: no cover
@@ -151,12 +149,8 @@ class TestDeniedToolCalls:
         assert row.args_sha256 is not None
         assert row.args_bytes is not None
 
-    async def test_a_write_that_fails_fails_the_request(
-        self, monkeypatch, store
-    ):
+    async def test_a_write_that_fails_fails_the_request(self, monkeypatch, store):
         """The deny row is the enforcement record; without it there is none."""
-        from services.api import mcp_surface
-
         server = _StubServer()
         gate = _gate(monkeypatch, server, allowed=False)
 
@@ -207,7 +201,9 @@ class TestWhatIsNotAToolCall:
         server = _StubServer()
         gate = _gate(monkeypatch, server, allowed=False)
 
-        status = await _post(gate, b'{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}')
+        status = await _post(
+            gate, b'{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}'
+        )
 
         assert status == 200
         assert server.called == 1  # setup reaches the server unimpeded
@@ -225,8 +221,6 @@ class TestWhatIsNotAToolCall:
         assert _rows(store) == []
 
     async def test_a_get_stream_is_not_a_tool_call(self, monkeypatch, store):
-        from services.api import mcp_surface
-
         server = _StubServer()
         gate = _gate(monkeypatch, server, allowed=False)
 
