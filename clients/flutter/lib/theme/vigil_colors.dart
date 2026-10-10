@@ -175,92 +175,170 @@ class VigilColors extends ThemeExtension<VigilColors> {
   );
 
   /// Token names in tokens.json order.
-  static const List<String> tokenNames = ['bg0', 'bg1', 'bg2', 'bg3', 'bg4', 'ln0', 'ln1', 'ln2', 'tx0', 'tx1', 'tx2', 'tx3', 'ac', 'ac-bg', 'ac-ln', 'ac-tx', 'good', 'good-bg', 'good-ln', 'fair', 'fair-bg', 'fair-ln', 'poor', 'poor-bg', 'poor-ln', 'sev-crit', 'sev-high', 'sev-med', 'sev-low', 'sev-none', 'vio', 'vio-bg', 'scrim', 'shadow', 'spot', 'dt-red', 'dt-black', 'dt-silver'];
+  static const List<String> tokenNames = [
+    'bg0',
+    'bg1',
+    'bg2',
+    'bg3',
+    'bg4',
+    'ln0',
+    'ln1',
+    'ln2',
+    'tx0',
+    'tx1',
+    'tx2',
+    'tx3',
+    'ac',
+    'ac-bg',
+    'ac-ln',
+    'ac-tx',
+    'good',
+    'good-bg',
+    'good-ln',
+    'fair',
+    'fair-bg',
+    'fair-ln',
+    'poor',
+    'poor-bg',
+    'poor-ln',
+    'sev-crit',
+    'sev-high',
+    'sev-med',
+    'sev-low',
+    'sev-none',
+    'vio',
+    'vio-bg',
+    'scrim',
+    'shadow',
+    'spot',
+    'dt-red',
+    'dt-black',
+    'dt-silver'
+  ];
 
   /// Color for [name]; throws on unknown tokens.
   Color byName(String name) => switch (name) {
-      'bg0' => bg0,
-      'bg1' => bg1,
-      'bg2' => bg2,
-      'bg3' => bg3,
-      'bg4' => bg4,
-      'ln0' => ln0,
-      'ln1' => ln1,
-      'ln2' => ln2,
-      'tx0' => tx0,
-      'tx1' => tx1,
-      'tx2' => tx2,
-      'tx3' => tx3,
-      'ac' => ac,
-      'ac-bg' => acBg,
-      'ac-ln' => acLn,
-      'ac-tx' => acTx,
-      'good' => good,
-      'good-bg' => goodBg,
-      'good-ln' => goodLn,
-      'fair' => fair,
-      'fair-bg' => fairBg,
-      'fair-ln' => fairLn,
-      'poor' => poor,
-      'poor-bg' => poorBg,
-      'poor-ln' => poorLn,
-      'sev-crit' => sevCrit,
-      'sev-high' => sevHigh,
-      'sev-med' => sevMed,
-      'sev-low' => sevLow,
-      'sev-none' => sevNone,
-      'vio' => vio,
-      'vio-bg' => vioBg,
-      'scrim' => scrim,
-      'shadow' => shadow,
-      'spot' => spot,
-      'dt-red' => dtRed,
-      'dt-black' => dtBlack,
-      'dt-silver' => dtSilver,
-      _ => throw ArgumentError('Unknown Vigil color token: $name'),
-  };
+        'bg0' => bg0,
+        'bg1' => bg1,
+        'bg2' => bg2,
+        'bg3' => bg3,
+        'bg4' => bg4,
+        'ln0' => ln0,
+        'ln1' => ln1,
+        'ln2' => ln2,
+        'tx0' => tx0,
+        'tx1' => tx1,
+        'tx2' => tx2,
+        'tx3' => tx3,
+        'ac' => ac,
+        'ac-bg' => acBg,
+        'ac-ln' => acLn,
+        'ac-tx' => acTx,
+        'good' => good,
+        'good-bg' => goodBg,
+        'good-ln' => goodLn,
+        'fair' => fair,
+        'fair-bg' => fairBg,
+        'fair-ln' => fairLn,
+        'poor' => poor,
+        'poor-bg' => poorBg,
+        'poor-ln' => poorLn,
+        'sev-crit' => sevCrit,
+        'sev-high' => sevHigh,
+        'sev-med' => sevMed,
+        'sev-low' => sevLow,
+        'sev-none' => sevNone,
+        'vio' => vio,
+        'vio-bg' => vioBg,
+        'scrim' => scrim,
+        'shadow' => shadow,
+        'spot' => spot,
+        'dt-red' => dtRed,
+        'dt-black' => dtBlack,
+        'dt-silver' => dtSilver,
+        _ => throw ArgumentError('Unknown Vigil color token: $name'),
+      };
 
   @override
-  VigilColors copyWith({Color? bg0, Color? bg1, Color? bg2, Color? bg3, Color? bg4, Color? ln0, Color? ln1, Color? ln2, Color? tx0, Color? tx1, Color? tx2, Color? tx3, Color? ac, Color? acBg, Color? acLn, Color? acTx, Color? good, Color? goodBg, Color? goodLn, Color? fair, Color? fairBg, Color? fairLn, Color? poor, Color? poorBg, Color? poorLn, Color? sevCrit, Color? sevHigh, Color? sevMed, Color? sevLow, Color? sevNone, Color? vio, Color? vioBg, Color? scrim, Color? shadow, Color? spot, Color? dtRed, Color? dtBlack, Color? dtSilver}) => VigilColors(
-      bg0: bg0 ?? this.bg0,
-      bg1: bg1 ?? this.bg1,
-      bg2: bg2 ?? this.bg2,
-      bg3: bg3 ?? this.bg3,
-      bg4: bg4 ?? this.bg4,
-      ln0: ln0 ?? this.ln0,
-      ln1: ln1 ?? this.ln1,
-      ln2: ln2 ?? this.ln2,
-      tx0: tx0 ?? this.tx0,
-      tx1: tx1 ?? this.tx1,
-      tx2: tx2 ?? this.tx2,
-      tx3: tx3 ?? this.tx3,
-      ac: ac ?? this.ac,
-      acBg: acBg ?? this.acBg,
-      acLn: acLn ?? this.acLn,
-      acTx: acTx ?? this.acTx,
-      good: good ?? this.good,
-      goodBg: goodBg ?? this.goodBg,
-      goodLn: goodLn ?? this.goodLn,
-      fair: fair ?? this.fair,
-      fairBg: fairBg ?? this.fairBg,
-      fairLn: fairLn ?? this.fairLn,
-      poor: poor ?? this.poor,
-      poorBg: poorBg ?? this.poorBg,
-      poorLn: poorLn ?? this.poorLn,
-      sevCrit: sevCrit ?? this.sevCrit,
-      sevHigh: sevHigh ?? this.sevHigh,
-      sevMed: sevMed ?? this.sevMed,
-      sevLow: sevLow ?? this.sevLow,
-      sevNone: sevNone ?? this.sevNone,
-      vio: vio ?? this.vio,
-      vioBg: vioBg ?? this.vioBg,
-      scrim: scrim ?? this.scrim,
-      shadow: shadow ?? this.shadow,
-      spot: spot ?? this.spot,
-      dtRed: dtRed ?? this.dtRed,
-      dtBlack: dtBlack ?? this.dtBlack,
-      dtSilver: dtSilver ?? this.dtSilver,
-  );
+  VigilColors copyWith(
+          {Color? bg0,
+          Color? bg1,
+          Color? bg2,
+          Color? bg3,
+          Color? bg4,
+          Color? ln0,
+          Color? ln1,
+          Color? ln2,
+          Color? tx0,
+          Color? tx1,
+          Color? tx2,
+          Color? tx3,
+          Color? ac,
+          Color? acBg,
+          Color? acLn,
+          Color? acTx,
+          Color? good,
+          Color? goodBg,
+          Color? goodLn,
+          Color? fair,
+          Color? fairBg,
+          Color? fairLn,
+          Color? poor,
+          Color? poorBg,
+          Color? poorLn,
+          Color? sevCrit,
+          Color? sevHigh,
+          Color? sevMed,
+          Color? sevLow,
+          Color? sevNone,
+          Color? vio,
+          Color? vioBg,
+          Color? scrim,
+          Color? shadow,
+          Color? spot,
+          Color? dtRed,
+          Color? dtBlack,
+          Color? dtSilver}) =>
+      VigilColors(
+        bg0: bg0 ?? this.bg0,
+        bg1: bg1 ?? this.bg1,
+        bg2: bg2 ?? this.bg2,
+        bg3: bg3 ?? this.bg3,
+        bg4: bg4 ?? this.bg4,
+        ln0: ln0 ?? this.ln0,
+        ln1: ln1 ?? this.ln1,
+        ln2: ln2 ?? this.ln2,
+        tx0: tx0 ?? this.tx0,
+        tx1: tx1 ?? this.tx1,
+        tx2: tx2 ?? this.tx2,
+        tx3: tx3 ?? this.tx3,
+        ac: ac ?? this.ac,
+        acBg: acBg ?? this.acBg,
+        acLn: acLn ?? this.acLn,
+        acTx: acTx ?? this.acTx,
+        good: good ?? this.good,
+        goodBg: goodBg ?? this.goodBg,
+        goodLn: goodLn ?? this.goodLn,
+        fair: fair ?? this.fair,
+        fairBg: fairBg ?? this.fairBg,
+        fairLn: fairLn ?? this.fairLn,
+        poor: poor ?? this.poor,
+        poorBg: poorBg ?? this.poorBg,
+        poorLn: poorLn ?? this.poorLn,
+        sevCrit: sevCrit ?? this.sevCrit,
+        sevHigh: sevHigh ?? this.sevHigh,
+        sevMed: sevMed ?? this.sevMed,
+        sevLow: sevLow ?? this.sevLow,
+        sevNone: sevNone ?? this.sevNone,
+        vio: vio ?? this.vio,
+        vioBg: vioBg ?? this.vioBg,
+        scrim: scrim ?? this.scrim,
+        shadow: shadow ?? this.shadow,
+        spot: spot ?? this.spot,
+        dtRed: dtRed ?? this.dtRed,
+        dtBlack: dtBlack ?? this.dtBlack,
+        dtSilver: dtSilver ?? this.dtSilver,
+      );
 
   @override
   VigilColors lerp(VigilColors? other, double t) {
@@ -311,45 +389,84 @@ class VigilColors extends ThemeExtension<VigilColors> {
   bool operator ==(Object other) =>
       identical(other, this) ||
       other is VigilColors &&
-            other.bg0 == bg0
-            && other.bg1 == bg1
-            && other.bg2 == bg2
-            && other.bg3 == bg3
-            && other.bg4 == bg4
-            && other.ln0 == ln0
-            && other.ln1 == ln1
-            && other.ln2 == ln2
-            && other.tx0 == tx0
-            && other.tx1 == tx1
-            && other.tx2 == tx2
-            && other.tx3 == tx3
-            && other.ac == ac
-            && other.acBg == acBg
-            && other.acLn == acLn
-            && other.acTx == acTx
-            && other.good == good
-            && other.goodBg == goodBg
-            && other.goodLn == goodLn
-            && other.fair == fair
-            && other.fairBg == fairBg
-            && other.fairLn == fairLn
-            && other.poor == poor
-            && other.poorBg == poorBg
-            && other.poorLn == poorLn
-            && other.sevCrit == sevCrit
-            && other.sevHigh == sevHigh
-            && other.sevMed == sevMed
-            && other.sevLow == sevLow
-            && other.sevNone == sevNone
-            && other.vio == vio
-            && other.vioBg == vioBg
-            && other.scrim == scrim
-            && other.shadow == shadow
-            && other.spot == spot
-            && other.dtRed == dtRed
-            && other.dtBlack == dtBlack
-            && other.dtSilver == dtSilver;
+          other.bg0 == bg0 &&
+          other.bg1 == bg1 &&
+          other.bg2 == bg2 &&
+          other.bg3 == bg3 &&
+          other.bg4 == bg4 &&
+          other.ln0 == ln0 &&
+          other.ln1 == ln1 &&
+          other.ln2 == ln2 &&
+          other.tx0 == tx0 &&
+          other.tx1 == tx1 &&
+          other.tx2 == tx2 &&
+          other.tx3 == tx3 &&
+          other.ac == ac &&
+          other.acBg == acBg &&
+          other.acLn == acLn &&
+          other.acTx == acTx &&
+          other.good == good &&
+          other.goodBg == goodBg &&
+          other.goodLn == goodLn &&
+          other.fair == fair &&
+          other.fairBg == fairBg &&
+          other.fairLn == fairLn &&
+          other.poor == poor &&
+          other.poorBg == poorBg &&
+          other.poorLn == poorLn &&
+          other.sevCrit == sevCrit &&
+          other.sevHigh == sevHigh &&
+          other.sevMed == sevMed &&
+          other.sevLow == sevLow &&
+          other.sevNone == sevNone &&
+          other.vio == vio &&
+          other.vioBg == vioBg &&
+          other.scrim == scrim &&
+          other.shadow == shadow &&
+          other.spot == spot &&
+          other.dtRed == dtRed &&
+          other.dtBlack == dtBlack &&
+          other.dtSilver == dtSilver;
 
   @override
-  int get hashCode => Object.hashAll([bg0, bg1, bg2, bg3, bg4, ln0, ln1, ln2, tx0, tx1, tx2, tx3, ac, acBg, acLn, acTx, good, goodBg, goodLn, fair, fairBg, fairLn, poor, poorBg, poorLn, sevCrit, sevHigh, sevMed, sevLow, sevNone, vio, vioBg, scrim, shadow, spot, dtRed, dtBlack, dtSilver]);
+  int get hashCode => Object.hashAll([
+        bg0,
+        bg1,
+        bg2,
+        bg3,
+        bg4,
+        ln0,
+        ln1,
+        ln2,
+        tx0,
+        tx1,
+        tx2,
+        tx3,
+        ac,
+        acBg,
+        acLn,
+        acTx,
+        good,
+        goodBg,
+        goodLn,
+        fair,
+        fairBg,
+        fairLn,
+        poor,
+        poorBg,
+        poorLn,
+        sevCrit,
+        sevHigh,
+        sevMed,
+        sevLow,
+        sevNone,
+        vio,
+        vioBg,
+        scrim,
+        shadow,
+        spot,
+        dtRed,
+        dtBlack,
+        dtSilver
+      ]);
 }

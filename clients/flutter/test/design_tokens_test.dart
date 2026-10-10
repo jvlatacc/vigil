@@ -14,9 +14,12 @@ import 'package:vigil_flutter/theme/vigil_typography.dart';
 /// in tokens.json / tokens.css vs the generated Dart is caught in CI.
 class TokenSources {
   TokenSources._(this.json_, this.css)
-      : darkBlock = RegExp(r'\.vg-dark\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '',
-        lightBlock = RegExp(r'\.vg-light\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '',
-        rootBlock = RegExp(r':root\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '';
+      : darkBlock =
+            RegExp(r'\.vg-dark\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '',
+        lightBlock =
+            RegExp(r'\.vg-light\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '',
+        rootBlock =
+            RegExp(r':root\s*\{([^}]*)\}').firstMatch(css)?.group(1) ?? '';
 
   final Map<String, dynamic> json_;
   final String css;
@@ -28,7 +31,8 @@ class TokenSources {
     final tokens = jsonDecode(
       File('../../docs/design/console/tokens/tokens.json').readAsStringSync(),
     ) as Map<String, dynamic>;
-    final css = File('../../docs/design/console/tokens/tokens.css').readAsStringSync();
+    final css =
+        File('../../docs/design/console/tokens/tokens.css').readAsStringSync();
     return TokenSources._(tokens, css);
   }
 
@@ -47,8 +51,9 @@ Color parseColor(String value) {
     if (hex.length == 6) return Color(int.parse('FF$hex', radix: 16));
     return Color(int.parse(hex, radix: 16));
   }
-  final m = RegExp(r'rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)')
-      .firstMatch(v)!;
+  final m =
+      RegExp(r'rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)')
+          .firstMatch(v)!;
   return Color.fromRGBO(
     int.parse(m.group(1)!),
     int.parse(m.group(2)!),
@@ -67,7 +72,8 @@ void main() {
     sources = TokenSources.load();
   });
 
-  test('every tokens.json color token exists in VigilColors in both schemes', () {
+  test('every tokens.json color token exists in VigilColors in both schemes',
+      () {
     for (final entry in sources.colors.entries) {
       final name = entry.key;
       final spec = entry.value as Map<String, dynamic>;
@@ -82,12 +88,14 @@ void main() {
             ? VigilColors.dark.byName(name)
             : VigilColors.light.byName(name);
         expect(actual, expected,
-            reason: '$name.$which drifted: ported $actual vs canonical $expected');
+            reason:
+                '$name.$which drifted: ported $actual vs canonical $expected');
       }
     }
   });
 
-  test('tokens.json and tokens.css agree on every color token (sources cross-check)',
+  test(
+      'tokens.json and tokens.css agree on every color token (sources cross-check)',
       () {
     // Compare each declaration inside the scheme's own block — both theme
     // blocks define --bg0, so a document-wide regex matches the wrong one.
@@ -96,7 +104,8 @@ void main() {
       final spec = entry.value as Map<String, dynamic>;
       for (final which in ['dark', 'light']) {
         final expected = parseColor(spec[which] as String);
-        final themeBlock = which == 'dark' ? sources.darkBlock : sources.lightBlock;
+        final themeBlock =
+            which == 'dark' ? sources.darkBlock : sources.lightBlock;
         final decl = RegExp('--${RegExp.escape(name)}\\s*:\\s*([^;]+);');
         final matches = decl.allMatches(themeBlock).toList();
         if (matches.isEmpty && themeBlock.isEmpty) {
@@ -115,7 +124,8 @@ void main() {
     }
   });
 
-  test('level, severity, and DeepTempo brand tokens keep their canonical values',
+  test(
+      'level, severity, and DeepTempo brand tokens keep their canonical values',
       () {
     // Spot anchors straight from tokens.json — full coverage is the loop above.
     final colors = sources.colors;
@@ -124,12 +134,18 @@ void main() {
     expect(dark('good'), parseColor((colors['good'] as Map)['dark'] as String));
     expect(dark('fair'), parseColor((colors['fair'] as Map)['dark'] as String));
     expect(dark('poor'), parseColor((colors['poor'] as Map)['dark'] as String));
-    expect(dark('sev-crit'), parseColor((colors['sev-crit'] as Map)['dark'] as String));
-    expect(dark('sev-high'), parseColor((colors['sev-high'] as Map)['dark'] as String));
-    expect(dark('sev-med'), parseColor((colors['sev-med'] as Map)['dark'] as String));
-    expect(dark('sev-low'), parseColor((colors['sev-low'] as Map)['dark'] as String));
-    expect(dark('dt-red'), parseColor((colors['dt-red'] as Map)['dark'] as String));
-    expect(light('dt-red'), parseColor((colors['dt-red'] as Map)['light'] as String));
+    expect(dark('sev-crit'),
+        parseColor((colors['sev-crit'] as Map)['dark'] as String));
+    expect(dark('sev-high'),
+        parseColor((colors['sev-high'] as Map)['dark'] as String));
+    expect(dark('sev-med'),
+        parseColor((colors['sev-med'] as Map)['dark'] as String));
+    expect(dark('sev-low'),
+        parseColor((colors['sev-low'] as Map)['dark'] as String));
+    expect(dark('dt-red'),
+        parseColor((colors['dt-red'] as Map)['dark'] as String));
+    expect(light('dt-red'),
+        parseColor((colors['dt-red'] as Map)['light'] as String));
     expect(dark('ac'), const Color(0xFF3AA8FF));
     expect(light('ac'), const Color(0xFF0A6FD6));
   });
@@ -169,7 +185,8 @@ void main() {
         if (RegExp(r'^\d+$').hasMatch(tok)) expectedWeight = int.parse(tok);
       }
       final style = VigilTypography.byName[name];
-      expect(style, isNotNull, reason: 'type style $name missing from VigilTypography');
+      expect(style, isNotNull,
+          reason: 'type style $name missing from VigilTypography');
       expect(style!.fontSize, expectedSize, reason: 'size of $name');
       if (expectedWeight != null) {
         // tokens.json carries variable-font weights (650); static TTFs ship
@@ -177,7 +194,8 @@ void main() {
         final rounded = expectedWeight % 100 != 0 ? 700 : expectedWeight;
         final expectedFontWeight = FontWeight.values[(rounded ~/ 100) - 1];
         expect(style.fontWeight, expectedFontWeight,
-            reason: 'weight of $name (token $expectedWeight, static rounding $rounded)');
+            reason:
+                'weight of $name (token $expectedWeight, static rounding $rounded)');
       }
     }
   });

@@ -50,19 +50,19 @@ class VigilTheme extends ThemeExtension<VigilTheme> {
 
   /// The single metric set (radius/control/space do not vary by scheme).
   static const VigilTheme metrics = VigilTheme(
-      radiusPillSm: 8,
-      radiusButton: 10,
-      radiusCardInner: 10,
-      radiusCard: 14,
-      radiusPanel: 12,
-      radiusRound: 999,
-      controlButtonSm: 28,
-      controlButton: 36,
-      controlTab: 38,
-      controlStatePill: 22,
-      controlHeaderRow: 52,
-      controlNavRow: 46,
-      controlSearch: 38,
+    radiusPillSm: 8,
+    radiusButton: 10,
+    radiusCardInner: 10,
+    radiusCard: 14,
+    radiusPanel: 12,
+    radiusRound: 999,
+    controlButtonSm: 28,
+    controlButton: 36,
+    controlTab: 38,
+    controlStatePill: 22,
+    controlHeaderRow: 52,
+    controlNavRow: 46,
+    controlSearch: 38,
     space: [4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28],
   );
 
@@ -113,22 +113,23 @@ class VigilTheme extends ThemeExtension<VigilTheme> {
     double? controlNavRow,
     double? controlSearch,
     List<double>? space,
-  }) => VigilTheme(
-      radiusPillSm: radiusPillSm ?? this.radiusPillSm,
-      radiusButton: radiusButton ?? this.radiusButton,
-      radiusCardInner: radiusCardInner ?? this.radiusCardInner,
-      radiusCard: radiusCard ?? this.radiusCard,
-      radiusPanel: radiusPanel ?? this.radiusPanel,
-      radiusRound: radiusRound ?? this.radiusRound,
-      controlButtonSm: controlButtonSm ?? this.controlButtonSm,
-      controlButton: controlButton ?? this.controlButton,
-      controlTab: controlTab ?? this.controlTab,
-      controlStatePill: controlStatePill ?? this.controlStatePill,
-      controlHeaderRow: controlHeaderRow ?? this.controlHeaderRow,
-      controlNavRow: controlNavRow ?? this.controlNavRow,
-      controlSearch: controlSearch ?? this.controlSearch,
-      space: space ?? this.space,
-  );
+  }) =>
+      VigilTheme(
+        radiusPillSm: radiusPillSm ?? this.radiusPillSm,
+        radiusButton: radiusButton ?? this.radiusButton,
+        radiusCardInner: radiusCardInner ?? this.radiusCardInner,
+        radiusCard: radiusCard ?? this.radiusCard,
+        radiusPanel: radiusPanel ?? this.radiusPanel,
+        radiusRound: radiusRound ?? this.radiusRound,
+        controlButtonSm: controlButtonSm ?? this.controlButtonSm,
+        controlButton: controlButton ?? this.controlButton,
+        controlTab: controlTab ?? this.controlTab,
+        controlStatePill: controlStatePill ?? this.controlStatePill,
+        controlHeaderRow: controlHeaderRow ?? this.controlHeaderRow,
+        controlNavRow: controlNavRow ?? this.controlNavRow,
+        controlSearch: controlSearch ?? this.controlSearch,
+        space: space ?? this.space,
+      );
 
   @override
   VigilTheme lerp(VigilTheme? other, double t) {
@@ -143,8 +144,10 @@ class VigilTheme extends ThemeExtension<VigilTheme> {
       controlButtonSm: _lerpDouble(controlButtonSm, other.controlButtonSm, t),
       controlButton: _lerpDouble(controlButton, other.controlButton, t),
       controlTab: _lerpDouble(controlTab, other.controlTab, t),
-      controlStatePill: _lerpDouble(controlStatePill, other.controlStatePill, t),
-      controlHeaderRow: _lerpDouble(controlHeaderRow, other.controlHeaderRow, t),
+      controlStatePill:
+          _lerpDouble(controlStatePill, other.controlStatePill, t),
+      controlHeaderRow:
+          _lerpDouble(controlHeaderRow, other.controlHeaderRow, t),
       controlNavRow: _lerpDouble(controlNavRow, other.controlNavRow, t),
       controlSearch: _lerpDouble(controlSearch, other.controlSearch, t),
       space: List.generate(
@@ -158,23 +161,38 @@ class VigilTheme extends ThemeExtension<VigilTheme> {
   bool operator ==(Object other) =>
       identical(other, this) ||
       other is VigilTheme &&
-            other.radiusPillSm == radiusPillSm
-            && other.radiusButton == radiusButton
-            && other.radiusCardInner == radiusCardInner
-            && other.radiusCard == radiusCard
-            && other.radiusPanel == radiusPanel
-            && other.radiusRound == radiusRound &&
-            other.controlButtonSm == controlButtonSm
-            && other.controlButton == controlButton
-            && other.controlTab == controlTab
-            && other.controlStatePill == controlStatePill
-            && other.controlHeaderRow == controlHeaderRow
-            && other.controlNavRow == controlNavRow
-            && other.controlSearch == controlSearch &&
-            _listEquals(other.space, space);
+          other.radiusPillSm == radiusPillSm &&
+          other.radiusButton == radiusButton &&
+          other.radiusCardInner == radiusCardInner &&
+          other.radiusCard == radiusCard &&
+          other.radiusPanel == radiusPanel &&
+          other.radiusRound == radiusRound &&
+          other.controlButtonSm == controlButtonSm &&
+          other.controlButton == controlButton &&
+          other.controlTab == controlTab &&
+          other.controlStatePill == controlStatePill &&
+          other.controlHeaderRow == controlHeaderRow &&
+          other.controlNavRow == controlNavRow &&
+          other.controlSearch == controlSearch &&
+          _listEquals(other.space, space);
 
   @override
-  int get hashCode => Object.hashAll([radiusPillSm, radiusButton, radiusCardInner, radiusCard, radiusPanel, radiusRound, controlButtonSm, controlButton, controlTab, controlStatePill, controlHeaderRow, controlNavRow, controlSearch, space]);
+  int get hashCode => Object.hashAll([
+        radiusPillSm,
+        radiusButton,
+        radiusCardInner,
+        radiusCard,
+        radiusPanel,
+        radiusRound,
+        controlButtonSm,
+        controlButton,
+        controlTab,
+        controlStatePill,
+        controlHeaderRow,
+        controlNavRow,
+        controlSearch,
+        space
+      ]);
 }
 
 /// Builds the app ThemeData from the tokens for [brightness]. The
@@ -206,12 +224,14 @@ ThemeData buildVigilThemeData(Brightness brightness) {
       indicatorColor: colors.acBg,
       // Selected state reads as accent, like the console's active nav row.
       iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
-            color: states.contains(WidgetState.selected) ? colors.ac : colors.tx1,
+            color:
+                states.contains(WidgetState.selected) ? colors.ac : colors.tx1,
           )),
       labelTextStyle: WidgetStateProperty.resolveWith(
         (states) => VigilTypography.label.copyWith(
-              color: states.contains(WidgetState.selected) ? colors.tx0 : colors.tx2,
-            ),
+          color:
+              states.contains(WidgetState.selected) ? colors.tx0 : colors.tx2,
+        ),
       ),
     ),
     navigationRailTheme: NavigationRailThemeData(
@@ -220,7 +240,8 @@ ThemeData buildVigilThemeData(Brightness brightness) {
       selectedIconTheme: IconThemeData(color: colors.ac),
       unselectedIconTheme: IconThemeData(color: colors.tx1),
       selectedLabelTextStyle: VigilTypography.label.copyWith(color: colors.tx0),
-      unselectedLabelTextStyle: VigilTypography.label.copyWith(color: colors.tx2),
+      unselectedLabelTextStyle:
+          VigilTypography.label.copyWith(color: colors.tx2),
     ),
   );
 }

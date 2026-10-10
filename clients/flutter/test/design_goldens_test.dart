@@ -65,17 +65,20 @@ void main() {
 
   testWidgets('color swatches render every token, dark scheme', (tester) async {
     await tester.binding.setSurfaceSize(const Size(720, 760));
-    await tester.pumpWidget(surface(const SwatchGallery(colors: VigilColors.dark)));
+    await tester
+        .pumpWidget(surface(const SwatchGallery(colors: VigilColors.dark)));
     await expectLater(
       find.byType(SwatchGallery),
       matchesGoldenFile('goldens/swatches-dark.png'),
     );
   });
 
-  testWidgets('color swatches render every token, light scheme', (tester) async {
+  testWidgets('color swatches render every token, light scheme',
+      (tester) async {
     await tester.binding.setSurfaceSize(const Size(720, 760));
     await tester.pumpWidget(
-      surface(const SwatchGallery(colors: VigilColors.light), brightness: Brightness.light),
+      surface(const SwatchGallery(colors: VigilColors.light),
+          brightness: Brightness.light),
     );
     await expectLater(
       find.byType(SwatchGallery),
