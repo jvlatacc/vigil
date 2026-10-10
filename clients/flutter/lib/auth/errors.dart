@@ -50,6 +50,18 @@ class AuthRevoked extends VigilAuthException {
   static bool revoked(DioException error) => error.error is AuthRevoked;
 }
 
+/// 400 from bootstrap — the password policy refused; the message carries the
+/// server's reason.
+class BootstrapRejected extends VigilAuthException {
+  BootstrapRejected({required String detail}) : super(detail, statusCode: 400);
+}
+
+/// 403 from bootstrap — the instance already has an account, so the
+/// first-admin endpoint is permanently closed. Fall back to sign-in.
+class BootstrapClosed extends VigilAuthException {
+  BootstrapClosed({required String detail}) : super(detail, statusCode: 403);
+}
+
 /// Any other auth-endpoint failure (5xx, malformed response, unexpected
 /// status). Carries the status so the UI can show a generic retryable error.
 class UnexpectedAuthResponse extends VigilAuthException {
