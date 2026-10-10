@@ -40,13 +40,17 @@ def test_no_executor_or_service_imports_under_core_cep() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             for name in _imported_modules(node):
-                forbidden = any(
-                    name == prefix or name.startswith(prefix + ".")
-                    for prefix in FORBIDDEN_PREFIXES
-                ) or name in FORBIDDEN_MODULES
+                forbidden = (
+                    any(
+                        name == prefix or name.startswith(prefix + ".")
+                        for prefix in FORBIDDEN_PREFIXES
+                    )
+                    or name in FORBIDDEN_MODULES
+                )
                 if forbidden:
                     violations.append(f"{path.name}: {name}")
-    assert violations == [], (
-        "core/cep must propose through the approval gate, never execute: "
-        + ", ".join(violations)
+    assert (
+        violations == []
+    ), "core/cep must propose through the approval gate, never execute: " + ", ".join(
+        violations
     )

@@ -186,14 +186,10 @@ def test_prune_function_removes_only_rows_past_the_age(migrated_db):
         text("INSERT INTO cep_snapshots (engine_version, payload) VALUES (1, '{}')")
     )
 
-    pruned = conn.execute(
-        text("SELECT prune_cep_snapshots('1 hour')")
-    ).scalar_one()
+    pruned = conn.execute(text("SELECT prune_cep_snapshots('1 hour')")).scalar_one()
     assert pruned == 1
 
-    assert (
-        conn.execute(text("SELECT count(*) FROM cep_snapshots")).scalar_one() == 1
-    )
+    assert conn.execute(text("SELECT count(*) FROM cep_snapshots")).scalar_one() == 1
     stale = conn.execute(
         text(
             "SELECT count(*) FROM cep_snapshots "
@@ -221,7 +217,7 @@ def test_server_stamp_and_jsonb_roundtrip(migrated_db):
     conn.execute(
         text(
             "INSERT INTO cep_snapshots (engine_version, payload) "
-            "VALUES (1, '{\"graph\": {\"nodes\": [], \"edges\": []}}')"
+            'VALUES (1, \'{"graph": {"nodes": [], "edges": []}}\')'
         )
     )
     created_at, payload = conn.execute(

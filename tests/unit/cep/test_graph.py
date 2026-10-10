@@ -196,9 +196,13 @@ def test_one_stale_link_kills_the_whole_chain():
     g.link(("host", "a"), "connected_to", ("host", "b"), T0)
     g.link(("host", "b"), "connected_to", ("host", "c"), later(590))
 
-    whole = g.path_exists(("host", "a"), ("host", "c"), within_seconds=100, now=later(595))
+    whole = g.path_exists(
+        ("host", "a"), ("host", "c"), within_seconds=100, now=later(595)
+    )
     assert whole is None  # a->b is 595s old, outside the 100s window
-    tail = g.path_exists(("host", "b"), ("host", "c"), within_seconds=100, now=later(595))
+    tail = g.path_exists(
+        ("host", "b"), ("host", "c"), within_seconds=100, now=later(595)
+    )
     assert tail is not None
 
 
