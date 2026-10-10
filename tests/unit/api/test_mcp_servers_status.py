@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from core.deps import provide_mcp_client
 from core.integrations.mcp import connection_state, oauth
+from core.storage.models import OAuthConnection
+from core.storage.unit_of_work import unit_of_work
 from services.api.routers import mcp as mcp_api
 
 pytestmark = pytest.mark.unit
@@ -16,10 +18,25 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def _fresh_provider_registry():
-    """One test, one token-provider registry."""
+    """One test, one token-provider registry and one connection memory."""
     oauth.reset_token_providers()
+    _forget_stored_connections()
     yield
     oauth.reset_token_providers()
+
+
+def _forget_stored_connections():
+    """Drop oauth_connections rows an earlier test in this process may have stored.
+
+    The status row reads that table as display memory; a consent test's row for
+    a same-named server would outlive its test and resurface here. Like the
+    product's own read, a database that cannot answer degrades to live knowledge.
+    """
+    try:
+        with unit_of_work() as session:
+            session.query(OAuthConnection).delete()
+    except Exception:  # noqa: BLE001 - no database in this run is a fine start
+        pass
 
 
 @pytest.fixture

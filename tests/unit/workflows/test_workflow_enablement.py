@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -266,11 +267,17 @@ def _start(playbook):
     )
 
 
+# The route stamps the run's initiator; a direct call resolves it by hand.
+_TEST_USER = SimpleNamespace(username="workflow-tester")
+
+
 @pytest.mark.asyncio
 async def test_v1_start_refuses_a_disabled_workflow_and_accepts_an_enabled_one(session):
     _disable(session, SCHEDULED_WORKFLOW)
     with pytest.raises(HTTPException) as exc:
-        await agent_runs_router.start_run(_start(f"workflow:{SCHEDULED_WORKFLOW}"))
+        await agent_runs_router.start_run(
+            _start(f"workflow:{SCHEDULED_WORKFLOW}"), current_user=_TEST_USER
+        )
     assert exc.value.status_code == 409
     assert SCHEDULED_WORKFLOW in exc.value.detail
 
@@ -278,7 +285,9 @@ async def test_v1_start_refuses_a_disabled_workflow_and_accepts_an_enabled_one(s
         patch.object(agent_runs_router, "_begin_run_row"),
         patch.object(agent_runs_router, "enqueue_run", AsyncMock(return_value="j")),
     ):
-        res = await agent_runs_router.start_run(_start(f"workflow:{CUSTOM}"))
+        res = await agent_runs_router.start_run(
+            _start(f"workflow:{CUSTOM}"), current_user=_TEST_USER
+        )
     assert res.job_id == "j"
 
 
