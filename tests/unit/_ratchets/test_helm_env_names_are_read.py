@@ -7,7 +7,9 @@ ELASTIC_{HOST,API_KEY,...} for releases while the code read
 ORCHESTRATOR_MAX_AGENTS and ELASTIC_SIEM_*, and operators who set them got no
 limit and no Elastic connection.
 
-Static parse of values.yaml, values-dev.yaml and the templates; no helm binary.
+Static parse of every values*.yaml in the chart directory and the templates;
+no helm binary. Values files are discovered by glob, so adding a profile
+(e.g. a future values-aws.yaml) needs no edit to this test.
 """
 
 from __future__ import annotations
@@ -114,13 +116,24 @@ def _unread(keys: set[str]) -> list[str]:
     return sorted(keys - _read_names())
 
 
-@pytest.mark.parametrize("values_file", ["values.yaml", "values-dev.yaml"])
+def _values_files() -> list[str]:
+    """Every values*.yaml in the chart directory, sorted for stable test IDs."""
+    return sorted(p.name for p in CHART.glob("values*.yaml"))
+
+
+@pytest.mark.parametrize("values_file", _values_files())
 def test_config_keys_are_read(values_file: str) -> None:
     unread = _unread(_config_keys(values_file))
     assert not unread, (
         f"{values_file} config keys nothing reads (renamed? see RETIRED): {unread}. "
         "Use the name the code reads, or add the key to OTHER_CONSUMERS with its reader."
     )
+
+
+def test_baseline_values_files_are_discovered() -> None:
+    # The glob must never silently shrink below the baseline files; a rename
+    # or deletion would drop their coverage without this guard noticing.
+    assert {"values.yaml", "values-dev.yaml"} <= set(_values_files())
 
 
 def test_rendered_template_keys_are_read() -> None:
