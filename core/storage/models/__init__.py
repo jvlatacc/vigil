@@ -45,7 +45,6 @@ from core.storage.models.config import (
     ThreatIndicator,
     UserPreference,
 )
-from core.storage.models.containment import ContainmentAction
 from core.storage.models.digital_twin import (
     TwinConnection,
     TwinDevice,
@@ -102,7 +101,6 @@ __all__ = [
     "CaseWatcher",
     "ChatMessage",
     "ConfigAuditLog",
-    "ContainmentAction",
     "Conversation",
     "CustomAgent",
     "CustomWorkflow",

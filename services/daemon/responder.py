@@ -21,7 +21,6 @@ from core.response.config import (
     mtd_route_decision,
     response_action_decision,
 )
-from core.response.fastpath.adjudication import FastPathAdjudicator
 from core.response.guards import origin_statuses_for
 from core.storage.connection import get_db_manager
 from core.storage.models import MtdDecoyRegistry, MtdIpExclusion
@@ -161,7 +160,6 @@ class AutonomousResponder:
         escalation_config: EscalationConfig,
         response_service: AutonomousResponseService,
         approvals: ApprovalService,
-        fastpath_adjudicator: Optional[FastPathAdjudicator] = None,
         mtd_config: Optional[MtdConfig] = None,
     ):
         self.response_config = response_config
@@ -176,14 +174,6 @@ class AutonomousResponder:
         if response_config.force_manual_approval:
             self._approval_service.set_force_manual_approval(True)
 
-        # Slow-path adjudication of fast-path leases (PR-4): the same
-        # approval service this responder already holds is the escalation
-        # bridge — one pipeline, one queue, one human gate. Rollback is a
-        # demotion and runs autonomously; promotion only through the
-        # pipeline. Built on first use so a disabled deployment (and every
-        # unit test) constructs no executors.
-        self._fastpath_adjudicator = fastpath_adjudicator
-
         # Stats
         self.stats = {
             "evaluated": 0,
@@ -193,18 +183,7 @@ class AutonomousResponder:
             "escalated": 0,
             "honey_routed": 0,
             "errors": 0,
-            "fastpath_rolled_back": 0,
-            "fastpath_escalated": 0,
-            "fastpath_adjudication_errors": 0,
         }
-
-    def _fastpath_handle(self) -> FastPathAdjudicator:
-        """The lease adjudicator, built on first qualifying use."""
-        if self._fastpath_adjudicator is None:
-            self._fastpath_adjudicator = FastPathAdjudicator(
-                approvals=self._approval_service
-            )
-        return self._fastpath_adjudicator
 
     async def run(self, shutdown_event: asyncio.Event):
         """Run the response handler loop."""
@@ -275,26 +254,6 @@ class AutonomousResponder:
         self.stats["evaluated"] += 1
 
         logger.debug(f"Evaluating response for finding {finding_id}")
-
-        # Fast-path lease adjudication (PR-4) runs on every candidate,
-        # before the early return below: a downgraded finding decides no
-        # response action, but its leases still need closing. Contained —
-        # an adjudication failure must not fail the responder's own
-        # decision, and it is counted, not swallowed.
-        try:
-            summary = await self._fastpath_handle().on_finding(finding)
-            self.stats["fastpath_rolled_back"] += summary["rolled_back"]
-            self.stats["fastpath_escalated"] += summary["escalated"]
-            if summary["rolled_back"] or summary["escalated"]:
-                logger.info(
-                    "Fast-path adjudication for %s: %d rolled back, %d escalated",
-                    finding_id,
-                    summary["rolled_back"],
-                    summary["escalated"],
-                )
-        except Exception as e:
-            self.stats["fastpath_adjudication_errors"] += 1
-            logger.error(f"Fast-path adjudication failed for {finding_id}: {e}")
 
         severity = finding.get("severity", "medium").lower()
         confidence = finding.get("triage_confidence", 0.5)

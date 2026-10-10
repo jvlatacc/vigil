@@ -8048,3 +8048,34 @@
       color: var(--tx2);
    }
    .int-card-cta { margin-top: 4px; }
+
+   /* Fast-path speculative lifecycle (decisions screen, Fast Path tab) */
+   .fpst {
+      display: inline-flex;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      white-space: nowrap;
+   }
+   .fpst-speculative { color: var(--high); border-color: var(--high); background: var(--high-dim); }
+   .fpst-rolled_back { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); background: color-mix(in srgb, var(--good) 12%, transparent); }
+   .fpst-escalated { color: var(--crit); border-color: var(--crit); background: var(--crit-dim); }
+   .fpst-failed { color: var(--tx-3); border-style: dashed; }
+   .fpsim {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 4px;
+      color: var(--med);
+      border: 1px dashed var(--med);
+      background: var(--med-dim);
+   }
+   .expclock { font-variant-numeric: tabular-nums; }
+   .expclock.low { color: var(--crit); font-weight: 600; }

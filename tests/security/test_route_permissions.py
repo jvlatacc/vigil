@@ -52,6 +52,7 @@ GATED_ROUTES = [
     ("PATCH", "/api/v1/findings/f-1", {"severity": "low"}, "findings.write"),
     ("POST", "/api/v1/approvals/a-1/approve", {}, "ai_decisions.approve"),
     ("POST", "/api/v1/approvals/a-1/reject", {"reason": "no"}, "ai_decisions.approve"),
+    ("POST", "/api/fast-path/actions/a-1/release", {}, "ai_decisions.approve"),
     ("POST", "/api/workflows/runs/r-1/resume", {}, "ai_decisions.approve"),
     (
         "POST",

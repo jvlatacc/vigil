@@ -373,16 +373,26 @@ class ApprovalAction(Base):
         String(16), nullable=False, default="reversible", server_default="reversible"
     )
     idempotency_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Speculative containment: when a time-boxed restriction stops being live;
+    # the TTL sweep releases speculative rows past it. Null for ordinary approvals.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         Index("idx_approval_actions_status_created", "status", "created_at"),
         Index("idx_approval_actions_workflow_run", "workflow_run_id"),
-        # Unique among non-failed rows so a failed isolate can be retried (#827).
+        # Unique among non-failed rows so a failed isolate can be retried (#827),
+        # and among non-rolled-back ones so a target can be restricted again
+        # after a rollback. Kept in step with seed 40's predicate.
         Index(
             "uq_approval_actions_idempotency_key",
             "idempotency_key",
             unique=True,
-            postgresql_where=text("idempotency_key IS NOT NULL AND status <> 'failed'"),
+            postgresql_where=text(
+                "idempotency_key IS NOT NULL "
+                "AND status NOT IN ('failed', 'rolled_back')"
+            ),
         ),
     )
 

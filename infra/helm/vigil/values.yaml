@@ -605,6 +605,7 @@ dbInit:
     - 40_edge_nodes.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
+    - 40_speculative_action_lifecycle.sql
     - 41_edge_bundles.sql
     - 41_finding_origin_stamps.sql
     - 42_digital_twin.sql

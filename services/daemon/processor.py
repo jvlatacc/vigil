@@ -4,16 +4,24 @@ import asyncio
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from core.cases.decoy_session_capture import DECOY_SESSION_DATA_SOURCE
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
-from core.response.config import MtdConfig, ResponseConfig, is_recon_probe
+from core.response.config import MtdConfig, is_recon_probe
 from core.response.fastpath.config import FastPathConfig
+from core.response.fastpath.policy import TriageSignal, evaluate_fast_path
 from core.time import utcnow
-from services.daemon.config import ProcessingConfig
+
+if TYPE_CHECKING:
+    # Type-only: the runtime import stays inside the lazy build so a disabled
+    # fast path imports none of the enforcement stack.
+    from core.response.approval_service import PendingAction
+    from core.response.fastpath.speculative_service import SpeculativeActionService
+
+from services.daemon.config import ProcessingConfig, ResponseConfig
 from services.daemon.probes import ACTIONS as TRIAGE_ACTIONS
 from services.daemon.probes import PROBE_DATA_SOURCE
 from services.daemon.vendor_errors import (
@@ -70,20 +78,19 @@ class FindingProcessor:
         self,
         config: ProcessingConfig,
         response_config: Optional[ResponseConfig] = None,
-        fastpath_config: Optional[FastPathConfig] = None,
+        fast_path_config: Optional[FastPathConfig] = None,
         mtd_config: Optional[MtdConfig] = None,
     ):
         self.config = config
         # The queue-for-response line is the band's review threshold, so the
         # processor reads the same ResponseConfig the responder does (#916).
         self.response_config = response_config or ResponseConfig.from_settings()
-        # The Fast-Path's blast-radius config (speculative containment): the
-        # gate consults nothing but this and the finding dict. Ledger and
-        # executor registry are built on the first qualifying finding, so a
-        # disabled deployment never constructs them.
-        self.fastpath_config = fastpath_config
-        self._fastpath_ledger = None
-        self._fastpath_registry = None
+        # The fast path is operator opt-in (its config reads FAST_PATH_* env
+        # directly); with the default it is inert and nothing below is built.
+        # Its service — ledger rows + enforcement dispatch — is built on the
+        # first enabled decision, so a disabled config constructs nothing.
+        self.fast_path_config = fast_path_config or FastPathConfig()
+        self._fast_path_service: Optional[SpeculativeActionService] = None
         # The MTD band gates its own queue candidates: a deceive-recommended
         # or recon-tagged probe queues for response only while MTD is on,
         # so a default install queues exactly what it queued before.
@@ -124,9 +131,8 @@ class FindingProcessor:
             "sanitization_flagged": 0,
             "store_dropped": 0,
             "decoy_sessions_captured": 0,
-            "fastpath_leases_issued": 0,
-            "fastpath_shadow_records": 0,
-            "fastpath_errors": 0,
+            "fast_path_fired": 0,
+            "fast_path_errors": 0,
         }
 
     def _sanitize_finding(self, finding: Dict[str, Any], source: Optional[str]) -> None:
@@ -356,6 +362,14 @@ class FindingProcessor:
             logger.info(
                 f"Stored finding {finding_id} (severity: {finding.get('severity')})"
             )
+
+            # T0 — the fast path's pre-triage tier, wired at the earliest seam:
+            # the finding is stored, nothing is enqueued, no model call has
+            # run. Source-native signals only, and a double opt-in (the master
+            # switch and pre_triage_enabled both on) — with the defaults this
+            # returns immediately and nothing is built. Never a gate: the
+            # enrichment and the response evaluation below run unchanged.
+            await self._run_fast_path(finding, triage=None)
 
             # Triage/enrich in the background so this worker takes the next
             # finding instead of blocking on the LLM. Blocks here when the
@@ -1069,6 +1083,21 @@ REASONING: [Brief explanation]
         recommended_action = finding.get("recommended_action", "").lower()
         confidence = finding.get("triage_confidence", 0.5)
 
+        # T1 — the fast path's default tier, at Gate 1 on the triage result: a
+        # pass dispatches a speculative restriction inline (ledger row + adapter
+        # I/O, no queue hop, no poller, no model call) before anything below is
+        # enqueued, so the slow path's brief is born after its ledger row
+        # exists. An addition, never a gate: the response queue and the intake
+        # trigger run unchanged whether or not the fast path fired.
+        await self._run_fast_path(
+            finding,
+            triage=TriageSignal(
+                severity=severity,
+                confidence=confidence,
+                recommended_action=recommended_action,
+            ),
+        )
+
         # The MTD band adds its own candidates beside the containment ones:
         # a probe triage recommended deceiving, and a scanning-tagged probe
         # (T1046/T1595) whose tags say deceive even when triage chose a
@@ -1123,138 +1152,90 @@ REASONING: [Brief explanation]
                     f"Finding {finding.get('finding_id')} queued for autonomous investigation"
                 )
 
-        # The Fast-Path gate (speculative containment, PR-4): the
-        # deterministic, LLM-free verdict beside the deliberation loop.
-        # A pure predicate plus, when enabled, one counters read; any
-        # failure is contained here — the finding's own path is done.
-        await self._evaluate_fast_path(finding)
+    async def _run_fast_path(
+        self, finding: Dict[str, Any], triage: Optional[TriageSignal]
+    ) -> None:
+        """Evaluate the fast-path policy and dispatch a decision, inline.
 
-    def _fastpath_ledger_handle(self):
-        """The containment lease ledger, built on first qualifying use."""
-        from core.response.fastpath.ledger import ContainmentLedger
+        Both tiers come through here: T1 from Gate 1 with the triage result,
+        T0 from the pre-triage seam with ``triage=None``. The fast path is an
+        addition at the processor's deterministic gates, never a gate on them —
+        every failure is caught and logged, and the slow path runs exactly as
+        if this method did not exist. Dispatch (ledger row + adapter I/O) is
+        synchronous, so it leaves the event loop via ``to_thread``; nothing
+        between the policy's yes and the adapter's apply hops a queue, waits
+        on a poller, or calls a model.
 
-        if self._fastpath_ledger is None:
-            self._fastpath_ledger = ContainmentLedger()
-        return self._fastpath_ledger
-
-    def _fastpath_executor(self, action_type: str):
-        """The registered executor for an action type, or None."""
-        from core.response.fastpath.executors import default_registry
-
-        if self._fastpath_registry is None:
-            self._fastpath_registry = default_registry()
-        return self._fastpath_registry.get(action_type)
-
-    async def _evaluate_fast_path(self, finding: Dict[str, Any]) -> None:
-        """Consult the Fast-Path policy gate and issue a lease when it says so.
-
-        On ISSUE_LEASE the ledger's driver performs the ONE synchronous
-        intent insert and then the executor apply outside any transaction —
-        the millisecond path's whole database work is that committed intent
-        (the ledger owns the ordering; nothing here touches
-        ``approval_actions`` or the 30 s approval sweep).
+        The live speculative population is not counted here: the policy's
+        per-target guard reads a mapping the caller would have to query, and
+        the speculative service re-checks the cap authoritatively at insert
+        time (and dedupes against a live row), so passing None never stacks a
+        second restriction.
         """
-        from core.response.fastpath import FastPathVerdict, evaluate, record_decision
-        from core.response.fastpath.adjudication import (
-            entity_type_for_target,
-            gate_counters,
-        )
-        from core.response.fastpath.ledger import LeaseIntent, issue_and_apply
-
-        cfg = self.fastpath_config
-        if cfg is None:
-            cfg = FastPathConfig.from_settings()
-
+        if not self.fast_path_config.enabled:
+            return
+        # A known-answer probe exists to exercise the triage path (#923); it
+        # must never earn a restriction from either tier. A decoy-session
+        # finding stops at its capture plane for the same reason — the
+        # session's product is the capture, and acting on its visitor would
+        # tear the deception open.
+        if finding.get("data_source") in (PROBE_DATA_SOURCE, DECOY_SESSION_DATA_SOURCE):
+            return
         try:
-            # The counters read is the only database work, and the disabled
-            # path skips it: with the kill switch off the gate refuses at
-            # its enabled check, before any cap could read a counter.
-            counters = None
-            if cfg.enabled:
-                counters = await asyncio.to_thread(gate_counters, finding, cfg)
-
-            decision = evaluate(finding, cfg, counters)
-            record_decision(decision)
-            if decision.verdict is not FastPathVerdict.ISSUE_LEASE:
+            decision = evaluate_fast_path(finding, triage, self.fast_path_config)
+            if decision is None:
                 return
-
-            entity_type = entity_type_for_target(finding, decision.target)
-            if entity_type is None:
-                logger.warning(
-                    "fast-path: cannot derive entity type for target %r on"
-                    " finding %s — no lease issued",
-                    decision.target,
-                    finding.get("finding_id"),
+            if self._fast_path_service is None:
+                # Imported here so a disabled config imports none of the
+                # enforcement stack (the policy and config above are light).
+                from core.response.fastpath.speculative_service import (
+                    SpeculativeActionService,
                 )
-                return
 
-            intent = LeaseIntent(
-                action_type=decision.action_type,
-                entity_type=entity_type,
-                entity_id=decision.target,
-                ttl_seconds=decision.ttl_seconds,
-                decision_rule=decision.decision_rule,
-                observed=dict(decision.observed),
-                finding_id=finding.get("finding_id"),
-                is_shadow=decision.is_shadow,
+                self._fast_path_service = SpeculativeActionService(
+                    config=self.fast_path_config
+                )
+            outcome = await asyncio.to_thread(
+                self._fast_path_service.create_speculative_action, decision
             )
-
-            if decision.is_shadow:
-                # Shadow rows are scored and recorded, never applied — the
-                # driver returns without touching an executor for one.
-                ledger = self._fastpath_ledger_handle()
-                outcome = await issue_and_apply(ledger, intent, executor=None)
-                if outcome.shadow:
-                    self.stats["fastpath_shadow_records"] += 1
-                return
-
-            executor = self._fastpath_executor(decision.action_type)
-            if executor is None:
-                # No executor for this action type (e.g. an edge verb with no
-                # operator endpoint): issuing would only record an intent the
-                # reconciler would abort. No lease.
-                logger.warning(
-                    "fast-path: no executor registered for action %s — no"
-                    " lease for finding %s",
-                    decision.action_type,
-                    finding.get("finding_id"),
-                )
-                return
-
-            outcome = await issue_and_apply(
-                self._fastpath_ledger_handle(), intent, executor
-            )
-            if outcome.replay:
-                # An active lease already holds this principal — the
-                # idempotency key collapsed the duplicate.
-                logger.debug(
-                    "fast-path: lease %s already active, replay collapsed",
-                    outcome.lease.id,
-                )
-            elif outcome.applied:
-                self.stats["fastpath_leases_issued"] += 1
+            if outcome is not None and outcome.inserted:
+                self.stats["fast_path_fired"] += 1
                 logger.info(
-                    "fast-path: lease %s applied (%s on %s %s, ttl %ss) rule=%s",
-                    outcome.lease.id,
+                    "fast path dispatched speculative %s on %s for finding %s "
+                    "(rule: %s)",
                     decision.action_type,
-                    entity_type,
                     decision.target,
-                    decision.ttl_seconds,
-                    decision.decision_rule,
+                    finding.get("finding_id"),
+                    decision.rule,
                 )
-            elif outcome.error:
-                self.stats["fastpath_errors"] += 1
-                logger.warning(
-                    "fast-path: lease %s apply failed: %s",
-                    outcome.lease.id,
-                    outcome.error,
-                )
-        except Exception:
-            # The Fast-Path is beside the pipeline, never in front of it: a
-            # gate or ledger failure must not fail the finding. Counted and
-            # logged at exception level — surfaced, not suppressed.
-            self.stats["fastpath_errors"] += 1
+                await self._enqueue_adjudication(outcome.action)
+        except Exception:  # noqa: BLE001 — the fast path must never fail the finding
+            self.stats["fast_path_errors"] += 1
             logger.exception(
-                "fast-path evaluation failed for finding %s",
+                "fast path dispatch failed for finding %s; the slow path is "
+                "unaffected",
                 finding.get("finding_id"),
+            )
+
+    async def _enqueue_adjudication(self, action: "PendingAction") -> None:
+        """Send the row's adjudication on its way — additive, never gating.
+
+        The dispatch and the enqueue are deliberately separate failure
+        domains: a queue that refuses (or a config read that fails) is
+        logged and the row waits for the TTL sweep, which is the fail-safe
+        regardless. The enqueue re-reads the committed row itself, so the
+        brief describes only what the ledger actually holds.
+        """
+        if not self.fast_path_config.adjudication_enabled:
+            return
+        try:
+            from services.daemon.speculative_adjudication import (
+                enqueue_speculative_adjudication,
+            )
+
+            await enqueue_speculative_adjudication(action, self.fast_path_config)
+        except Exception:  # noqa: BLE001 — adjudication is additive
+            logger.exception(
+                "adjudication enqueue failed for %s; the row resolves by its " "TTL",
+                action.action_id,
             )

@@ -9,7 +9,9 @@ from core.response.config import (  # re-exported for DaemonConfig
     MtdConfig,
     ResponseConfig,
 )
-from core.response.fastpath import FastPathConfig  # re-exported for DaemonConfig
+from core.response.fastpath.config import (  # re-exported for DaemonConfig
+    FastPathConfig,
+)
 from core.secrets import get_secret
 from core.telemetry import configure_logging
 
@@ -71,11 +73,6 @@ class SchedulerConfig:
     cleanup_interval: int = 86400  # Daily
     cleanup_retention_days: int = 90
     approval_expiry_days: int = 7
-    # Speculative-containment lease sweep (core.response.fastpath):
-    # TTL expiry is datastore-enforced — the scan reads rows, not memory
-    # — so the sweep runs whether or not the fastpath enable switch is
-    # on: disabling stops NEW leases; it never orphans live ones.
-    fastpath_lease_sweep_interval: int = 60
     # Honey-route TTL sweep (core.integrations.honey_router), same logic:
     # executed routes release by TTL even after MTD is disabled — a
     # config flip must never strand an attacker pinned to a decoy.
@@ -181,7 +178,6 @@ class DaemonConfig:
         )
 
         config.response = ResponseConfig.from_settings(settings)
-        config.fastpath = FastPathConfig.from_settings(settings)
         config.mtd = MtdConfig.from_settings(settings)
 
         config.escalation.enabled = settings.daemon_escalation_enabled
@@ -201,9 +197,6 @@ class DaemonConfig:
         config.scheduler.probe_interval = settings.daemon_probe_interval
         config.scheduler.cleanup_retention_days = settings.daemon_cleanup_retention_days
         config.scheduler.approval_expiry_days = settings.daemon_approval_expiry_days
-        config.scheduler.fastpath_lease_sweep_interval = (
-            settings.daemon_fastpath_lease_sweep_interval
-        )
 
         config.metrics.enabled = settings.daemon_metrics_enabled
         config.metrics.port = settings.daemon_health_port

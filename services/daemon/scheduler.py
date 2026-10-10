@@ -59,9 +59,8 @@ class TaskScheduler:
             "probes_scored": 0,
             "reports_generated": 0,
             "cleanups_run": 0,
-            "fastpath_leases_rolled_back": 0,
-            "fastpath_intents_reconciled": 0,
-            "fastpath_shadow_rows_closed": 0,
+            "speculative_released": 0,
+            "adjudications_consumed": 0,
             "mtd_routes_unrouted": 0,
             "mtd_canaries_rotated": 0,
             "errors": 0,
@@ -104,20 +103,6 @@ class TaskScheduler:
                     run_on_start=False,
                 )
             )
-
-        # Speculative-containment lease sweep (core.response.fastpath).
-        # Expiry is datastore-enforced — the scan reads rows, not memory —
-        # so this runs regardless of the fastpath enable switch:
-        # disabling stops NEW leases; it never orphans live ones.
-        self._tasks.append(
-            ScheduledTask(
-                name="fastpath_lease_sweep",
-                func=self._run_fastpath_lease_sweep,
-                interval=self.config.fastpath_lease_sweep_interval,
-                enabled=True,
-                run_on_start=False,
-            )
-        )
 
         # Honey-route TTL sweep (core.integrations.honey_router), the same
         # datastore-enforcement logic: releasing executed routes must run
@@ -199,6 +184,34 @@ class TaskScheduler:
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Threat feed poller unavailable: {e}")
+
+        # Speculative containment's fail-safe (locked decision 5): whatever
+        # adjudication is doing, a restriction past its expiry is released.
+        # A no-op query while the fast path has never fired, so it registers
+        # unconditionally; 60s is the cadence the spec pins.
+        self._tasks.append(
+            ScheduledTask(
+                name="speculative_ttl_sweep",
+                func=self._run_speculative_ttl_sweep,
+                interval=60,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # The verdict consumer: finished adjudication runs have their
+        # CONCLUDE verdict applied once. Same shape as the sweep — an
+        # empty query until an adjudication finishes, so it registers
+        # unconditionally and lets the config gate the work per tick.
+        self._tasks.append(
+            ScheduledTask(
+                name="speculative_verdict_scan",
+                func=self._run_speculative_verdict_scan,
+                interval=60,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
 
         # CISA KEV refresher — keeps the bundled t=0 seed current from the
         # official feed. Hourly tick; the refresher itself runs at most once
@@ -476,72 +489,6 @@ class TaskScheduler:
             "read_log_removed": reads,
         }
 
-    async def _run_fastpath_lease_sweep(self):
-        """Roll back expired containment leases and reconcile stuck intents.
-
-        Both drivers do their DB reads and executor calls off-thread
-        (asyncio.to_thread) with no session open across an executor call —
-        the same shape as the cleanup sweep above, and the spec's
-        priority-inversion guard: expiry fires regardless of queue depth.
-        Expiry here is datastore-enforced: the scan reads rows, not
-        memory, so a crashed or restarted daemon never leaves a lease
-        alive.
-        """
-        from core.response.fastpath.adjudication import close_expired_shadow_rows
-        from core.response.fastpath.config import FastPathConfig
-        from core.response.fastpath.executors import default_registry
-        from core.response.fastpath.ledger import (
-            ContainmentLedger,
-            reconcile_stale_intents,
-            sweep_expired,
-        )
-
-        ledger = ContainmentLedger()
-        registry = default_registry()
-
-        rolled = await sweep_expired(ledger, registry)
-        self.stats["fastpath_leases_rolled_back"] += rolled["rolled_back"]
-
-        reconciled = await reconcile_stale_intents(
-            ledger,
-            registry,
-            FastPathConfig.from_settings().apply_timeout_seconds,
-        )
-        self.stats["fastpath_intents_reconciled"] += (
-            reconciled["retried_applied"] + reconciled["aborted_failed"]
-        )
-
-        # Shadow rows never apply, so the expiry scan above never sees
-        # them; closing expired ones here (off-thread, same cadence) frees
-        # their idempotency keys before they pin an entity's next live
-        # lease (deferred from PR-3 to this slice).
-        shadow_closed = await asyncio.to_thread(close_expired_shadow_rows)
-        self.stats["fastpath_shadow_rows_closed"] += shadow_closed
-
-        if rolled["expired"] or reconciled["stale"] or shadow_closed:
-            logger.info(
-                "Fastpath lease sweep: %d expired (%d rolled back, %d errors), "
-                "%d stale intents (%d retried, %d aborted), "
-                "%d shadow rows closed",
-                rolled["expired"],
-                rolled["rolled_back"],
-                rolled["errors"],
-                reconciled["stale"],
-                reconciled["retried_applied"],
-                reconciled["aborted_failed"],
-                shadow_closed,
-            )
-
-        return {
-            "expired_scanned": rolled["expired"],
-            "rolled_back": rolled["rolled_back"],
-            "expired_errors": rolled["errors"],
-            "stale_scanned": reconciled["stale"],
-            "retried_applied": reconciled["retried_applied"],
-            "aborted_failed": reconciled["aborted_failed"],
-            "shadow_rows_closed": shadow_closed,
-        }
-
     async def _run_mtd_canary_rotation(self):
         """Rotate the canary credentials the active decoy registry references.
 
@@ -602,6 +549,53 @@ class TaskScheduler:
         injected = await inject_probes(self._processor_queue, self._data_service)
         self.stats["probes_injected"] += injected
         return injected
+
+    async def _run_speculative_ttl_sweep(self):
+        """Release speculative actions past their expiry — the fail-safe.
+
+        Off-thread like the approval expiry above: each release is its own
+        adapter call and row write, and this runs on the daemon's event
+        loop. A no-op while nothing is speculative.
+        """
+        from core.response.fastpath.rollback import expire_speculative_actions
+
+        outcome = await asyncio.to_thread(expire_speculative_actions)
+        if outcome.examined:
+            logger.info(
+                "Speculative TTL sweep released %d of %d expired rows",
+                outcome.released,
+                outcome.examined,
+            )
+        self.stats["speculative_released"] += outcome.released
+        return {
+            "speculative_examined": outcome.examined,
+            "speculative_released": outcome.released,
+        }
+
+    async def _run_speculative_verdict_scan(self):
+        """Apply the verdicts of finished adjudication runs — the review seam's clock.
+
+        Off-thread for the DB work like the sweep above. Ticks while
+        adjudication is disabled cost one config read; the scan is a
+        no-op query while no adjudication run exists.
+        """
+        from core.response.fastpath.config import FastPathConfig
+
+        config = FastPathConfig()
+        if not config.adjudication_enabled:
+            return None
+        from core.response.fastpath.adjudication import (
+            consume_completed_adjudications,
+        )
+
+        counts = await consume_completed_adjudications(config=config)
+        if counts.get("examined"):
+            logger.info(
+                "Speculative verdict scan: %s",
+                {k: v for k, v in counts.items() if v},
+            )
+        self.stats["adjudications_consumed"] += counts.get("consumed", 0)
+        return {"adjudication_verdicts": counts}
 
     async def _run_sandbox_poll(self):
         """Advance pending sandbox submissions to completed reports."""

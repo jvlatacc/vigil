@@ -3315,47 +3315,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/containment/leases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Leases
-         * @description List containment leases, newest first. Read-only — the Fast-Path's
-         *     fates are decided by the daemon; humans act through the approvals API.
-         */
-        get: operations["get_api_containment_leases"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/containment/leases/{lease_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Lease
-         * @description One lease by id, terminal states included.
-         */
-        get: operations["get_api_containment_leases_lease_id"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/conversations/": {
         parameters: {
             query?: never;
@@ -3855,6 +3814,52 @@ export interface paths {
          *     queue's history stays explainable; its findings reappear unchanged.
          */
         post: operations["post_api_exclusions_exclusion_id_remove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fast-path/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Fast Path Actions
+         * @description List every speculative-era action the fast path created, newest first.
+         */
+        get: operations["get_api_fast-path_actions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fast-path/actions/{action_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Fast Path Action
+         * @description Release a live speculative restriction now, as a person's decision.
+         *
+         *     Rides the rollback service's release verb unchanged — the same guarded
+         *     claim the adjudicator and the TTL sweep race through — and records the
+         *     session user as the resolver. The restriction is lifted through the
+         *     enforcement adapter before the row is marked; a lifted-something-else
+         *     is never reported as a release.
+         */
+        post: operations["post_api_fast-path_actions_action_id_release"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10244,54 +10249,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** ContainmentLeaseListResponse */
-        ContainmentLeaseListResponse: {
-            /** Count */
-            count: number;
-            /** Leases */
-            leases?: components["schemas"]["ContainmentLeaseOut"][];
-        };
-        /**
-         * ContainmentLeaseOut
-         * @description Read-only view of one containment lease (mirrors ``LeaseView`` minus
-         *     the undo payload, which stays daemon-internal).
-         */
-        ContainmentLeaseOut: {
-            /** Action Type */
-            action_type: string;
-            /** Created At */
-            created_at?: string | null;
-            /** Decision Rule */
-            decision_rule: string;
-            /** Entity Id */
-            entity_id: string;
-            /** Entity Type */
-            entity_type: string;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Finding Id */
-            finding_id?: string | null;
-            /** Idempotency Key */
-            idempotency_key: string;
-            /** Is Shadow */
-            is_shadow: boolean;
-            /** Lease Id */
-            lease_id: string;
-            /**
-             * Observed
-             * @description Gate-time telemetry snapshot (severity, confidence, detector).
-             */
-            observed?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Status
-             * @description pending_apply | applied | rolled_back | escalated | failed
-             */
-            status: string;
-            /** Ttl Seconds */
-            ttl_seconds?: number | null;
-        };
         /**
          * ContentBlock
          * @description Content block for message (text or image).
@@ -10817,6 +10774,70 @@ export interface components {
         ExclusionRemove: {
             /** Reason */
             reason?: string | null;
+        };
+        /**
+         * FastPathAction
+         * @description One speculative-era ledger row as the console renders it.
+         */
+        FastPathAction: {
+            /** Action Id */
+            action_id: string;
+            /** Action Type */
+            action_type: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Escalation */
+            escalation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Evidence */
+            evidence?: unknown[] | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Outcome */
+            outcome?: {
+                [key: string]: unknown;
+            } | null;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Simulated
+             * @default false
+             */
+            simulated: boolean;
+            /** Status */
+            status: string;
+            /** Target */
+            target?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** FastPathListResponse */
+        FastPathListResponse: {
+            /** Actions */
+            actions?: components["schemas"]["FastPathAction"][];
+            /** Count */
+            count: number;
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+        };
+        /** FastPathReleaseResponse */
+        FastPathReleaseResponse: {
+            action?: components["schemas"]["FastPathAction"] | null;
+            /** Detail */
+            detail: string;
+            /** Released */
+            released: boolean;
         };
         /** FederationGlobalSettings */
         FederationGlobalSettings: {
@@ -19421,78 +19442,6 @@ export interface operations {
             };
         };
     };
-    get_api_containment_leases: {
-        parameters: {
-            query?: {
-                /** @description active (pending_apply or applied, the default) or all (every row, newest first, terminal states included — the recent view). */
-                status?: string;
-                /** @description Filter by entity class: ip | user | host | domain. */
-                entity_type?: string | null;
-                /** @description Filter by the contained principal's id. */
-                entity_id?: string | null;
-                limit?: number;
-            };
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContainmentLeaseListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_api_containment_leases_lease_id: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path: {
-                lease_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContainmentLeaseOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_api_conversations: {
         parameters: {
             query?: {
@@ -20356,6 +20305,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExclusionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_fast-path_actions": {
+        parameters: {
+            query?: {
+                /** @description Filter by status: speculative | rolled_back | escalated | failed. */
+                status?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastPathListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_fast-path_actions_action_id_release": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                action_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastPathReleaseResponse"];
                 };
             };
             /** @description Validation Error */

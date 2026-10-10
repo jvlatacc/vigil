@@ -83,7 +83,12 @@ async def test_both_doors_call_that_function(monkeypatch):
             if inspect.iscoroutinefunction(mcp_fn)
             else mcp_fn(**args)
         )
-        assert json.loads(text) == {"shared": name}
+        body = json.loads(text)
+        # The decide verbs' MCP door appends its best-effort resume report
+        # beside the shared body (tools/mcp/vigil.py::_decide_and_resume);
+        # the body itself must still be the shared function's answer.
+        body.pop("run_resume", None)
+        assert body == {"shared": name}
         assert seen == [name, name]
 
 

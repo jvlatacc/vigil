@@ -433,6 +433,142 @@ def _lookup_domain_threat(
     }
 
 
+def _ratelimit_entrypoint_ruleset(api_token: str, zone_id: str) -> Optional[str]:
+    """The zone's ``http_ratelimit`` entry-point ruleset id, created when absent.
+
+    Rate limiting rules live in the Rulesets API (the previous per-zone
+    rate-limit API stopped working on 2025-06-15): they deploy to the
+    ``http_ratelimit`` phase, and a zone's entry-point ruleset for that
+    phase may not exist yet on a zone that never used one.
+    """
+    headers = _headers(api_token)
+    resp = httpx.get(
+        f"{CF_API_BASE}/zones/{zone_id}/rulesets/phases/http_ratelimit/entrypoint",
+        headers=headers,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    if resp.status_code == 200:
+        data = resp.json() if resp.content else {}
+        return (data.get("result") or {}).get("id")
+    if resp.status_code == 404:
+        resp = httpx.post(
+            f"{CF_API_BASE}/zones/{zone_id}/rulesets",
+            headers=headers,
+            json={
+                "name": "vigil-speculative-rate-limiting",
+                "description": "Created by Vigil speculative containment",
+                "kind": "zone",
+                "phase": "http_ratelimit",
+                "rules": [],
+            },
+            timeout=DEFAULT_TIMEOUT,
+        )
+        data = resp.json() if resp.content else {}
+        return (data.get("result") or {}).get("id")
+    return None
+
+
+def _ratelimit_apply_ip(
+    api_token: str,
+    zone_id: Optional[str],
+    ip: Optional[str],
+    mitigation_timeout: Optional[int],
+    reason: str,
+    period: int = 60,
+    requests_per_period: int = 100,
+) -> Dict[str, Any]:
+    """Create a rate-limiting rule scoped to one source IP.
+
+    The rule counts per ``ip.src`` in the target zone and, when the source
+    exceeds ``requests_per_period`` within ``period`` seconds, blocks it for
+    ``mitigation_timeout`` seconds — the vendor-side bound on the mitigation,
+    so the restriction expires at Cloudflare even when no explicit release
+    arrives. ``external_ref`` is ``<ruleset_id>:<rule_id>``, the handle the
+    release verb deletes.
+    """
+    if not ip:
+        return {"error": "ip required"}
+    if not zone_id:
+        return {"error": "zone_id required for rate limiting rules"}
+    if not mitigation_timeout or mitigation_timeout < 1:
+        return {"error": "mitigation_timeout required"}
+    ruleset_id = _ratelimit_entrypoint_ruleset(api_token, zone_id)
+    if not ruleset_id:
+        return {"error": "could not resolve the http_ratelimit entry-point ruleset"}
+    payload = {
+        "description": f"Vigil speculative rate limit: {reason}"[:512],
+        # The target is a canonical IP literal (actionable_ip upstream), so
+        # the expression cannot carry attacker-controlled text.
+        "expression": f"(ip.src eq {ip})",
+        "action": "block",
+        "enabled": True,
+        "ratelimit": {
+            "characteristics": ["ip.src"],
+            "period": period,
+            "requests_per_period": requests_per_period,
+            "mitigation_timeout": mitigation_timeout,
+        },
+    }
+    resp = httpx.post(
+        f"{CF_API_BASE}/zones/{zone_id}/rulesets/{ruleset_id}/rules",
+        headers=_headers(api_token),
+        json=payload,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    data = resp.json() if resp.content else {}
+    rule_id = (data.get("result") or {}).get("id")
+    success = resp.status_code in (200, 201) and data.get("success", False)
+    return {
+        "success": success,
+        "status_code": resp.status_code,
+        "ruleset_id": ruleset_id,
+        "rule_id": rule_id,
+        "external_ref": f"{ruleset_id}:{rule_id}" if success and rule_id else None,
+        "ip": ip,
+        "mitigation_timeout": mitigation_timeout,
+        "errors": data.get("errors"),
+    }
+
+
+def _ratelimit_release_ip(
+    api_token: str,
+    zone_id: Optional[str],
+    external_ref: Optional[str],
+) -> Dict[str, Any]:
+    """Delete the rate-limiting rule named by ``external_ref`` (idempotent).
+
+    A rule that is already gone answers success: the release's goal is the
+    rule's absence, and a sweep racing a human release must not turn that
+    race into a failure.
+    """
+    if not external_ref:
+        return {"error": "external_ref required"}
+    if not zone_id:
+        return {"error": "zone_id required for rate limiting rules"}
+    ruleset_id, separator, rule_id = external_ref.partition(":")
+    if not separator or not ruleset_id or not rule_id:
+        return {"error": "external_ref must be '<ruleset_id>:<rule_id>'"}
+    resp = httpx.delete(
+        f"{CF_API_BASE}/zones/{zone_id}/rulesets/{ruleset_id}/rules/{rule_id}",
+        headers=_headers(api_token),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    if resp.status_code == 404:
+        return {
+            "success": True,
+            "status_code": resp.status_code,
+            "external_ref": external_ref,
+            "already_released": True,
+        }
+    data = resp.json() if resp.content else {}
+    return {
+        "success": resp.status_code in (200, 204) and data.get("success", True),
+        "status_code": resp.status_code,
+        "external_ref": external_ref,
+        "errors": data.get("errors"),
+    }
+
+
 async def _on_list_tools(_ctx, _params):
     return types.ListToolsResult(tools=await handle_list_tools())
 

@@ -174,6 +174,17 @@ export const approvalsApi = {
     api.post(`/approvals/${actionId}/reject`, { reason, rejected_by }),
 }
 
+/** The fast path's speculative-lifecycle surface (unversioned backend routes). */
+export const fastPathApi = {
+  list: (params?: { status?: string; limit?: number }) =>
+    api.get('/fast-path/actions', { params }),
+
+  release: (actionId: string) =>
+    api.post<{ released: boolean; detail: string }>(
+      `/fast-path/actions/${actionId}/release`
+    ),
+}
+
 /** how a findings read treats findings naming an analyst-excluded IP */
 export type ExclusionView = 'include' | 'hide' | 'only'
 

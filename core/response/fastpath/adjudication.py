@@ -1,706 +1,554 @@
-"""Slow-path adjudication of fast-path containment leases (PR-4).
+"""Speculative-action adjudication: the brief, the verdict, the review seam.
 
-A lease's fate is decided here, in the deliberation loop's own lane — never
-inside it. When a finding reaches the responder, every live lease on its
-principals (or on the finding itself) is re-read against the evidence the
-finding NOW carries, while the comparison baseline is the lease's
-``observed`` snapshot — the telemetry frozen at gate-fire time. LLM triage
-rewrites severity minutes after the gate fired (``_update_finding``'s
-partial update), so adjudication compares what the gate SAW with what the
-slow path now CLAIMS, never with a record that may already have been
-mutated twice.
+The slow path of the dual-track design, in one module's worth of seams:
 
-Three verdicts, in the order they are checked:
+- ``build_adjudication_brief`` / ``adjudication_hypothesis`` — pure
+  renderers from a committed speculative row: what the adjudicator reads
+  and what belief it tests. Both are built from the row as the ledger
+  holds it, never from an in-memory decision.
+- ``parse_verdict`` / ``verdict_from_events`` — the run's verdict, read
+  from the CONCLUDE decision the run journaled, or None.
+- ``consume_verdict`` — the review seam. Maps a verdict onto the rollback
+  service: release lifts the restriction, escalate creates the full
+  containment through the unmodified approval pipeline, retain extends
+  the TTL once, bounded. Anything it cannot act on is refused, said so
+  on the run, and left to the TTL sweep.
+- ``consume_completed_adjudications`` — the scheduled scan: terminal
+  adjudication runs, one verdict each, once.
 
-1. **rollback** — an autonomy demotion, needing no human: the finding was
-   closed, or the current evidence fell below the band the lease was
-   issued on (severity below the observed severity, out of the band
-   entirely, or confidence under the current severity's floor). The
-   rollback driver undoes the effect first and closes the row second; the
-   CAS refuses a loser when the TTL sweeper raced us.
-2. **escalate** — a promotion REQUEST, minted through the EXISTING
-   approval pipeline (``ApprovalService.create_action`` with
-   ``human_only=True`` — the caller's confidence is its own claim, so the
-   row waits for a person; tools/mcp/vigil.py's ``create_approval_action``
-   is the same semantics). It fires when the slow path's evidence is at
-   least as strong as the lease's premise (severity holds or raises,
-   confidence at or above the observed confidence) or the entity is
-   churning. The lease itself is left untouched and applied: until the
-   pipeline resolves, the milder lease remains the state of the world,
-   still TTL-bounded, still sweeper-owned.
-   ``ledger.mark_escalated`` (the applied→escalated CAS) is deliberately
-   not called here — it belongs to the pipeline-resolution integration,
-   and the approvals flow is frozen this PR. The mint is idempotent per
-   lease (``fastpath-escalate:{lease_id}``), so replayed findings cannot
-   queue duplicate approvals.
-3. **hold** — the evidence weakened within the band: still above the
-   severity's floor, but below the confidence the lease was issued on.
-   Nothing to roll back, nothing to promote — the lease runs out its TTL.
-
-Also here, because PR-3's ledger deferred it to this slice: closing
-expired SHADOW rows. A shadow row is scored-but-never-applied, so the
-sweeper — which scans ``applied`` rows — never sees it; left open it would
-pin the entity's idempotency key forever and block every future live lease
-for that principal. Closing is a ``failed`` transition with reason
-``ttl_expired_before_apply``: honest — nothing was ever applied, and the
-observation window closed.
-
-This module is also the fastpath package's one DB-facing read surface,
-shared by the daemon (counters for the gate, candidate leases) and by the
-API router and MCP tools (the read-only lease list). It imports nothing
-from services, the API surface, or the LLM stack — lint-imports holds for
-the whole package.
+Authority, in one place (locked decision 5): a verdict applies only while
+the row is still ``speculative``. A human decision, the TTL sweep or an
+earlier verdict resolved it first, and the late verdict is recorded as
+superseded and takes no action — including the disagreement with a human
+resolver, which the run row carries. The fail-safe is never the verdict:
+whatever the adjudicator says, the TTL sweep releases a row past expiry.
 """
-
-from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import select
 
-from core.response.approval_service import ActionType, ApprovalService
+from core.response.approval_service import ActionStatus, PendingAction
 from core.response.fastpath.config import FastPathConfig
-from core.response.fastpath.gate import GateCounters
-from core.response.fastpath.ledger import (
-    ACTIVE_STATUSES,
-    ACTOR_ADJUDICATOR,
-    DOWNGRADED,
-    FALSE_POSITIVE,
-    PENDING_APPLY,
-    REASON_TTL_EXPIRED_BEFORE_APPLY,
-    ROLLED_BACK,
-    ContainmentLedger,
-    LeaseView,
-    rollback_lease,
+from core.response.fastpath.rollback import (
+    RELEASE_REASON_ADJUDICATED,
+    SOURCE_ADJUDICATOR,
+    EscalationRequest,
+    RollbackService,
 )
 from core.storage.connection import get_db_manager
-from core.storage.models import ContainmentAction
-from core.time import utcnow
+from core.storage.models import WorkflowRun
 
 logger = logging.getLogger(__name__)
 
-# The principal keys the gate reads (gate._PRINCIPAL_KEYS), in the gate's own
-# selection order, paired with the entity_type each becomes in the ledger.
-# The gate is a frozen PR-2 module that keeps its tuple private; walking the
-# same order here recovers which key a target came from without the gate
-# exposing internals. Parity is pinned by test — if the gate ever reorders or
-# extends its keys, that test fails and this table must follow it.
-PRINCIPAL_ENTITY_TYPES: Tuple[Tuple[str, str], ...] = (
-    ("src_ips", "ip"),
-    ("usernames", "user"),
-    ("hostnames", "host"),
-    ("domains", "domain"),
-)
+# The verdict vocabulary the brief asks for — the spec's three resolutions.
+VERDICT_RELEASE = "release"
+VERDICT_ESCALATE = "escalate"
+VERDICT_RETAIN = "retain"
+VERDICTS = frozenset({VERDICT_RELEASE, VERDICT_ESCALATE, VERDICT_RETAIN})
 
-# The finding status that retires a containment's premise. Findings link to
-# cases and a closed case closes the book on its findings
-# (core.findings.alert_outcomes reads case.status == "closed"); a finding
-# dict that arrives at the responder already carrying that disposition is a
-# retraction of the evidence the lease was issued on.
-CLOSED_FINDING_STATUSES = frozenset({"closed"})
-
-# Escalation: repeated lease churn on one entity. Each rollback frees the
-# entity's idempotency key, so churn — apply, roll back, apply again — is the
-# one pattern the per-entity cap cannot see. Three completed cycles within
-# the window is the v1 line; the threshold is a module constant (FastPathConfig
-# is a frozen PR-2 file) and the escalation it mints is a human's call anyway.
-CHURN_ESCALATION_THRESHOLD = 3
-
-# How the escalation bridge maps a lease's entity class onto the approval
-# pipeline's action vocabulary: the request asks for the DURABLE version of
-# the same containment. Whether it is ever released is the human gate's
-# decision, not ours — human_only=True holds the row whatever confidence says.
-_ESCALATION_ACTION_BY_ENTITY_TYPE = {
-    "ip": ActionType.WAF_BLOCK,
-    "host": ActionType.WAF_BLOCK,
-    "domain": ActionType.BLOCK_DOMAIN,
-    "user": ActionType.DISABLE_USER,
-}
+# The verdict consumer's declared actor: distinct from the fast path (which
+# creates rows), the TTL sweep (which releases past expiry) and any person.
+# The run id rides on the run row; the actor name stays one constant so a
+# released row's record reads the same everywhere.
+ADJUDICATOR_ACTOR = "adjudicator"
 
 
-def _adjudication_summary() -> Dict[str, Any]:
-    """The zeroed per-finding adjudication summary (the caller's stats surface)."""
-    return {
-        "examined": 0,
-        "rolled_back": 0,
-        "escalated": 0,
-        "held": 0,
-        "contested": 0,
-        "skipped_no_executor": 0,
-    }
+def adjudicator_actor(run_id: str) -> str:
+    """The actor name for one adjudication run's resolutions."""
+    return f"{ADJUDICATOR_ACTOR}:{run_id}"
 
 
-def _first_str(value: Any) -> Optional[str]:
-    """First usable string of an entity_context field, else None — the
-    gate's own tolerance for vendors that send a bare string for a list."""
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            if isinstance(item, str) and item.strip():
-                return item.strip()
-    return None
+# What the run row's ``trigger_context.verdict_status`` can say. ``pending``
+# is written at enqueue; the scan moves a terminal run to exactly one of the
+# others, once — the marker is what makes the scan idempotent.
+VERDICT_PENDING = "pending"
+VERDICT_CONSUMED = "consumed"
+VERDICT_SUPERSEDED = "superseded"
+VERDICT_REFUSED = "refused"
 
+# Terminal workflow_runs statuses the scan will pick up. ``completed`` runs
+# are read for a verdict; anything else ended without one.
+TERMINAL_RUN_STATUSES = ("completed", "failed", "cancelled")
 
-def _confidence_of(finding: Dict[str, Any]) -> Optional[float]:
-    """The confidence as the gate reads it: triage_confidence, 0.5 when a
-    finding has not been triaged, None when the value is not a probability."""
-    return _confidence_value(finding.get("triage_confidence", 0.5))
-
-
-def _confidence_value(value: Any) -> Optional[float]:
-    """``value`` as a probability in [0, 1], or None when it is not one."""
-    try:
-        confidence = float(value)
-    except (TypeError, ValueError):
-        return None
-    return confidence if 0.0 <= confidence <= 1.0 else None
-
-
-def principals_of(finding: Dict[str, Any]) -> List[Tuple[str, str]]:
-    """Every containable principal of a finding as ``(entity_type, id)``.
-
-    The gate acts on the first of these; adjudication looks for leases on
-    ALL of them — a finding that returns with its IP rewritten still
-    reaches the lease issued on its username.
-    """
-    entities = finding.get("entity_context") or {}
-    if not isinstance(entities, dict):
-        return []
-    pairs: List[Tuple[str, str]] = []
-    for key, entity_type in PRINCIPAL_ENTITY_TYPES:
-        value = _first_str(entities.get(key))
-        if value is not None:
-            pairs.append((entity_type, value))
-    return pairs
-
-
-def first_principal(finding: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    """The principal the gate would target — the first in its selection order."""
-    pairs = principals_of(finding)
-    return pairs[0] if pairs else (None, None)
-
-
-def entity_type_for_target(
-    finding: Dict[str, Any], target: Optional[str]
-) -> Optional[str]:
-    """The entity_type of the principal key the gate selected ``target`` from.
-
-    The gate picks the first non-empty string across its principal keys;
-    re-walking that order for the value recovers the key. None when the
-    target is absent from the finding — a lease cannot be keyed without its
-    entity type, and inventing one would break the idempotency key.
-    """
-    if target is None:
-        return None
-    for key, entity_type in PRINCIPAL_ENTITY_TYPES:
-        entities = finding.get("entity_context") or {}
-        if _first_str(entities.get(key) if isinstance(entities, dict) else None) == (
-            target
-        ):
-            return entity_type
-    return None
-
-
-# ----------------------------------------------------------------------
-# The pure verdict
-# ----------------------------------------------------------------------
-
-
-class AdjudicationAction(str, Enum):
-    """What the slow path does with a live lease on this evidence."""
-
-    ROLLBACK = "rollback"
-    ESCALATE = "escalate"
-    HOLD = "hold"
+# Rows examined per scan tick. Each read is one HTTP call to the agent
+# layer; a bounded batch keeps a backlog of finished runs from holding the
+# daemon's event loop.
+CONSUME_BATCH = 10
 
 
 @dataclass(frozen=True)
-class AdjudicationVerdict:
-    """One adjudication verdict: the action, the rule that decided it, and —
-    for rollbacks — the reason from the ledger's rollback vocabulary."""
+class FastPathVerdict:
+    """The adjudicator's verdict, parsed from the journaled decision.
 
-    action: AdjudicationAction
-    rule: str
-    reason: Optional[str] = None
-
-
-def adjudicate(
-    lease: LeaseView,
-    finding: Dict[str, Any],
-    config: FastPathConfig,
-    rolled_back_in_window: int = 0,
-    churn_threshold: int = CHURN_ESCALATION_THRESHOLD,
-) -> AdjudicationVerdict:
-    """Compare a live lease against the finding's current evidence.
-
-    Pure: no clock, no database, no model. The baseline is the lease's
-    observed snapshot (what the gate saw); the compared values are the
-    finding's current severity and confidence — read exactly the way the
-    gate reads them, so the two never disagree about what a field means.
+    ``confidence`` is None unless the run named a probability: a
+    non-confidence number is the caller inflating the claim, and nothing
+    downstream may read it as one.
     """
-    observed = dict(lease.observed or {})
-    observed_severity = str(observed.get("severity") or "").strip().lower()
-    current_severity = str(finding.get("severity") or "").strip().lower()
-    current_confidence = _confidence_of(finding)
 
-    # (1) Closure. The disposition retired the premise; there is nothing to
-    # keep containing and nothing to escalate toward.
-    if str(finding.get("status") or "").strip().lower() in CLOSED_FINDING_STATUSES:
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ROLLBACK,
-            rule="fastpath.adjudication.finding_status=closed",
-            reason=FALSE_POSITIVE,
-        )
+    verdict: str
+    rationale: str = ""
+    confidence: Optional[float] = None
+    # retain only: the extension asked for, in seconds. None asks for the
+    # config default; the retain verb clamps whatever arrives.
+    retention_seconds: Optional[int] = None
+    # escalate only: the full containment action asked for. A missing or
+    # shapeless proposal refuses the verdict — escalation never guesses.
+    proposed_full_action: Optional[Dict[str, Any]] = None
 
-    # (2) Downgrade — the current evidence would no longer earn this lease.
-    # A severity below the observed one is a demotion even when it is still
-    # in the band: the critical mapping's rate_limit outruns what high
-    # severity earns, and the milder mapping requires fresh evidence anyway
-    # (the anti-flap floor).
-    severity_rank = {"critical": 2, "high": 1}
-    if severity_rank.get(current_severity, 0) < severity_rank.get(observed_severity, 0):
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ROLLBACK,
-            rule=(
-                f"fastpath.adjudication.severity={current_severity or 'unset'}"
-                f" below observed={observed_severity or 'unset'}"
-            ),
-            reason=DOWNGRADED,
-        )
-    if current_severity not in config.allowed_severities:
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ROLLBACK,
-            rule=(
-                f"fastpath.adjudication.severity={current_severity or 'unset'}"
-                " not in allowed_severities"
-            ),
-            reason=DOWNGRADED,
-        )
-    floor = {
-        "critical": config.critical_action_floor,
-        "high": config.high_action_floor,
-    }.get(current_severity)
-    if floor is not None and (current_confidence is None or current_confidence < floor):
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ROLLBACK,
-            rule=(
-                f"fastpath.adjudication.confidence={current_confidence}"
-                f" below {current_severity}_floor={floor}"
-            ),
-            reason=DOWNGRADED,
-        )
 
-    # (3) Escalation. Churn outranks the plain holds-condition: repeated
-    # apply/rollback cycles mean the lease keeps coming back, and the
-    # durable question belongs to a human either way.
-    if rolled_back_in_window >= churn_threshold:
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ESCALATE,
-            rule=(
-                f"fastpath.adjudication.churn={rolled_back_in_window}"
-                f">={churn_threshold} rollbacks in window"
-            ),
-        )
-    # "Severity holds or raises": the slow path's evidence is at least as
-    # strong as the lease's premise — same or higher severity rank, at or
-    # above the observed confidence. That is a promotion question, and
-    # promotion is a person's call. An unknown observed confidence cannot
-    # claim this, so it holds (no promotion on an incomplete snapshot).
-    observed_confidence = _confidence_value(observed.get("confidence"))
+def parse_verdict(decision: Mapping[str, Any]) -> Optional[FastPathVerdict]:
+    """The verdict a CONCLUDE decision carries, or None.
+
+    A decision that names no verdict — an intake shadow's CONCLUDE, a
+    verb that is not CONCLUDE, a verdict outside the vocabulary — parses
+    to None: nothing here guesses what a run meant.
+    """
+    if not isinstance(decision, Mapping):
+        return None
+    if decision.get("action") != "CONCLUDE":
+        return None
+    verdict = decision.get("verdict")
+    if verdict not in VERDICTS:
+        return None
+    confidence: Optional[float] = None
+    stated = decision.get("stated_confidence")
+    if isinstance(stated, (int, float)) and not isinstance(stated, bool):
+        if 0.0 <= float(stated) <= 1.0:
+            confidence = float(stated)
+    retention: Optional[int] = None
+    asked = decision.get("retention_seconds")
     if (
-        severity_rank.get(current_severity, 0)
-        >= severity_rank.get(observed_severity, 0)
-        and current_confidence is not None
-        and observed_confidence is not None
-        and current_confidence >= observed_confidence
+        verdict == VERDICT_RETAIN
+        and isinstance(asked, (int, float))
+        and not isinstance(asked, bool)
+        and asked > 0
     ):
-        return AdjudicationVerdict(
-            action=AdjudicationAction.ESCALATE,
-            rule=(
-                f"fastpath.adjudication.evidence_holds severity={current_severity}"
-                f" confidence={current_confidence}>=observed={observed_confidence}"
-            ),
-        )
-
-    # (4) Hold. Weakened within the band — above the floor, below the
-    # premise. The lease runs out its TTL; the sweeper is the backstop.
-    return AdjudicationVerdict(
-        action=AdjudicationAction.HOLD,
-        rule="fastpath.adjudication.evidence_between_bands",
+        retention = int(asked)
+    proposed = decision.get("proposed_full_action")
+    full_action = dict(proposed) if isinstance(proposed, Mapping) else None
+    return FastPathVerdict(
+        verdict=str(verdict),
+        rationale=str(decision.get("rationale") or ""),
+        confidence=confidence,
+        retention_seconds=retention,
+        proposed_full_action=full_action,
     )
 
 
-# ----------------------------------------------------------------------
-# The DB-facing read surface (daemon wiring, router, MCP tools)
-# ----------------------------------------------------------------------
+def verdict_from_events(
+    events: List[Dict[str, Any]],
+) -> Optional[FastPathVerdict]:
+    """The run's verdict: the last verdict-bearing CONCLUDE it journaled."""
+    for event in reversed(events):
+        if not isinstance(event, Mapping) or event.get("kind") != "decision":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        decision = payload.get("decision")
+        if not isinstance(decision, Mapping):
+            continue
+        verdict = parse_verdict(decision)
+        if verdict is not None:
+            return verdict
+    return None
 
 
-def gate_counters(
-    finding: Dict[str, Any],
-    config: FastPathConfig,
-    db_manager: Optional[Any] = None,
-    now: Optional[datetime] = None,
-) -> GateCounters:
-    """The live lease state the gate's caps compare against.
+# ---------------------------------------------------------------------------
+# The brief — built from the row as the ledger holds it
+# ---------------------------------------------------------------------------
 
-    One read, three numbers, all scoped to what the finding can move: the
-    active leases on its target principal (the per-entity cap), the leases
-    its detector triggered inside the rolling window (the per-window cap),
-    and the seconds since that principal last rolled back (the anti-flap
-    floor). A finding with no principal gets an empty slate — the gate
-    refuses it on entity class before any cap could matter.
+
+def _parameter(row: PendingAction, key: str, default: Any) -> Any:
+    return (row.parameters or {}).get(key, default)
+
+
+def _signals(row: PendingAction) -> Dict[str, Any]:
+    signals = _parameter(row, "signals", {})
+    return dict(signals) if isinstance(signals, Mapping) else {}
+
+
+def _finding_id(row: PendingAction) -> str:
+    finding = _signals(row).get("finding_id")
+    return str(finding) if finding else "unknown"
+
+
+def _simulation_label(row: PendingAction) -> str:
+    return "simulated" if _parameter(row, "simulation", False) else "enforced"
+
+
+def _ttl(row: PendingAction) -> str:
+    ttl = _parameter(row, "ttl_seconds", "unrecorded")
+    expires = _parameter(row, "expires_at", "unrecorded")
+    return f"{ttl}s, expiring {expires}"
+
+
+def _rollback_recipe(row: PendingAction) -> str:
+    recipe = _parameter(row, "rollback", {})
+    if not isinstance(recipe, Mapping):
+        return "unrecorded"
+    external_ref = recipe.get("external_ref")
+    return (
+        f"adapter {recipe.get('adapter', 'unrecorded')} releasing "
+        f"{recipe.get('action_type', 'unrecorded')} on "
+        f"{recipe.get('target', 'unrecorded')}"
+        + (f" (external ref {external_ref})" if external_ref else "")
+    )
+
+
+def _deciding_rule(row: PendingAction) -> str:
+    rule = _parameter(row, "rule", "")
+    return str(rule) if rule else "unrecorded"
+
+
+def build_adjudication_brief(row: PendingAction) -> str:
+    """The brief one speculative row's adjudication runs on.
+
+    Pure render from the committed row — the record the fast path wrote,
+    the verdict contract it is being asked to rule on, and the authority
+    that outranks it. The brief includes the speculative-action record by
+    construction: every caller holds a row that was read back from the
+    ledger, so the record is present, not hoped for.
     """
-    entity_type, entity_id = first_principal(finding)
-    if entity_id is None:
-        return GateCounters()
-    detector = str(finding.get("detector") or finding.get("data_source") or "")
-    now = now or utcnow()
-    window_start = now - timedelta(seconds=config.window_seconds)
-    manager = db_manager or get_db_manager()
-    with manager.session_scope() as session:
-        active_for_entity = session.execute(
-            select(func.count())
-            .select_from(ContainmentAction)
-            .where(
-                ContainmentAction.entity_type == entity_type,
-                ContainmentAction.entity_id == entity_id,
-                ContainmentAction.status.in_(ACTIVE_STATUSES),
-            )
-        ).scalar_one()
-        in_window = session.execute(
-            select(func.count())
-            .select_from(ContainmentAction)
-            .where(
-                ContainmentAction.created_at >= window_start,
-                ContainmentAction.observed["detector"].astext == detector,
-            )
-        ).scalar_one()
-        last_rollback_at = session.execute(
-            select(func.max(ContainmentAction.rolled_back_at)).where(
-                ContainmentAction.entity_type == entity_type,
-                ContainmentAction.entity_id == entity_id,
-                ContainmentAction.status == ROLLED_BACK,
-            )
-        ).scalar_one()
-    seconds_since = (
-        (now - last_rollback_at).total_seconds() if last_rollback_at else None
-    )
-    return GateCounters(
-        active_leases_for_entity=active_for_entity,
-        leases_in_window=in_window,
-        seconds_since_last_rollback=seconds_since,
+    simulated = _simulation_label(row)
+    return f"""\
+
+## Speculative action under adjudication
+
+A speculative containment restriction is LIVE on {row.target} and this run
+decides its fate. The fast path applied it with no model call and no person;
+you are the slow path's second opinion over the record below. You execute
+nothing: release, escalation and retention are applied by the consumer of
+your verdict, never by this run.
+
+- Action: {row.action_id} ({row.action_type})
+- Applied by: {row.created_by} — deciding rule: {_deciding_rule(row)}
+- Enforcement: {simulated} — a simulated row records intent only; treat
+  its absence of external effect when you weigh the benign account.
+- Time box: {_ttl(row)}
+- Rollback recipe: {_rollback_recipe(row)}
+- Triggering finding: {_finding_id(row)}
+- Signal snapshot — exactly the fields the deciding rule read:
+  {sorted(_signals(row).items())}
+
+## Your verdict
+
+Test the stated hypothesis against the evidence as on any adjudication,
+then CONCLUDE with the verdict field set to exactly one of:
+
+- "release" — the benign account stood, or the signals do not support
+  restricting this address any longer.
+- "escalate" — full containment is warranted: set proposed_full_action to
+  an object with action_type (a full containment type — a speculative
+  micro-action is refused) and optionally target. The proposal goes to
+  the human approval gate; nothing here enforces it.
+- "retain" — the restriction is warranted but not yet settled: set
+  retention_seconds to the extension you are asking for. It is clamped
+  to the row's ceiling and applies at most once.
+
+For this run, proposed_workflow is "none": the verdict fields are the
+conclusion, and the catalogue question does not apply. Whatever you
+conclude, the row resolves no later than its expiry — a missing, refused
+or late verdict releases it by the TTL sweep.
+"""
+
+
+def adjudication_hypothesis(row: PendingAction) -> str:
+    """The belief the run tests: that the restriction is warranted.
+
+    Stated as intake's intent was — the adversary claim the lead tests
+    against the seeded benign account, with the record's deciding rule
+    and signal snapshot as the grounds.
+    """
+    return (
+        f"The speculative restriction on {row.target} is warranted: the "
+        f"deciding rule ({_deciding_rule(row)}) read signal evidence "
+        f"consistent with an attacker operating from that address."
     )
 
 
-def get_lease_by_id(
-    lease_id: str,
-    db_manager: Optional[Any] = None,
-) -> Optional[LeaseView]:
-    """One lease by id, any state — the router's and MCP tool's single-lease read."""
-    manager = db_manager or get_db_manager()
-    with manager.session_scope() as session:
-        row = session.get(ContainmentAction, lease_id)
+# ---------------------------------------------------------------------------
+# The review seam
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VerdictOutcome:
+    """What consuming one verdict did.
+
+    ``applied`` — a rollback verb ran and claimed the row.
+    ``superseded`` — the row was already resolved (a human, the sweep, an
+    earlier verdict); the verdict is recorded on the run and nothing else
+    moved. ``refused`` — the verdict could not be acted on; the run row
+    says why, and the TTL sweep stays the fail-safe.
+    """
+
+    action_id: str
+    run_id: str
+    verdict: Optional[str]
+    applied: bool
+    superseded: bool
+    detail: str
+
+
+def _resolved_by(action: PendingAction) -> str:
+    """Who resolved a no-longer-speculative row, from the row's own record."""
+    if action.status == ActionStatus.ROLLED_BACK.value:
+        result = action.execution_result or {}
+        reason = result.get("reason", "unknown reason")
+        actor = result.get("actor", "unknown actor")
+        return f"released ({reason}) by {actor}"
+    if action.status == ActionStatus.ESCALATED.value:
+        parameters = action.parameters or {}
+        escalation = parameters.get("escalation") or {}
+        source = escalation.get("source", "unknown source")
+        return f"escalated ({source}) to {escalation.get('action_id', 'unknown')}"
+    if action.status == ActionStatus.EXECUTED.value:
+        return "the full pipeline executed the escalated action"
+    return f"resolved to {action.status}"
+
+
+def _mark_run(run_id: str, status: str, **fields: Any) -> None:
+    """Record the verdict outcome on the run row — the adjudication's record.
+
+    Best effort: a run row that never landed (begin_run is best effort
+    too) leaves nothing to mark, and the row's own record still says what
+    happened.
+    """
+    db = get_db_manager()
+    with db.session_scope() as session:
+        row = session.get(WorkflowRun, run_id)
         if row is None:
-            return None
-        return LeaseView.from_row(row)
+            return
+        context = dict(row.trigger_context or {})
+        context["verdict_status"] = status
+        context.update(fields)
+        row.trigger_context = context
 
 
-def read_leases(
-    status: str = "active",
-    limit: int = 50,
-    entity_type: Optional[str] = None,
-    entity_id: Optional[str] = None,
-    db_manager: Optional[Any] = None,
-) -> List[LeaseView]:
-    """The read-only lease list — the one implementation behind the router
-    and the MCP ``lease_list`` tool.
+def _escalation_request(
+    verdict: FastPathVerdict, action: PendingAction
+) -> Optional[EscalationRequest]:
+    """The escalation the verdict asks for, or None when it names none.
 
-    ``status`` is ``"active"`` (pending_apply or applied, the default) or
-    ``"all"`` (every row, newest first, terminal states included — the
-    recent view). Terminal states free an entity's idempotency key, which
-    is exactly what the recent view exists to show.
+    The target defaults to the speculative row's own target — the same
+    adversary — and the type must be present: an escalation without a
+    full containment type is refused, never guessed.
     """
-    if status not in ("active", "all"):
-        raise ValueError(f"status must be 'active' or 'all', got {status!r}")
-    manager = db_manager or get_db_manager()
-    stmt = select(ContainmentAction)
-    if status == "active":
-        stmt = stmt.where(ContainmentAction.status.in_(ACTIVE_STATUSES))
-    if entity_type is not None:
-        stmt = stmt.where(ContainmentAction.entity_type == entity_type)
-    if entity_id is not None:
-        stmt = stmt.where(ContainmentAction.entity_id == entity_id)
-    stmt = stmt.order_by(ContainmentAction.created_at.desc()).limit(max(1, limit))
-    with manager.session_scope() as session:
-        rows = session.execute(stmt).scalars().all()
-        return [LeaseView.from_row(row) for row in rows]
-
-
-# ----------------------------------------------------------------------
-# The adjudicator — the responder lane's collaborator
-# ----------------------------------------------------------------------
-
-
-class FastPathAdjudicator:
-    """Finds the leases a finding touches and carries out their verdicts.
-
-    Rollbacks run through the ledger's driver (undo first, CAS second);
-    escalations mint into the SAME ``ApprovalService`` the responder already
-    holds — one pipeline, one queue, one human gate. Nothing here ever
-    promotes: the strongest thing this class can do alone is stop.
-    """
-
-    def __init__(
-        self,
-        approvals: ApprovalService,
-        ledger: Optional[ContainmentLedger] = None,
-        registry: Optional[Any] = None,
-        config: Optional[FastPathConfig] = None,
-        churn_threshold: int = CHURN_ESCALATION_THRESHOLD,
-        churn_window_seconds: int = 3600,
-        db_manager: Optional[Any] = None,
-    ):
-        self._approvals = approvals
-        self._ledger = ledger or ContainmentLedger(
-            db_manager=db_manager if db_manager is not None else None
-        )
-        if registry is None:
-            from core.response.fastpath.executors import default_registry
-
-            registry = default_registry()
-        self._registry = registry
-        self._config = config or FastPathConfig.from_settings()
-        self._churn_threshold = churn_threshold
-        self._churn_window_seconds = churn_window_seconds
-        self._db_manager = db_manager
-
-    async def on_finding(self, finding: Dict[str, Any]) -> Dict[str, Any]:
-        """Adjudicate every live lease this finding touches.
-
-        Runs on the responder's worker — the deliberation loop's cadence,
-        not the millisecond path's. The summary it returns is the caller's
-        stats surface; failures propagate (the responder contains them), so
-        an adjudication bug is visible rather than silently absorbed.
-
-        A disabled Fast-Path has no leases to adjudicate, so the skip keeps
-        the disabled path DB-free; the TTL sweep remains the backstop for
-        any lease that outlived the switch — expiry is datastore-enforced
-        and the sweeper runs unconditionally.
-        """
-        if not self._config.enabled:
-            return _adjudication_summary()
-        leases = await asyncio.to_thread(self._candidate_leases, finding)
-        summary = _adjudication_summary()
-        summary["examined"] = len(leases)
-        for lease in leases:
-            churn = await asyncio.to_thread(
-                self._rolled_back_in_window, lease.entity_type, lease.entity_id
-            )
-            verdict = adjudicate(
-                lease,
-                finding,
-                self._config,
-                rolled_back_in_window=churn,
-                churn_threshold=self._churn_threshold,
-            )
-            if verdict.action is AdjudicationAction.ROLLBACK:
-                executor = self._registry.get(lease.action_type)
-                if executor is None:
-                    # The sweeper skips these too: a missing executor is
-                    # never a rollback, and undoing nothing must not be
-                    # recorded as one.
-                    summary["skipped_no_executor"] += 1
-                    continue
-                transition = await rollback_lease(
-                    self._ledger, executor, lease.id, verdict.reason or DOWNGRADED
-                )
-                if transition is None:
-                    # The sweeper's CAS won the race; its undo was
-                    # idempotent, so the double-fire was harmless.
-                    summary["contested"] += 1
-                else:
-                    summary["rolled_back"] += 1
-                    logger.info(
-                        "fast-path adjudication: lease %s rolled back (%s)",
-                        lease.id,
-                        verdict.rule,
-                    )
-            elif verdict.action is AdjudicationAction.ESCALATE:
-                await asyncio.to_thread(self._mint_escalation, lease, verdict)
-                summary["escalated"] += 1
-            else:
-                summary["held"] += 1
-        return summary
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
-    def _manager(self) -> Any:
-        return self._db_manager or get_db_manager()
-
-    def _candidate_leases(self, finding: Dict[str, Any]) -> List[LeaseView]:
-        """Live leases on the finding's principals, or minted by the finding."""
-        conditions: List[Any] = []
-        finding_id = finding.get("finding_id")
-        if finding_id:
-            conditions.append(ContainmentAction.finding_id == str(finding_id))
-        for entity_type, entity_id in principals_of(finding):
-            conditions.append(
-                and_(
-                    ContainmentAction.entity_type == entity_type,
-                    ContainmentAction.entity_id == entity_id,
-                )
-            )
-        if not conditions:
-            return []
-        with self._manager().session_scope() as session:
-            rows = (
-                session.execute(
-                    select(ContainmentAction)
-                    .where(
-                        ContainmentAction.status.in_(ACTIVE_STATUSES),
-                        or_(*conditions),
-                    )
-                    .order_by(ContainmentAction.created_at)
-                    .limit(50)
-                )
-                .scalars()
-                .all()
-            )
-        seen: Dict[str, LeaseView] = {}
-        for row in rows:
-            view = LeaseView.from_row(row)
-            seen.setdefault(view.id, view)
-        return list(seen.values())
-
-    def _rolled_back_in_window(self, entity_type: str, entity_id: str) -> int:
-        """Completed rollback cycles for this principal inside the churn window."""
-        cutoff = utcnow() - timedelta(seconds=self._churn_window_seconds)
-        with self._manager().session_scope() as session:
-            return session.execute(
-                select(func.count())
-                .select_from(ContainmentAction)
-                .where(
-                    ContainmentAction.entity_type == entity_type,
-                    ContainmentAction.entity_id == entity_id,
-                    ContainmentAction.status == ROLLED_BACK,
-                    ContainmentAction.rolled_back_at >= cutoff,
-                )
-            ).scalar_one()
-
-    def _mint_escalation(self, lease: LeaseView, verdict: AdjudicationVerdict) -> None:
-        """Mint the promotion request into the existing approval pipeline.
-
-        ``human_only=True`` is the point: the adjudicator's confidence is
-        its own claim, so the row waits for a person whatever it says. The
-        lease stays applied and TTL-bounded until the pipeline resolves;
-        ``mark_escalated`` is the pipeline-resolution integration's call,
-        not this slice's.
-        """
-        action_type = _ESCALATION_ACTION_BY_ENTITY_TYPE.get(
-            lease.entity_type, ActionType.CUSTOM
-        )
-        observed_confidence = lease.observed.get("confidence")
-        try:
-            observed_confidence = (
-                float(observed_confidence) if observed_confidence is not None else 0.0
-            )
-        except (TypeError, ValueError):
-            observed_confidence = 0.0
-        approval = self._approvals.create_action(
-            action_type=action_type,
-            title=(
-                f"Fast-Path escalation: durable {action_type.value} for"
-                f" {lease.entity_type} {lease.entity_id}"
-            ),
-            description=(
-                f"Containment lease {lease.id} ({lease.action_type}) is live and"
-                f" the slow path's evidence supports it. A person decides whether"
-                f" to promote to a durable block; the lease itself stays applied"
-                f" and expires on its own TTL meanwhile."
-            ),
-            target=lease.entity_id,
-            confidence=max(0.0, min(1.0, observed_confidence)),
-            reason=verdict.rule,
-            evidence=[
-                f"lease:{lease.id}",
-                f"lease_action:{lease.action_type}",
-                f"lease_rule:{lease.decision_rule}",
-            ]
-            + ([f"finding:{lease.finding_id}"] if lease.finding_id else []),
-            created_by=ACTOR_ADJUDICATOR,
-            human_only=True,
-            idempotency_key=f"fastpath-escalate:{lease.id}",
-            parameters={
-                "lease_id": lease.id,
-                "lease_action_type": lease.action_type,
-                "entity_type": lease.entity_type,
-                "entity_id": lease.entity_id,
-                "rule": verdict.rule,
-            },
-        )
-        logger.info(
-            "fast-path adjudication: escalation minted lease=%s approval=%s (%s)",
-            lease.id,
-            approval.action_id,
-            verdict.rule,
-        )
-
-
-# ----------------------------------------------------------------------
-# Shadow-row closing — the slice PR-3 deferred to PR-4
-# ----------------------------------------------------------------------
-
-
-def close_expired_shadow_rows(
-    now: Optional[datetime] = None,
-    batch_size: int = 100,
-    ledger: Optional[ContainmentLedger] = None,
-    db_manager: Optional[Any] = None,
-) -> int:
-    """Close shadow rows whose observation window has ended.
-
-    Shadow rows never apply, so the sweeper never sees them — but each open
-    one holds its entity's idempotency key, and a key pinned by a stale
-    shadow row would quietly block every future live lease for that
-    principal. Closing is a ``failed`` transition with
-    ``ttl_expired_before_apply``: nothing was ever applied, and the window
-    closed. Returns the number of rows closed.
-    """
-    now = now or utcnow()
-    ledger = ledger or ContainmentLedger(
-        db_manager=db_manager if db_manager is not None else None
+    proposed = verdict.proposed_full_action or {}
+    action_type = proposed.get("action_type")
+    if not isinstance(action_type, str) or not action_type:
+        return None
+    target = proposed.get("target") or action.target
+    if not isinstance(target, str) or not target:
+        return None
+    return EscalationRequest(
+        action_type=action_type,
+        target=target,
+        confidence=verdict.confidence if verdict.confidence is not None else 0.0,
+        reasoning=verdict.rationale,
     )
-    manager = db_manager or get_db_manager()
-    with manager.session_scope() as session:
+
+
+def consume_verdict(
+    action_id: str,
+    verdict: FastPathVerdict,
+    *,
+    run_id: str,
+    config: FastPathConfig,
+    rollback: Optional[RollbackService] = None,
+) -> VerdictOutcome:
+    """Apply one adjudicated verdict at the review seam.
+
+    The verdict wins only over a live row. The supersession check and the
+    verbs' own guarded claims are two halves of one rule: whatever raced
+    the adjudicator — a person's release, the TTL sweep, a person's
+    approval — is resolved first, and the late verdict records the
+    disagreement on the run and changes nothing else.
+    """
+    service = rollback or RollbackService(config=config)
+    actor = adjudicator_actor(run_id)
+    action = service.approvals.get_action(action_id)
+    if action is None:
+        detail = "the speculative row no longer exists"
+        _mark_run(run_id, VERDICT_REFUSED, verdict=verdict.verdict, detail=detail)
+        return VerdictOutcome(action_id, run_id, verdict.verdict, False, False, detail)
+    if action.status != ActionStatus.SPECULATIVE.value:
+        resolver = _resolved_by(action)
+        detail = (
+            f"the row was resolved by {resolver} before the verdict arrived; "
+            f"the disagreement is recorded here and nothing was changed"
+        )
+        _mark_run(
+            run_id,
+            VERDICT_SUPERSEDED,
+            verdict=verdict.verdict,
+            resolved_by=resolver,
+            detail=detail,
+        )
+        return VerdictOutcome(action_id, run_id, verdict.verdict, False, True, detail)
+
+    applied = False
+    detail = ""
+    if verdict.verdict == VERDICT_RELEASE:
+        outcome = service.release(action_id, RELEASE_REASON_ADJUDICATED, actor)
+        applied, detail = outcome.released, outcome.detail
+    elif verdict.verdict == VERDICT_ESCALATE:
+        request = _escalation_request(verdict, action)
+        if request is None:
+            detail = "escalation named no full containment action; refusing to guess"
+        else:
+            outcome = service.escalate(
+                action_id, request, decided_by=actor, source=SOURCE_ADJUDICATOR
+            )
+            applied, detail = outcome.escalated, outcome.detail
+    else:
+        outcome = service.retain(action_id, verdict.retention_seconds, actor=actor)
+        applied, detail = outcome.extended, outcome.detail
+
+    if applied:
+        _mark_run(run_id, VERDICT_CONSUMED, verdict=verdict.verdict, detail=detail)
+        return VerdictOutcome(action_id, run_id, verdict.verdict, True, False, detail)
+
+    # Either the verdict was refused outright (still speculative) or the
+    # verb lost the claim to a racer (resolved in between) — the row's
+    # state now says which.
+    after = service.approvals.get_action(action_id)
+    if after is not None and after.status != ActionStatus.SPECULATIVE.value:
+        resolver = _resolved_by(after)
+        detail = (
+            f"the row was resolved by {resolver} while the verdict was "
+            "being applied; the disagreement is recorded here and the "
+            "verdict took no action"
+        )
+        _mark_run(
+            run_id,
+            VERDICT_SUPERSEDED,
+            verdict=verdict.verdict,
+            resolved_by=resolver,
+            detail=detail,
+        )
+        return VerdictOutcome(action_id, run_id, verdict.verdict, False, True, detail)
+    _mark_run(run_id, VERDICT_REFUSED, verdict=verdict.verdict, detail=detail)
+    return VerdictOutcome(action_id, run_id, verdict.verdict, False, False, detail)
+
+
+# ---------------------------------------------------------------------------
+# The scheduled scan
+# ---------------------------------------------------------------------------
+
+
+def _default_events_reader() -> Callable[[str], Awaitable[Optional[List[Dict]]]]:
+    # Imported at call time: the reader is agent-layer plumbing, and the
+    # module stays import-light for every consumer that only wants the
+    # brief or the parse.
+    from core.agents.projections import read_events
+
+    return read_events
+
+
+def _pending_adjudications(batch: int) -> List[Tuple[str, str, str]]:
+    """Terminal adjudication runs still marked pending, oldest first.
+
+    Returns (run_id, action_id, run_status): ``completed`` runs carry a
+    verdict to read; the other terminal statuses ended without one and
+    are refused without a read. Runs still executing are not here — a
+    run must finish before its CONCLUDE can be final.
+    """
+    db = get_db_manager()
+    with db.session_scope() as session:
         rows = (
             session.execute(
-                select(ContainmentAction)
+                select(WorkflowRun)
                 .where(
-                    ContainmentAction.status == PENDING_APPLY,
-                    ContainmentAction.is_shadow.is_(True),
-                    ContainmentAction.expires_at.is_not(None),
-                    ContainmentAction.expires_at <= now,
+                    WorkflowRun.trigger_context["speculative_action_id"].isnot(None),
+                    WorkflowRun.trigger_context["verdict_status"].astext
+                    == VERDICT_PENDING,
+                    WorkflowRun.status.in_(TERMINAL_RUN_STATUSES),
                 )
-                .order_by(ContainmentAction.expires_at)
-                .limit(batch_size)
+                .order_by(WorkflowRun.started_at)
+                .limit(batch)
             )
             .scalars()
             .all()
         )
-        expired = [LeaseView.from_row(row) for row in rows]
-    closed = 0
-    for lease in expired:
-        transition = ledger.mark_failed(
-            lease.id, REASON_TTL_EXPIRED_BEFORE_APPLY, ACTOR_ADJUDICATOR
+        pending = [
+            (
+                row.run_id,
+                str(row.trigger_context.get("speculative_action_id") or ""),
+                row.status,
+            )
+            for row in rows
+        ]
+    return [entry for entry in pending if entry[1]]
+
+
+async def consume_completed_adjudications(
+    batch: int = CONSUME_BATCH,
+    config: Optional[FastPathConfig] = None,
+    rollback: Optional[RollbackService] = None,
+    events_reader: Optional[
+        Callable[[str], Awaitable[Optional[List[Dict[str, Any]]]]]
+    ] = None,
+) -> Dict[str, int]:
+    """Consume every finished adjudication's verdict, once.
+
+    The scheduler's entry. A completed run's ledger is read for its
+    verdict; a run that ended without one — budget, abort, a CONCLUDE
+    that named no verdict — is marked refused and the row waits for the
+    TTL sweep. A run whose agent layer is unreachable is left pending and
+    retried next tick: an outage must not spend a run's verdict.
+    """
+    reader = events_reader or _default_events_reader()
+    settings = config or FastPathConfig()
+    pending = await asyncio.to_thread(_pending_adjudications, batch)
+    counts = {
+        "examined": len(pending),
+        "consumed": 0,
+        "superseded": 0,
+        "refused": 0,
+        "unavailable": 0,
+    }
+    for run_id, action_id, run_status in pending:
+        if run_status != "completed":
+            detail = f"the run ended {run_status} without a verdict"
+            _mark_run(run_id, VERDICT_REFUSED, detail=detail)
+            counts["refused"] += 1
+            continue
+        try:
+            events = await reader(run_id)
+        except Exception:
+            # Unreachable is not terminal: the read is retried next tick.
+            logger.exception("could not read the adjudication ledger for %s", run_id)
+            counts["unavailable"] += 1
+            continue
+        if events is None:
+            detail = "the run's ledger holds no events"
+            _mark_run(run_id, VERDICT_REFUSED, detail=detail)
+            counts["refused"] += 1
+            continue
+        verdict = verdict_from_events(events)
+        if verdict is None:
+            detail = "the run concluded without a verdict"
+            _mark_run(run_id, VERDICT_REFUSED, detail=detail)
+            counts["refused"] += 1
+            continue
+        outcome = await asyncio.to_thread(
+            consume_verdict,
+            action_id,
+            verdict,
+            run_id=run_id,
+            config=settings,
+            rollback=rollback,
         )
-        if transition is not None:
-            closed += 1
-    return closed
+        if outcome.applied:
+            counts["consumed"] += 1
+        elif outcome.superseded:
+            counts["superseded"] += 1
+        else:
+            counts["refused"] += 1
+    return counts
