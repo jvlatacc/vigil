@@ -136,5 +136,7 @@ forbidden_modules =
     services.api
     services.daemon
     services.decoy
+    services.decoy_controller
+    services.decoy_farm
     services.medic
     services.worker
