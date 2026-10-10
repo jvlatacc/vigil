@@ -605,19 +605,26 @@ class AutonomousResponseService:
 
         Two row shapes share the ``honey_route`` action type after the
         release merge, so the executor dispatches on the row's own
-        parameter shape: rows carrying ``decoy_id`` were minted by the MTD
-        band and route through the honey_router integration (the registry
-        contract); rows carrying ``attacker_ip``/``destination_ips``/``ports``
-        were minted by the feature-5 spine and steer through the
-        DeceptionLeaseService backend — the dry-run default and the
-        rollback handle in the result. Neither branch can see the other's
-        rows (the creators write disjoint parameter sets), and both keep
-        their own honest-failure contract.
+        parameter shape: rows carrying the spine's lease parameters
+        (``attacker_ip``/``destination_ips``/``ports``) were minted by the
+        feature-5 spine and steer through the DeceptionLeaseService backend
+        — the dry-run default and the rollback handle in the result. Every
+        other row — ``decoy_id`` rows from the MTD band, and any row
+        matching neither shape — routes through the honey_router
+        integration (the registry contract), whose gate-then-validate order
+        names the failure (``missing_decoy_id``) before any database or
+        backend touch. The creators write disjoint parameter sets, and both
+        branches keep their own honest-failure contract.
         """
         params = getattr(action, "parameters", None) or {}
-        if params.get("decoy_id"):
-            return self._execute_honey_route_via_registry(action)
-        return self._execute_honey_route_via_lease(action, ttl_seconds)
+        lease_shape = bool(
+            params.get("attacker_ip")
+            or params.get("destination_ips")
+            or params.get("ports")
+        )
+        if lease_shape and not params.get("decoy_id"):
+            return self._execute_honey_route_via_lease(action, ttl_seconds)
+        return self._execute_honey_route_via_registry(action)
 
     def _execute_honey_route_via_lease(
         self, action, ttl_seconds: Optional[int] = None

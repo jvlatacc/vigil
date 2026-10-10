@@ -80,9 +80,9 @@ def parse_decoy_map(raw: str) -> Dict[int, str]:
 
 
 def _env(name: str, default: str = "") -> str:
-    value = os.environ.get(
-        name
-    )  # noqa: ENV001 — standalone service: the medic contract forbids core imports, so get_settings() is unreachable here
+    # Standalone service: the medic contract forbids core imports, so
+    # get_settings() is unreachable here — the raw read is the process boundary.
+    value = os.environ.get(name)  # noqa: ENV001 — standalone service
     if value is None or value == "":
         return default
     return value

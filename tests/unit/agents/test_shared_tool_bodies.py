@@ -83,7 +83,13 @@ async def test_both_doors_call_that_function(monkeypatch):
             if inspect.iscoroutinefunction(mcp_fn)
             else mcp_fn(**args)
         )
-        assert json.loads(text) == {"shared": name}
+        body = json.loads(text)
+        if name in {"approve_action", "reject_action"}:
+            # The MCP door's decide-and-resume wrapper annotates the shared
+            # body with the run-resume outcome; the shared body stays intact.
+            assert {"shared": name}.items() <= body.items()
+        else:
+            assert body == {"shared": name}
         assert seen == [name, name]
 
 
