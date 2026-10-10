@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:vigil_flutter/auth/session.dart';
 import 'package:vigil_flutter/design/galleries.dart';
-import 'package:vigil_flutter/main.dart';
+import 'package:vigil_flutter/shell/screens.dart';
+import 'package:vigil_flutter/shell/vigil_shell.dart';
 import 'package:vigil_flutter/theme/vigil_colors.dart';
 import 'package:vigil_flutter/theme/vigil_theme.dart';
 
 /// Golden captures of the design-system galleries — every color token in
-/// both schemes, the whole 82-icon set, the full type ramp — plus the Home
-/// empty state. Regenerate with:
+/// both schemes, the whole 82-icon set, the full type ramp — plus the shell
+/// chrome with the Home empty state. Regenerate with:
 ///   flutter test --update-goldens test/design_goldens_test.dart
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -49,17 +51,48 @@ void main() {
     );
   }
 
+  /// A user the shell renders with — every gated screen visible, so the
+  /// chrome goldens show the full destination set.
+  const approver = UserProfile(
+    username: 'jane',
+    email: 'jane@corp.example',
+    permissions: {
+      'ai_decisions.approve': true,
+      'cases.read': true,
+      'settings.read': true,
+    },
+  );
+
   /// Sizes BOTH the render surface (what the golden captures) and the view
   /// metrics (what MediaQuery reports) — setSurfaceSize alone leaves the
   /// view at the 800x600 test default, so adaptive shells never switch.
-  Future<void> pumpApp(WidgetTester tester, Size size) async {
+  /// The shell is pumped directly: the app root adds async boot (secure
+  /// storage, /auth/me) that has no place in a design golden.
+  Future<void> pumpShell(
+    WidgetTester tester,
+    Size size, {
+    Brightness brightness = Brightness.dark,
+  }) async {
     tester.view.devicePixelRatio = 1.0;
     tester.view.physicalSize = size;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(const VigilApp());
+    // MaterialApp supplies MaterialLocalizations and the default text
+    // environment the shell's material widgets read.
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildVigilThemeData(brightness),
+        home: Scaffold(
+          body: VigilShell(
+            user: approver,
+            initialScreen: VigilScreen.home,
+            onSignOut: () {},
+          ),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -108,18 +141,18 @@ void main() {
   });
 
   testWidgets('Home empty state with the shell chrome', (tester) async {
-    await pumpApp(tester, const Size(390, 844));
+    await pumpShell(tester, const Size(390, 844));
     await expectLater(
-      find.byType(NeedsYouHome),
+      find.byType(VigilShell),
       matchesGoldenFile('goldens/home-empty.png'),
     );
   });
 
   testWidgets('Home empty state, desktop form factor with the nav rail',
       (tester) async {
-    await pumpApp(tester, const Size(1100, 844));
+    await pumpShell(tester, const Size(1100, 844));
     await expectLater(
-      find.byType(NeedsYouHome),
+      find.byType(VigilShell),
       matchesGoldenFile('goldens/home-empty-desktop.png'),
     );
   });
