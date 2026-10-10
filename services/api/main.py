@@ -428,6 +428,7 @@ def _build_services(app: FastAPI):
     from core.integrations.mcp.registry import MCPRegistry
     from core.platform.demo_data_service import DemoDataService
     from core.response.approval_service import ApprovalService, register_pending_gauge
+    from core.response.fastpath.rollback import RollbackService
     from core.storage.database_data_service import DatabaseDataService
     from core.workflows.custom_workflow_service import CustomWorkflowService
     from core.workflows.workflow_ai_generator import WorkflowAIGenerator
@@ -443,6 +444,9 @@ def _build_services(app: FastAPI):
 
     app.state.approvals = ApprovalService()
     register_pending_gauge(app.state.approvals)
+    # Shares the approvals instance with the approval pipeline — the same
+    # ledger the fast path writes and the sweep resolves.
+    app.state.rollback = RollbackService(approvals=app.state.approvals)
     app.state.custom_workflows = CustomWorkflowService()
     app.state.detection_rules = DetectionRulesService()
     app.state.integration_bridge = IntegrationBridgeService()
