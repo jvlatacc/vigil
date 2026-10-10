@@ -9,6 +9,7 @@ export type SettingsSectionKey =
   | 'users'
   | 'sla'
   | 'autoinvestigate'
+  | 'policy-compiler'
   | 'federation'
   | 'system'
   | 'general'

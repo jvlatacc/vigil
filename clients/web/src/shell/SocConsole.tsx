@@ -31,6 +31,7 @@ import MetricsScreen from '../screens/metrics/MetricsScreen'
 import AnalyticsScreen from '../screens/analytics/AnalyticsScreen'
 import DecisionsScreen from '../screens/decisions/DecisionsScreen'
 import WorkflowsScreen from '../screens/workflows/WorkflowsScreen'
+import CompiledPoliciesScreen from '../screens/compiled/CompiledPoliciesScreen'
 import AutoOpsScreen from '../screens/autoops/AutoOpsScreen'
 import HealthScreen from '../screens/health/HealthScreen'
 import HomeScreen from '../screens/home/HomeScreen'
@@ -64,6 +65,7 @@ const SCREENS: Record<ConsoleScreenKey, (props: ConsoleScreenProps) => JSX.Eleme
   analytics: AnalyticsScreen,
   decisions: DecisionsScreen,
   workflows: WorkflowsScreen,
+  policies: CompiledPoliciesScreen,
   autoops: AutoOpsScreen,
   health: HealthScreen,
   settings: SettingsScreen,
