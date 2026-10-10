@@ -38,6 +38,7 @@ Getting Vigil running and keeping it running.
 - [Helm Secrets](deploy/helm-secrets.md) — sealed secrets and SOPS
 - [Production Security](deploy/production-security.md) — hardening checklist for production
 - [State and Secrets](deploy/state.md) — where state lives and how secrets flow
+- [Response Blast Bounds](deploy/response-blast-bounds.md) — guard chain, quotas, breaker, and origin trust for autonomous response (Feature 7)
 - [Kafka Ingestion](deploy/kafka-ingestion.md) — Kafka-based alert ingestion
 - [Sandbox](deploy/sandbox.md) — isolated/sandbox deployment mode
 - [Bifrost Gateway](deploy/bifrost.md) — the LLM gateway layer
