@@ -6,6 +6,7 @@ import '../auth/errors.dart';
 import '../auth/session.dart';
 import '../auth/token_store.dart';
 import '../auth/vigil_authenticator.dart';
+import '../watch/watch_handoff.dart';
 import 'config_api.dart';
 
 /// Builds a [VigilClient] for a server. Injectable so tests script the
@@ -17,7 +18,8 @@ typedef VigilClientFactory = VigilClient Function({
   required String userAgent,
 });
 
-/// Production factory — real secure storage, default HTTP transport.
+/// Production factory — real secure storage, default HTTP transport, and
+/// the watch handoff (a no-op off iOS, where the channel is unregistered).
 VigilClient defaultClientFactory({
   required String baseUrl,
   required TokenStore tokenStore,
@@ -27,6 +29,7 @@ VigilClient defaultClientFactory({
       baseUrl: baseUrl,
       tokenStore: tokenStore,
       userAgent: userAgent,
+      watchHandoff: WatchHandoff(),
     );
 
 /// Composition root for the Vigil data plane.
@@ -45,7 +48,7 @@ VigilClient defaultClientFactory({
 /// must be byte-identical from login through refresh through every v1 call.
 class VigilClient {
   VigilClient({
-    required String baseUrl,
+    required this.baseUrl,
     required TokenStore tokenStore,
     required String userAgent,
     Duration connectTimeout = const Duration(seconds: 10),
@@ -55,7 +58,12 @@ class VigilClient {
     /// adapter. Null in production — the default HTTP transport is used.
     HttpClientAdapter? authAdapter,
     HttpClientAdapter? apiAdapter,
-  }) : _tokenStore = tokenStore {
+
+    /// Watch handoff — set by [defaultClientFactory]; null in tests unless
+    /// a scripted instance is supplied. Sign-in mints the watch its own
+    /// token pair through it; sign-out revokes it.
+    this.watchHandoff,
+  })  : _tokenStore = tokenStore {
     BaseOptions baseOptions() => BaseOptions(
           baseUrl: baseUrl,
           connectTimeout: connectTimeout,
@@ -82,6 +90,11 @@ class VigilClient {
     v1 = VigilApiV1(dio: _apiDio);
     config = ConfigApi(dio: _apiDio);
   }
+
+  final String baseUrl;
+
+  /// Watch handoff (null in tests): sign-in mints the watch's own pair.
+  final WatchHandoff? watchHandoff;
 
   final TokenStore _tokenStore;
   late final Dio _apiDio;
@@ -117,6 +130,19 @@ class VigilClient {
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
     );
+    final handoff = watchHandoff;
+    if (handoff != null) {
+      // The watch's own pair, minted with the watch's fixed User-Agent while
+      // the credentials are still in hand — never the phone's live tokens.
+      // Never throws: a failed handoff leaves the watch unpaired and the
+      // outcome surfaces through [WatchHandoff.onOutcome].
+      await handoff.mintAfterLogin(
+        serverBaseUrl: baseUrl,
+        usernameOrEmail: usernameOrEmail,
+        password: password,
+        mfaCode: mfaCode,
+      );
+    }
     return session;
   }
 
@@ -170,7 +196,10 @@ class VigilClient {
     } finally {
       // The local session ends even when the revocation call fails
       // (offline): an orphaned refresh token dies at its TTL, and a
-      // successful sign-in here replaces it.
+      // successful sign-in here replaces it. The watch's cleared sentinel
+      // is a local WatchConnectivity write — it goes out regardless of the
+      // server revocation above.
+      await watchHandoff?.revoke();
       await _tokenStore.clear();
     }
   }
