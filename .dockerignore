@@ -124,3 +124,11 @@ services/medic/tests/
 services/medic/contracts/tests/
 services/medic/contracts/tools/
 services/medic/contracts/fixtures/
+
+# Edge. Same reason as Medic: the Python images COPY services/ wholesale, and
+# the edge tests' fixtures include TEST-ONLY signing keys and trust roots.
+services/edge/.venv/
+services/edge/**/__pycache__/
+services/edge/**/.pytest_cache/
+services/edge/**/.ruff_cache/
+services/edge/tests/

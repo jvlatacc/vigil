@@ -5,12 +5,14 @@ and bounded eviction with explicit loss counters — never silent discard."""
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from services.edge.journal.journal import (
     GENESIS_HASH,
     KIND_DECISION,
     KIND_OBSERVATION,
+    KIND_REVERT,
     HashJournal,
 )
 
@@ -148,3 +150,138 @@ def test_eviction_ranges_merge_contiguous(tmp_path: Path) -> None:
     assert len(journal.evicted_ranges) == 1
     start, end = journal.evicted_ranges[0]
     assert start == 1 and end >= 1
+
+
+# -- compaction vs the reaper's work queue ---------------------------------
+# Sync acks in seconds and TTLs run in minutes: if ack-compaction dropped
+# executed decisions, the reaper's journal-derived queue would empty in the
+# normal connected case and blocks would leak past their TTL silently.
+
+
+def _executed_decision_payload(ip: str = "203.0.113.9") -> dict:
+    return {
+        "outcome": "execute",
+        "decision_rule": f"edge.c2-egress tier=tier2 conf=0.95 target={ip}",
+        "actor": f"edge:{NODE_ID}@v1",
+        "action": {
+            "action_type": "block_ip",
+            "executor": "nftables",
+            "target": ip,
+            "ttl_seconds": 5,
+        },
+        "execution": {"success": True, "ref": f"blk-{ip}"},
+    }
+
+
+def _revert_payload(decision_seq: int, *, success: bool) -> dict:
+    return {
+        "revert_of": decision_seq,
+        "success": success,
+        "ref": "blk-203.0.113.9",
+        "executor": "nftables",
+        "target": "203.0.113.9",
+        "actor": "edge:ttl-reaper",
+    }
+
+
+def _expired(now: datetime) -> datetime:
+    return now + timedelta(seconds=30)
+
+
+def test_compaction_retains_executed_decision_until_reverted(
+    tmp_path: Path,
+) -> None:
+    journal = make_journal(tmp_path)
+    journal.append(KIND_OBSERVATION, {"n": 1})
+    decision = journal.append(KIND_DECISION, _executed_decision_payload())
+    journal.mark_acked(decision.local_sequence)
+
+    # The ack compacts the observation but keeps the pending block: the
+    # reaper's work queue is derived from the journal, and the block's TTL
+    # has not expired yet, let alone been reverted.
+    pending = journal.pending_reverts(_expired(datetime.now(UTC)))
+    assert [r.local_sequence for r, _ in pending] == [decision.local_sequence]
+    assert journal.verify_chain().ok
+
+    # And it survives reload — the retained segment is durable, so a daemon
+    # that restarts mid-TTL still reaps the block.
+    reloaded = make_journal(tmp_path)
+    pending = reloaded.pending_reverts(_expired(datetime.now(UTC)))
+    assert [r.local_sequence for r, _ in pending] == [decision.local_sequence]
+    assert reloaded.verify_chain().ok
+
+
+def test_successful_revert_lets_compaction_drop_both(tmp_path: Path) -> None:
+    journal = make_journal(tmp_path)
+    decision = journal.append(KIND_DECISION, _executed_decision_payload())
+    revert = journal.append(
+        KIND_REVERT, _revert_payload(decision.local_sequence, success=True)
+    )
+    journal.mark_acked(revert.local_sequence)
+
+    assert journal.pending_reverts(_expired(datetime.now(UTC))) == []
+    # Both records are acked and closed: the next compaction drops them.
+    reloaded = make_journal(tmp_path)
+    assert reloaded.unacked() == []
+    assert reloaded.verify_chain().ok
+
+
+def test_revert_closure_persists_in_state_not_records(tmp_path: Path) -> None:
+    """The closure must outlive the revert record itself: once that record
+    compacts away, a live-record scan can no longer see the revert, and a
+    scan-only implementation resurrects the decision as pending forever."""
+    journal = make_journal(tmp_path)
+    decision = journal.append(KIND_DECISION, _executed_decision_payload())
+    revert = journal.append(
+        KIND_REVERT, _revert_payload(decision.local_sequence, success=True)
+    )
+    journal.mark_acked(revert.local_sequence)
+
+    state = json.loads((tmp_path / "acks.json").read_text())
+    assert decision.local_sequence in state["closed_reverts"]
+
+    reloaded = make_journal(tmp_path)
+    # The decision record is gone (compacted), but the durable closure set
+    # still knows it: a replay that somehow re-presents the decision cannot
+    # resurrect it as reaper work.
+    assert decision.local_sequence in reloaded._successful_revert_seqs()
+
+
+def test_sequence_floors_at_ack_watermark_after_retention(
+    tmp_path: Path,
+) -> None:
+    """A retained decision below the watermark must not cause the next
+    append to reuse an acked sequence: the record would be born invisible
+    to unacked() and later compacted away without ever uploading — the
+    offline-window closure was lost exactly this way."""
+    journal = make_journal(tmp_path)
+    journal.append(KIND_OBSERVATION, {"n": 1})  # seq 1
+    decision = journal.append(KIND_DECISION, _executed_decision_payload())  # seq 2
+    journal.mark_acked(decision.local_sequence)  # watermark 2, decision retained
+
+    # A local-only state record advances the watermark past the retained
+    # decision (the reconciler marks local-only slices acked in place).
+    journal.append(KIND_OBSERVATION, {"n": 2})  # seq 3, unacked
+    journal.mark_acked(3)  # watermark 3 > retained decision's seq 2
+
+    closing = journal.append(KIND_REVERT, _revert_payload(2, success=True))
+    assert closing.local_sequence > 3  # must not reuse seq 2 or 3
+    assert closing.idempotency_key() != f"{NODE_ID}:{BOOT_ID}:2"
+
+    # The closure is unacked and will upload; the retained decision is now
+    # closed and the next compaction drops both.
+    assert [r.local_sequence for r in journal.unacked()] == [closing.local_sequence]
+    journal.mark_acked(closing.local_sequence)
+    assert journal.pending_reverts(_expired(datetime.now(UTC))) == []
+
+
+def test_failed_revert_keeps_decision_pending(tmp_path: Path) -> None:
+    journal = make_journal(tmp_path)
+    decision = journal.append(KIND_DECISION, _executed_decision_payload())
+    revert = journal.append(
+        KIND_REVERT, _revert_payload(decision.local_sequence, success=False)
+    )
+    journal.mark_acked(revert.local_sequence)
+
+    pending = journal.pending_reverts(_expired(datetime.now(UTC)))
+    assert [r.local_sequence for r, _ in pending] == [decision.local_sequence]

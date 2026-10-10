@@ -304,3 +304,7 @@ index.scip.stamp
 
 # Timestamped .env copies left by setup and migration scripts.
 .env.*
+
+# Compose edge e2e workspace: evidence, env file with the enrollment
+# secret, and compose overrides. Created by scripts/edge_compose_e2e.sh.
+infra/docker/edge-e2e/

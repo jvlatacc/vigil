@@ -137,6 +137,43 @@ def test_k8s_credential_files_default_to_service_account_mounts() -> None:
     assert config.k8s_ca_file.name == "ca.crt"
 
 
+def test_segment_scope_parses_the_spec_shape() -> None:
+    """The spec's scope is rich (cidrs list, node_selector object): the env
+    parser must carry it through intact — bundle serving joins enrollment to
+    the bundle by canonical scope equality, so flattening here would strand
+    every rich-scope bundle."""
+    scope = (
+        '{"vpc": "vpc-0a1b2c3d", "cidrs": ["10.42.0.0/16"],'
+        ' "node_selector": {"vigil.ai/edge-role": "gateway"}}'
+    )
+    config = EdgeConfig.from_env(
+        {"VIGIL_EDGE_SEGMENT_SCOPE": scope, "VIGIL_EDGE_NODE_ID": "gw-1"}
+    )
+    assert config.segment_scope == {
+        "vpc": "vpc-0a1b2c3d",
+        "cidrs": ["10.42.0.0/16"],
+        "node_selector": {"vigil.ai/edge-role": "gateway"},
+    }
+
+
+def test_segment_scope_still_accepts_flat() -> None:
+    config = EdgeConfig.from_env(
+        {"VIGIL_EDGE_SEGMENT_SCOPE": '{"vpc": "vpc-0a1b2c3d"}'}
+    )
+    assert config.segment_scope == {"vpc": "vpc-0a1b2c3d"}
+
+
+@pytest.mark.parametrize("raw", ["[]", '"vpc-0a1b2c3d"', "42"])
+def test_segment_scope_rejects_non_object_json(raw: str) -> None:
+    with pytest.raises(ConfigError, match="string keys"):
+        EdgeConfig.from_env({"VIGIL_EDGE_SEGMENT_SCOPE": raw})
+
+
+def test_segment_scope_bad_json_raises() -> None:
+    with pytest.raises(ConfigError, match="is not JSON"):
+        EdgeConfig.from_env({"VIGIL_EDGE_SEGMENT_SCOPE": "{not json"})
+
+
 def test_k8s_credential_files_take_env_values() -> None:
     config = EdgeConfig.from_env(
         {
