@@ -10,6 +10,7 @@ export type ConsoleScreenKey =
   | 'analytics'
   | 'decisions'
   | 'workflows'
+  | 'twin'
   | 'autoops'
   | 'health'
   | 'settings'
@@ -33,6 +34,7 @@ export const NAV: [IconName, string, ConsoleScreenKey | null, NavGate?][] = [
   ['pie', 'Analytics', 'analytics'],
   ['brain', 'AI Decisions', 'decisions'],
   ['flow', 'Agents & workflows', 'workflows'],
+  ['graph', 'Digital Twin', 'twin'],
   ['bot', 'Auto Ops', 'autoops'],
   ['chart', 'Health', 'health'],
   ['gear', 'Settings', 'settings'],
@@ -103,6 +105,7 @@ export const TITLES: Record<ConsoleScreenKey, [string, string]> = {
   analytics: ['Analytics Dashboard', 'Security operations analytics'],
   decisions: ['AI Decisions', 'Review and provide feedback for AI decisions'],
   workflows: ['Agents & workflows', 'How Vigil works a case. Workflows are the plays, agents do the work, skills are what agents know how to do, and tool permissions decide what they may change on their own.'],
+  twin: ['Digital Twin', 'Physical devices mapped to the processes and connections that run on them'],
   autoops: ['Auto Ops', 'Autonomous operations — master orchestrator and sub-agent investigations'],
   health: ['Health', 'Operational health — LLM spend, approvals waiting, recent workflow runs, probe scores'],
   settings: ['Settings', 'Configure Vigil — AI, integrations, users and platform'],
