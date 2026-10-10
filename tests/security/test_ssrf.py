@@ -99,3 +99,83 @@ def test_allow_loopback_permits_localhost_but_not_metadata():
         validate_provider_url(
             "http://169.254.169.254/latest/meta-data", allow_loopback=True
         )
+
+
+# --- Extension connector origins (E15) ----------------------------------------
+#
+# The gate above answers for LLM provider base URLs. A second SSRF-shaped
+# surface is the page-extension connector: Vigil mints a session token by
+# calling the connectorUrl an operator configured, and the CSP admits the
+# origin's bundle to the browser. core/integrations/extension/trust.py is
+# the single source of truth for what may be trusted: https always, http
+# only on loopback, and — when the operator set EXTENSION_CONNECTOR_ALLOWLIST
+# — membership in it, compared on canonicalized origins.
+#
+# The allowlist defaulting to empty is the shipped, documented default (the
+# scheme rule alone applies at the trust gate; the CSP admits no connector
+# origin until the operator lists one). It is pinned here so a silent flip
+# to strict-by-default — or a hole in the other direction — lands as a red
+# test, not as a behavior change nobody noticed.
+
+
+def _with_allowlist(monkeypatch, origins):
+    """Swap the settings the trust module reads, without a Settings import
+    chain: connector_allowlist_origins() reads one attribute off it."""
+    from types import SimpleNamespace
+
+    from core.integrations.extension import trust
+
+    monkeypatch.setattr(
+        trust,
+        "get_settings",
+        lambda: SimpleNamespace(extension_connector_allowlist=origins),
+    )
+    return trust
+
+
+def test_a_non_allowlisted_origin_is_refused_as_a_connector_target(monkeypatch):
+    """The E15 refusal: with the allowlist set, membership is enforced."""
+    trust = _with_allowlist(monkeypatch, ["https://connector.example"])
+
+    assert not trust.is_trusted_connector_url("https://attacker.example/v1")
+
+
+def test_an_allowlisted_origin_passes(monkeypatch):
+    trust = _with_allowlist(monkeypatch, ["https://connector.example"])
+
+    assert trust.is_trusted_connector_url("https://connector.example/v1")
+
+
+def test_allowlist_matching_is_canonical(monkeypatch):
+    """Entries match on canonicalized origins: scheme and host are
+    case-insensitive, and an explicit port is part of the origin — an
+    entry on :8443 does not bless the same host on :443."""
+    trust = _with_allowlist(monkeypatch, ["https://Connector.Example"])
+
+    assert trust.is_trusted_connector_url("https://connector.example")
+
+    trust = _with_allowlist(monkeypatch, ["https://connector.example:8443"])
+
+    assert not trust.is_trusted_connector_url("https://connector.example")
+
+
+def test_a_junk_allowlist_entry_does_not_widen_the_allowlist(monkeypatch):
+    """canonical_origin() drops entries with no scheme+host — a typo in the
+    env var narrows what is trusted, never widens it."""
+    trust = _with_allowlist(monkeypatch, ["https://connector.example", "not a url", ""])
+
+    assert trust.is_trusted_connector_url("https://connector.example/v1")
+    assert not trust.is_trusted_connector_url("https://attacker.example/v1")
+
+
+def test_with_the_allowlist_unset_the_scheme_rule_alone_applies(monkeypatch):
+    """The shipped default: no EXTENSION_CONNECTOR_ALLOWLIST means https —
+    or http on loopback — from any host passes the trust gate. What a
+    connector origin may do in the browser is the CSP's separate answer,
+    and an empty allowlist admits nothing there (the backend warns at
+    startup when connectors are configured in that state)."""
+    trust = _with_allowlist(monkeypatch, [])
+
+    assert trust.is_trusted_connector_url("https://any-host.example/v1")
+    assert not trust.is_trusted_connector_url("http://any-host.example/v1")
+    assert trust.is_trusted_connector_url("http://127.0.0.1:8787")

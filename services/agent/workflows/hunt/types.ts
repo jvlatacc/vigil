@@ -122,6 +122,7 @@ export const ENTITY_TYPES = [
   "aws_key",
   "user",
   "process",
+  "cve",
 ] as const;
 
 export type EntityType = (typeof ENTITY_TYPES)[number];

@@ -6,7 +6,7 @@
 
 CREATE TABLE IF NOT EXISTS threat_indicators (
     id              BIGSERIAL PRIMARY KEY,
-    indicator_type  VARCHAR(32)  NOT NULL,         -- ip, domain, url, hash_md5, hash_sha1, hash_sha256, email
+    indicator_type  VARCHAR(32)  NOT NULL,         -- ip, domain, url, hash_md5, hash_sha1, hash_sha256, email, cve
     indicator_value VARCHAR(2048) NOT NULL,
     source          VARCHAR(64)  NOT NULL,         -- 'cloudforce_one', etc.
     collection_id   VARCHAR(128),                  -- TAXII collection that emitted this indicator

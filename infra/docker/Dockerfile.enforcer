@@ -1,0 +1,113 @@
+# infra/docker/Dockerfile.enforcer
+# =============================================================================
+# Kernel enforcement daemon — XDP drop, socket redirect, process interdiction
+#
+# Final image runs:  /usr/local/bin/vigil-enforcer  (Go, services/enforcement)
+# Exposes ports:
+#   6986  loopback-only API: /v1/actions, /healthz, /metrics
+#
+# The two builder stages own every compilation: bpf/ compiles the CO-RE
+# objects with clang (build-bpf.sh), go/ builds the static daemon binary.
+# The runtime stage ships only their artifacts — no clang, no libbpf, no
+# kernel headers, no Go toolchain: a protected host installs nothing to
+# run enforcement (CO-RE relocates against the running kernel's BTF).
+#
+# Capabilities are granted by the RUNTIME, never baked in here: XDP attach
+# and bpf() need CAP_BPF/CAP_NET_ADMIN (CAP_PERFMON/CAP_SYS_ADMIN on older
+# kernels) — Helm (enforcer-daemonset.yaml) and docker run --cap-add apply
+# them. The API binds 127.0.0.1 by default (main.go refuses any wider bind
+# that was not asked for) and refuses to start without VIGIL_ENFORCEMENT_TOKEN.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: compile the CO-RE BPF objects
+# ---------------------------------------------------------------------------
+# Debian's clang (14 on bookworm, above CO-RE's minimum of 11) against
+# libbpf's headers. Versions track the Debian point release rather than a
+# hand-pinned pair: clang is a metapackage whose tested chain is Debian's,
+# and this stage never ships — the runtime image carries only the objects.
+FROM debian:bookworm-slim AS bpf-builder
+
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang \
+      libbpf-dev \
+      linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY services/enforcement/build-bpf.sh ./build-bpf.sh
+COPY services/enforcement/bpf/ ./bpf/
+# Writes bpf/build/{xdp_drop,socket_redirect,interdict}.o (-g keeps the BTF
+# the Go loader reads). Plain UAPI includes — no kernel build tree, no
+# vmlinux.h (services/enforcement/bpf/vigil_common.h).
+RUN sh ./build-bpf.sh
+
+# ---------------------------------------------------------------------------
+# Stage 2: build the static daemon binary
+# ---------------------------------------------------------------------------
+# go.mod's `go 1.27.2` directive is the version contract; the image tag
+# tracks the minor so patch releases flow like the other base images.
+FROM golang:1.27-bookworm AS go-builder
+
+WORKDIR /src
+# Manifests before sources, so editing a .go file does not re-download the
+# module tree (the same layering Dockerfile.agent gives npm).
+COPY services/enforcement/go.mod services/enforcement/go.sum ./
+RUN go mod download
+
+COPY services/enforcement/ ./
+# CGO_ENABLED=0: cilium/ebpf is pure Go (golang.org/x/sys calls), so the
+# binary is static and drops into the slim runtime with no libc coupling.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+    -o /out/vigil-enforcer ./cmd/enforcement
+
+# ---------------------------------------------------------------------------
+# Stage 3: runtime image
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+
+# curl exists for the HEALTHCHECK only (and matches Dockerfile.daemon's
+# pattern); the daemon itself needs nothing from apt. Version tracks the
+# Debian point release — Trivy is what says when the pin has gone stale
+# (ci-cd scan-images).
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Dedicated uid/gid 10002 — not Vigil's 1000, not Medic's 10001 — so the
+# process that can drop packets is not also the process that owns anything
+# else. The daemon writes no files (state lives in the kernel; logs go to
+# stdout), so no home directory and no writable volume: the root filesystem
+# is read-only in every deployment (K8s securityContext, docker --read-only).
+RUN groupadd -g 10002 vigil-enforcer \
+    && useradd -u 10002 -g 10002 -M -d /nonexistent -s /usr/sbin/nologin vigil-enforcer
+
+WORKDIR /app
+
+# BPF objects (bpf/build/*.o) and VERSION. Code is the static binary; the
+# .go sources never reach the runtime stage.
+COPY --from=bpf-builder /build/bpf/build/ ./bpf/
+COPY --from=go-builder /out/vigil-enforcer /usr/local/bin/vigil-enforcer
+COPY VERSION ./VERSION
+RUN if [ -n "${VIGIL_VERSION}" ]; then echo "${VIGIL_VERSION}" > /app/VERSION; fi
+
+ENV VIGIL_ENFORCEMENT_BPF_DIR=/app/bpf \
+    VIGIL_ENFORCEMENT_BIND=127.0.0.1:6986
+
+EXPOSE 6986
+
+# Numeric to match the chart's podSecurityContext runAsUser literally.
+USER 10002:10002
+
+# Probes /healthz on the default loopback bind. When VIGIL_ENFORCEMENT_BIND
+# moves the port, override with docker run --health-cmd (Kubernetes probes
+# are the chart's and ignore HEALTHCHECK entirely).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:6986/healthz || exit 1
+
+CMD ["vigil-enforcer"]

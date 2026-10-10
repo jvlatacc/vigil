@@ -36,11 +36,11 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Protocol
 
 from core.config import vigil_path
 from core.integrations._base.descriptor import iter_descriptors
-from core.secrets import get_secret
+from core.secrets import get_secret, set_secret
 
 
 def default_env_var(integration_id: str, field_name: str) -> str:
@@ -91,6 +91,15 @@ _ENV_VAR_OVERRIDES: Mapping[str, Mapping[str, str]] = {
     # env fallback for server_url keeps that name so an env-only deployment with
     # nothing saved in Settings still constructs the client.
     "splunk": {"server_url": "SPLUNK_URL"},
+    # The enforcement daemon (services/enforcement) reads the very same names
+    # from the host environment, and env.example/mcp-config.json document them:
+    # VIGIL_ENFORCEMENT_URL / VIGIL_ENFORCEMENT_TOKEN, not the canonical
+    # EBPF_XDP_* — one shared secret must have one name on both sides of the
+    # ADR-0014 channel.
+    "ebpf-xdp": {
+        "enforcement_url": "VIGIL_ENFORCEMENT_URL",
+        "enforcement_token": "VIGIL_ENFORCEMENT_TOKEN",
+    },
 }
 
 
@@ -206,6 +215,7 @@ ENV_CREDENTIAL_NAMES: frozenset[str] = frozenset(
         "SPLUNK_USERNAME",
         "TEAMS_WEBHOOK_URL",
         "VIRUSTOTAL_API_KEY",
+        "VIGIL_EDGE_ENROLLMENT_SECRET",
         "VSTRIKE_API_KEY",
         "VSTRIKE_INBOUND_API_KEY",
         "VSTRIKE_PASSWORD",
@@ -290,6 +300,126 @@ def redact_secrets(integration_id: str, config: Dict[str, object]) -> Dict[str, 
 def secret_field_names(integration_id: str) -> Iterable[str]:
     """Iterable over the form-field names that are secrets for an integration."""
     return secret_fields_for(integration_id).keys()
+
+
+# Field names that mean "this holds a credential" when the field is not
+# registered: the same vocabulary the registry's own field names use
+# (password, secret, token, api_key, ...). Bare ``key`` and ``auth`` are
+# deliberately absent — they name too many non-credential fields
+# (authorization_url, rate-limit keys) to refuse a save over them.
+_CREDENTIAL_FIELD_NAME = re.compile(
+    r"pass(?:word|wd)|secret|token|api[_-]?key|apikey|credentials?|"
+    r"(?:private|access|signing)[_-]?key",
+    re.IGNORECASE,
+)
+
+
+def unregistered_credential_fields(
+    integration_id: str, config: Mapping[str, object]
+) -> List[str]:
+    """Unregistered fields in ``config`` whose values look like credentials.
+
+    Anything in a field the secret registry does not own is persisted to the
+    ``integration_configs`` row as-is, so a credential pasted into an
+    unregistered field — a Custom Integration field not typed as password,
+    say — sits plaintext in the database (E7). The names of fields that are
+    both credential-shaped and unregistered are returned; the save handler
+    refuses the request naming them, and once the field is typed as a secret
+    (which registers it) a re-save moves the value into the encrypted store
+    like any registered one. Empty and non-string values are never flagged:
+    they are not credentials.
+    """
+    registered = secret_fields_for(integration_id)
+    return [
+        field
+        for field, value in config.items()
+        if field not in registered
+        and isinstance(value, str)
+        and value.strip()
+        and _CREDENTIAL_FIELD_NAME.search(field)
+    ]
+
+
+class IntegrationConfigStore(Protocol):
+    """What the plaintext migration needs from ``ConfigService``.
+
+    Structural, so callers pass the real service and tests pass a fake;
+    ``core.integrations`` gains no runtime dependency on ``core.storage``.
+    """
+
+    def list_integrations(self, enabled_only: bool = False) -> List[Dict[str, Any]]: ...
+
+    def set_integration_config(
+        self,
+        integration_id: str,
+        config: Dict[str, Any],
+        enabled: bool = True,
+        integration_name: Optional[str] = None,
+        integration_type: Optional[str] = None,
+        description: Optional[str] = None,
+        change_reason: Optional[str] = None,
+    ) -> bool: ...
+
+
+def migrate_plaintext_credentials(
+    config_store: IntegrationConfigStore,
+) -> Dict[str, List[str]]:
+    """Scrub legacy plaintext credentials out of ``integration_configs`` rows.
+
+    Rows written before the encrypted secret store existed keep their
+    credentials in the JSONB ``config`` column, so a database dump was then a
+    credential dump (E7). Every registered secret field still holding a value
+    in a row is written to the encrypted store and removed from the row. The
+    store is authoritative on conflicts — a field it already holds is only
+    stripped from the row, never overwritten — matching the dotenv
+    migration's rule, so a stale row plaintext cannot resurrect an old
+    credential.
+
+    Idempotent: a scrubbed row has nothing left to move, so the caller can
+    run this at every startup instead of tracking a done flag. Returns
+    ``{integration_id: [field, ...]}`` for logging — counts and names, never
+    values. A row write that fails is left for the next run: the store
+    already holds the value, and the sweep reruns.
+
+    Custom integrations are covered through ``secret_fields_for``: their
+    password-typed fields resolve from saved metadata at call time.
+    """
+    scrubbed: Dict[str, List[str]] = {}
+    for row in config_store.list_integrations():
+        integration_id = row.get("integration_id")
+        config = row.get("config")
+        if not integration_id or not isinstance(config, dict):
+            continue
+        mapping = secret_fields_for(integration_id)
+        if not mapping:
+            continue
+
+        moved: List[str] = []
+        cleaned = dict(config)
+        for field, env_key in mapping.items():
+            value = config.get(field)
+            # An empty string is the save path's "keep existing" convention,
+            # not a credential stored here.
+            if not isinstance(value, str) or not value.strip():
+                continue
+            if not get_secret(env_key):
+                set_secret(env_key, value)
+            cleaned.pop(field, None)
+            moved.append(field)
+
+        if not moved:
+            continue
+        if config_store.set_integration_config(
+            integration_id=integration_id,
+            config=cleaned,
+            enabled=bool(row.get("enabled")),
+            integration_name=row.get("integration_name"),
+            integration_type=row.get("integration_type"),
+            description=row.get("description"),
+            change_reason="Migrated plaintext credential to the encrypted store",
+        ):
+            scrubbed[integration_id] = moved
+    return scrubbed
 
 
 # Config keys that say where the integration connects (server_url, connectorUrl,

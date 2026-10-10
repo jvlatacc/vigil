@@ -1,0 +1,31 @@
+{
+  "id": "v09-release-then-release",
+  "description": "DELETE removes the kernel entry (state released) and a second DELETE is idempotent — same record, still released, no error. Re-enforcing under a released id would silently re-open containment, so replays of a released action stay released.",
+  "steps": [
+    {
+      "name": "enforce",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4424",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 3600,
+          "reason": "temporary block pending review",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 201, "state": "enforced" }
+    },
+    {
+      "name": "release",
+      "request": { "method": "DELETE", "path": "/v1/actions/aa-2026-10-09-4424" },
+      "expect": { "status": 200, "state": "released" }
+    },
+    {
+      "name": "release again (idempotent)",
+      "request": { "method": "DELETE", "path": "/v1/actions/aa-2026-10-09-4424" },
+      "expect": { "status": 200, "state": "released" }
+    }
+  ]
+}

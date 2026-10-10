@@ -27,7 +27,7 @@ def _fstring_log_calls() -> list[str]:
         if not root.exists():
             continue
         for path in sorted(root.rglob("*.py")):
-            if "__pycache__" in path.parts:
+            if "__pycache__" in path.parts or _venv_marker(path.parts):
                 continue
             rel = path.relative_to(REPO_ROOT)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(rel))
@@ -41,6 +41,12 @@ def _fstring_log_calls() -> list[str]:
                 ):
                     hits.append(f"{rel}:{node.lineno}")
     return hits
+
+
+def _venv_marker(parts) -> bool:
+    """Gitignored virtualenvs inside a scanned package are artifacts, not
+    source; `uv sync --project services/edge` creates one in the scan tree."""
+    return any(part in (".venv", "venv") for part in parts)
 
 
 @pytest.mark.unit

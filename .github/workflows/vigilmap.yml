@@ -1,0 +1,104 @@
+# Scoped to vigilmap/** per the repo's per-area workflow pattern: a PR that
+# only touches vigilmap runs exactly this workflow.
+name: VigilMap
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "vigilmap/**"
+      # The exporter's SELECTs mirror these table definitions and join; a
+      # schema change to either re-runs the exporter suite.
+      - "infra/database/init/26_episodic_memory.sql"
+      - "infra/database/init/33_episodic_verdict_techniques.sql"
+      # Pinned lint versions gate the exporter lint step below.
+      - "requirements-dev.txt"
+      - ".github/workflows/vigilmap.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "vigilmap/**"
+      - "infra/database/init/26_episodic_memory.sql"
+      - "infra/database/init/33_episodic_verdict_techniques.sql"
+      - "requirements-dev.txt"
+      - ".github/workflows/vigilmap.yml"
+  workflow_dispatch:
+
+jobs:
+  node:
+    name: Build & test (node)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vigilmap
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: vigilmap/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  python:
+    name: Test exporter (python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Repo Python CI context: run from the checkout root so the drift-guard
+      # test imports core.memory.entity_keys and vigilmap/export/key_rule.py
+      # side by side — that comparison is the point of the job.
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt pytest==9.1.1 psycopg2-binary==2.9.12
+
+      - name: Lint exporter
+        run: |
+          black --check vigilmap/export/
+          isort --check-only vigilmap/export/
+          flake8 vigilmap/export/
+
+      # No database: the suite is transform/CLI-only; the unreachable-database
+      # CLI test connects to a refused port, which needs the driver, not a server.
+      - name: Test exporter
+        run: pytest vigilmap/
+
+  # The bundled demo cannot rot: the generator is deterministic (fixed seed,
+  # ordered-by-construction output), so regenerating it must reproduce the
+  # checked-in JSON byte for byte. diff exits non-zero on any drift.
+  determinism:
+    name: Sample dataset determinism
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # runner.temp survives across steps and stays outside the checkout.
+      - name: Regenerate the sample into a temp dir
+        run: python3 vigilmap/scripts/generate_sample.py --output "${{ runner.temp }}/sample-memory.json"
+
+      - name: Diff against the checked-in file
+        run: diff -u vigilmap/public/data/sample-memory.json "${{ runner.temp }}/sample-memory.json"

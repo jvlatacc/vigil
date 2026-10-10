@@ -6,10 +6,15 @@ band text the agents are prompted with — reads a field here, so raising a
 threshold in env moves every branch rather than one. Defaults are the literals
 the code carried before, so a default install behaves as it did.
 
+Beside it, never on top of it, lives the MTD band (``MtdConfig`` and
+``mtd_route_decision``): the honey-routing floor is its own numbers with its
+own decision-rule keys, so widening one band can never widen the other.
+
 Lives in ``core/`` because ``core`` must not import ``services``;
-``services.daemon.config`` re-exports it as part of ``DaemonConfig``.
+``services.daemon.config`` re-exports both as part of ``DaemonConfig``.
 """
 
+import ipaddress
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -49,6 +54,10 @@ class ResponseConfig:
     critical_action_floor: float = 0.70
     high_action_floor: float = 0.80
     force_manual_approval: bool = False
+    # Kernel enforcement ships human-only (the INTENT.md enforcement block);
+    # DAEMON_ENFORCEMENT_FORCE_APPROVAL relaxes the creation posture, never
+    # the person-decided execution guard.
+    enforcement_force_manual_approval: bool = True
     dry_run: bool = False  # Log actions without executing
 
     @classmethod
@@ -62,6 +71,7 @@ class ResponseConfig:
             critical_action_floor=s.daemon_critical_action_floor,
             high_action_floor=s.daemon_high_action_floor,
             force_manual_approval=s.daemon_force_approval,
+            enforcement_force_manual_approval=s.daemon_enforcement_force_approval,
             dry_run=s.daemon_dry_run,
         )
 
@@ -124,3 +134,134 @@ def approval_requirement(
             "response.confidence_threshold", config.confidence_threshold, confidence
         )
     raise ValueError(f"Unknown reversibility: {reversibility}")
+
+
+# --- The MTD band ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MtdConfig:
+    """The honey-routing band, deliberately beside the response band.
+
+    The floors are independent on purpose: a recon probe is a candidate for
+    deception well below the containment line, so this band's numbers must
+    never move because a containment threshold moved — and raising the
+    response band must never widen what may be decoyed. Default off:
+    enabling MTD is a human configuration act, consistent with only humans
+    promoting autonomy.
+    """
+
+    enabled: bool = False
+    # Proposal floor for decoying a recon probe; its own band, independent
+    # of the isolate/block thresholds above in this module.
+    confidence_floor: float = 0.60
+    # How long an approved routing may hold before the daemon releases it.
+    session_ttl_seconds: int = 3600
+    # Only probes aimed at internal destinations are candidates: a probe of
+    # public space is not touching an internal host, so there is nothing a
+    # decoy would be protecting.
+    internal_destinations_only: bool = True
+
+    @classmethod
+    def from_settings(cls, settings: Optional[Settings] = None) -> "MtdConfig":
+        s = settings or get_settings()
+        return cls(
+            enabled=s.daemon_mtd_enabled,
+            confidence_floor=s.daemon_mtd_confidence_floor,
+            session_ttl_seconds=s.daemon_mtd_session_ttl_seconds,
+            internal_destinations_only=s.daemon_mtd_internal_only,
+        )
+
+
+# Destinations a probe may be diverted from, as far as MTD is concerned:
+# RFC 1918 private space plus loopback and link-local, and their IPv6
+# counterparts (unique-local, loopback, link-local). Spelled out rather than
+# read from ``ipaddress``.is_private so the answer cannot drift with the
+# stdlib's registry — documentation ranges (TEST-NET, ::/8) stay external.
+_INTERNAL_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+)
+
+
+def is_internal_destination(dest_ip: str) -> bool:
+    """Whether dest_ip names a host on one of ours; unparseable is not.
+
+    Public because the daemon path reads it too: the responder picks the
+    internal destination a probe aimed at before the decision runs, and
+    the decision re-verifies with this same answer.
+    """
+    try:
+        addr = ipaddress.ip_address(dest_ip)
+    except ValueError:
+        return False
+    return any(
+        addr.version == net.version and addr in net for net in _INTERNAL_NETWORKS
+    )
+
+
+# The technique tags the MTD band reads as scanning: T1046 (Network Service
+# Scanning) and T1595 (Active Scanning), matched by prefix so sub-techniques
+# count. One definition serves every MTD reader — the correlator scores a
+# finding carrying them, the processor queues one, and the responder reads
+# them as the deceive verb — so the three can never disagree about what a
+# recon probe is.
+RECON_TECHNIQUES = ("T1046", "T1595")
+
+
+def is_recon_probe(mitre_predictions: Any) -> bool:
+    """Whether the finding's technique tags name a scanning technique."""
+    if not mitre_predictions:
+        return False
+    tags = (
+        mitre_predictions.keys()
+        if isinstance(mitre_predictions, dict)
+        else mitre_predictions
+    )
+    return any(str(tag).upper().startswith(RECON_TECHNIQUES) for tag in tags)
+
+
+def mtd_route_decision(
+    recommended: str,
+    confidence: float,
+    dest_ip: Optional[str],
+    config: MtdConfig,
+    is_excluded: bool,
+) -> tuple[Optional[str], str]:
+    """Whether a probe may be honey-routed, and the rule that decided.
+
+    Returns ``(action, rule)`` on every path: ``"honey_route"`` only when
+    every gate passes, and even a refusal names the rule it refused on —
+    the same audit contract as :func:`response_action_decision`, except that
+    a refusal still carries its rule, because "we chose not to deceive" is
+    an audit line too. Gates in order: MTD on, destination internal per
+    config, not on the never-route list, the ``deceive`` verb recommended,
+    the confidence a probability, the confidence at or above this band's
+    floor. A refusal routes nothing; the probe falls back to the normal
+    response path.
+    """
+    if not config.enabled:
+        return None, decision_rule("mtd.enabled", False)
+    if dest_ip is None or (
+        config.internal_destinations_only and not is_internal_destination(dest_ip)
+    ):
+        return None, decision_rule("mtd.dest_not_internal", dest_ip)
+    if is_excluded:
+        return None, decision_rule("mtd.exclusion_list", dest_ip)
+    if recommended != "deceive":
+        return None, decision_rule("mtd.no_deceive_verb", recommended)
+    if not 0.0 <= confidence <= 1.0:
+        return None, decision_rule("mtd.confidence_range", confidence)
+    if confidence < config.confidence_floor:
+        return None, decision_rule(
+            "mtd.confidence_floor", config.confidence_floor, confidence
+        )
+    return "honey_route", decision_rule(
+        "mtd.confidence_floor met", config.confidence_floor, confidence
+    )

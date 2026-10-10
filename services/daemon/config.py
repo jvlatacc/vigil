@@ -5,7 +5,13 @@ from typing import Dict, List
 from core.config import DEFAULT_REDIS_URL, get_settings
 from core.ingestion.kafka_config import KafkaConfig  # re-exported for DaemonConfig
 from core.intent import INTENT_FIELDS
-from core.response.config import ResponseConfig  # re-exported for DaemonConfig
+from core.response.config import (  # re-exported for DaemonConfig
+    MtdConfig,
+    ResponseConfig,
+)
+from core.response.fastpath.config import (  # re-exported for DaemonConfig
+    FastPathConfig,
+)
 from core.secrets import get_secret
 from core.telemetry import configure_logging
 
@@ -67,6 +73,17 @@ class SchedulerConfig:
     cleanup_interval: int = 86400  # Daily
     cleanup_retention_days: int = 90
     approval_expiry_days: int = 7
+    # Honey-route TTL sweep (core.integrations.honey_router), same logic:
+    # executed routes release by TTL even after MTD is disabled — a
+    # config flip must never strand an attacker pinned to a decoy.
+    # Constant for v1, no settings knob: the sweep is cheap when no
+    # routes exist and correctness says it must run regardless.
+    mtd_route_sweep_interval: int = 60
+    # Canary-credential rotation (core.response.decoy_rotation), the
+    # containment invariant the spec locks. Constant for v1, same logic as
+    # the route sweep: the tick is one registry read when nothing is
+    # active, and hygiene must run regardless of the enable switch.
+    mtd_canary_rotation_interval: int = 86400
 
 
 @dataclass
@@ -110,6 +127,8 @@ class DaemonConfig:
     polling: PollingConfig = field(default_factory=PollingConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     response: ResponseConfig = field(default_factory=ResponseConfig)
+    fastpath: FastPathConfig = field(default_factory=FastPathConfig)
+    mtd: MtdConfig = field(default_factory=MtdConfig)
     escalation: EscalationConfig = field(default_factory=EscalationConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
@@ -159,6 +178,7 @@ class DaemonConfig:
         )
 
         config.response = ResponseConfig.from_settings(settings)
+        config.mtd = MtdConfig.from_settings(settings)
 
         config.escalation.enabled = settings.daemon_escalation_enabled
         config.escalation.slack_enabled = (

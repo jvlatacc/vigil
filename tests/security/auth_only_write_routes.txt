@@ -45,6 +45,7 @@ POST /api/detection-rules/reload
 POST /api/detection-rules/sources
 POST /api/detection-rules/sources/{source_id}/update
 POST /api/detection-rules/update-all
+POST /api/digital-twin/ingest
 POST /api/exclusions
 POST /api/exclusions/{exclusion_id}/remove
 POST /api/federation/sources/{source_id}/poll-now
@@ -89,6 +90,7 @@ POST /api/skills/{name}/test
 POST /api/sla-policies/
 POST /api/sla-policies/{policy_id}/set-default
 POST /api/v1/cases/search
+POST /api/v1/digital-twin/ingest
 POST /api/webhooks/
 POST /api/webhooks/{webhook_id}/test
 POST /api/workflows/custom

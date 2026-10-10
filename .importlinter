@@ -53,6 +53,7 @@ source_modules =
     core.cases
     core.chat
     core.detections
+    core.edge
     core.federation
     core.findings
     core.ingestion
@@ -102,4 +103,23 @@ forbidden_modules =
     tools
     services.api
     services.daemon
+    services.worker
+    services.decoy
+    services.edge
+
+[importlinter:contract:edge]
+name = Edge imports nothing from core, tools or any other service (a sovereign node defends its segment alone)
+type = forbidden
+source_modules =
+    services.edge
+; Same rule as Medic's contract: every other deployable under services/, listed
+; by name — a forbidden contract can't say "services.* except Edge"
+; (services/edge/tests/test_isolation.py fails until a new service is added).
+forbidden_modules =
+    core
+    tools
+    services.api
+    services.daemon
+    services.decoy
+    services.medic
     services.worker

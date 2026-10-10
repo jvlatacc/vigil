@@ -380,6 +380,37 @@
     "title": "create_caseArguments",
     "type": "object"
   },
+  "export_case_iocs": {
+    "properties": {
+      "case_id": {
+        "title": "Case Id",
+        "type": "string"
+      },
+      "format": {
+        "default": "json",
+        "title": "Format",
+        "type": "string"
+      }
+    },
+    "required": [
+      "case_id"
+    ],
+    "title": "export_case_iocsArguments",
+    "type": "object"
+  },
+  "get_agent_run": {
+    "properties": {
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id"
+    ],
+    "title": "get_agent_runArguments",
+    "type": "object"
+  },
   "get_approval_action": {
     "properties": {
       "action_id": {
@@ -442,6 +473,19 @@
       "finding_id"
     ],
     "title": "get_findingArguments",
+    "type": "object"
+  },
+  "get_workflow": {
+    "properties": {
+      "workflow_id": {
+        "title": "Workflow Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workflow_id"
+    ],
+    "title": "get_workflowArguments",
     "type": "object"
   },
   "list_approval_actions": {
@@ -607,6 +651,65 @@
     "title": "list_findingsArguments",
     "type": "object"
   },
+  "list_workflows": {
+    "properties": {},
+    "title": "list_workflowsArguments",
+    "type": "object"
+  },
+  "merge_cases": {
+    "properties": {
+      "case_id": {
+        "title": "Case Id",
+        "type": "string"
+      },
+      "source_case_id": {
+        "title": "Source Case Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "case_id",
+      "source_case_id"
+    ],
+    "title": "merge_casesArguments",
+    "type": "object"
+  },
+  "queue_agent_directive": {
+    "properties": {
+      "fields": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Fields"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "run_id": {
+        "title": "Run Id",
+        "type": "string"
+      },
+      "text": {
+        "default": "",
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "run_id",
+      "kind"
+    ],
+    "title": "queue_agent_directiveArguments",
+    "type": "object"
+  },
   "reject_action": {
     "properties": {
       "action_id": {
@@ -641,6 +744,181 @@
       "finding_id"
     ],
     "title": "remove_finding_from_caseArguments",
+    "type": "object"
+  },
+  "search_cases": {
+    "properties": {
+      "assignee": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Assignee"
+      },
+      "created_after": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Created After"
+      },
+      "created_before": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Created Before"
+      },
+      "limit": {
+        "default": 100,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "mitre_techniques": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mitre Techniques"
+      },
+      "offset": {
+        "default": 0,
+        "title": "Offset",
+        "type": "integer"
+      },
+      "priority": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Priority"
+      },
+      "query_text": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Query Text"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Status"
+      },
+      "tags": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Tags"
+      }
+    },
+    "title": "search_casesArguments",
+    "type": "object"
+  },
+  "start_agent_run": {
+    "properties": {
+      "arch": {
+        "default": "",
+        "title": "Arch",
+        "type": "string"
+      },
+      "config": {
+        "title": "Config",
+        "type": "string"
+      },
+      "overrides": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Overrides"
+      },
+      "playbook": {
+        "title": "Playbook",
+        "type": "string"
+      },
+      "prompt": {
+        "default": "",
+        "title": "Prompt",
+        "type": "string"
+      },
+      "run_kind": {
+        "default": "hunt",
+        "title": "Run Kind",
+        "type": "string"
+      },
+      "tenant_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Tenant Id"
+      }
+    },
+    "required": [
+      "playbook",
+      "config"
+    ],
+    "title": "start_agent_runArguments",
     "type": "object"
   },
   "update_case": {
@@ -726,6 +1004,119 @@
       "case_id"
     ],
     "title": "update_caseArguments",
+    "type": "object"
+  },
+  "update_finding": {
+    "properties": {
+      "anomaly_score": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Anomaly Score"
+      },
+      "cluster_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Cluster Id"
+      },
+      "entity_context": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Entity Context"
+      },
+      "evidence_links": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Evidence Links"
+      },
+      "finding_id": {
+        "title": "Finding Id",
+        "type": "string"
+      },
+      "mitre_predictions": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mitre Predictions"
+      },
+      "predicted_techniques": {
+        "anyOf": [
+          {
+            "items": {},
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Predicted Techniques"
+      },
+      "severity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Severity"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Status"
+      }
+    },
+    "required": [
+      "finding_id"
+    ],
+    "title": "update_findingArguments",
     "type": "object"
   }
 }

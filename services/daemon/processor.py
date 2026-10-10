@@ -6,9 +6,11 @@ import re
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from core.cases.decoy_session_capture import DECOY_SESSION_DATA_SOURCE
 from core.ingestion.ack import settle_ack
 from core.ingestion.dedup import RedisDedupSet
 from core.llm.outage import report_outage, report_recovered
+from core.response.config import MtdConfig, is_recon_probe
 from core.response.fastpath.config import FastPathConfig
 from core.response.fastpath.policy import TriageSignal, evaluate_fast_path
 from core.time import utcnow
@@ -77,6 +79,7 @@ class FindingProcessor:
         config: ProcessingConfig,
         response_config: Optional[ResponseConfig] = None,
         fast_path_config: Optional[FastPathConfig] = None,
+        mtd_config: Optional[MtdConfig] = None,
     ):
         self.config = config
         # The queue-for-response line is the band's review threshold, so the
@@ -88,6 +91,10 @@ class FindingProcessor:
         # first enabled decision, so a disabled config constructs nothing.
         self.fast_path_config = fast_path_config or FastPathConfig()
         self._fast_path_service: Optional[SpeculativeActionService] = None
+        # The MTD band gates its own queue candidates: a deceive-recommended
+        # or recon-tagged probe queues for response only while MTD is on,
+        # so a default install queues exactly what it queued before.
+        self.mtd_config = mtd_config or MtdConfig()
         # Bounded so a stalled processor holds producers back (put blocks)
         # instead of piling findings up in memory.
         self.input_queue: asyncio.Queue = asyncio.Queue(maxsize=INPUT_QUEUE_MAXSIZE)
@@ -123,6 +130,7 @@ class FindingProcessor:
             "queued_for_investigation": 0,
             "sanitization_flagged": 0,
             "store_dropped": 0,
+            "decoy_sessions_captured": 0,
             "fast_path_fired": 0,
             "fast_path_errors": 0,
         }
@@ -336,7 +344,16 @@ class FindingProcessor:
             # on give-up, forget the dedup key so a source that re-reads its
             # lookback can enqueue the finding again. No data service is a
             # failed store — same path, including probes (they carry no key).
-            if not await self._store_with_retry(finding):
+            #
+            # A decoy session event takes the capture pipeline instead: its
+            # Finding, transcript evidence, and IOCs must land as one
+            # transaction (spec criterion 7), which the generic ingestion
+            # service cannot give it.
+            if finding.get("data_source") == DECOY_SESSION_DATA_SOURCE:
+                stored = await self._store_decoy_session(finding)
+            else:
+                stored = await self._store_with_retry(finding)
+            if not stored:
                 await self._drop_unstored(finding_id, dedup, dedup_key)
                 return
 
@@ -432,6 +449,15 @@ class FindingProcessor:
         if finding.get("data_source") == PROBE_DATA_SOURCE:
             return
 
+        # A decoy-session finding stops here, like a probe: the attacker it
+        # describes is already inside a decoy, and the response bands exist
+        # to protect production. Containing a decoy's visitor — blocking the
+        # very connection the deception is holding open — is the tip-off this
+        # feature exists to avoid. The session's product is the capture
+        # itself; nothing past this point may act on it.
+        if finding.get("data_source") == DECOY_SESSION_DATA_SOURCE:
+            return
+
         # Response evaluation always runs — even when enrichment is off or paused.
         try:
             await self._evaluate_for_response(finding)
@@ -508,6 +534,44 @@ class FindingProcessor:
             if attempt < _STORE_ATTEMPTS:
                 await asyncio.sleep(_STORE_RETRY_BACKOFF)
         return False
+
+    async def _store_decoy_session(self, finding: Dict[str, Any]) -> bool:
+        """Store one decoy session event atomically (the capture plane).
+
+        A replayed session is a handled event, not a failure: the unique
+        (data_source, external_id) pair dedupes it. Log lines carry ids and
+        counts only — the transcript never reaches a log.
+        """
+        from core.cases.decoy_session_capture import (
+            capture_session_event,
+            parse_session_event,
+        )
+
+        try:
+            event = parse_session_event(finding)
+        except ValueError as e:
+            logger.error(
+                "Rejected decoy session event %s: %s", finding.get("finding_id"), e
+            )
+            return False
+        try:
+            result = await asyncio.to_thread(capture_session_event, event)
+        except (
+            Exception
+        ) as e:  # noqa: BLE001 — a failed capture drops, same as the generic store
+            logger.error("Decoy session capture failed for %s: %s", event.session_id, e)
+            return False
+        if result.get("status") == "created":
+            self.stats["decoy_sessions_captured"] += 1
+            logger.info(
+                "Captured decoy session %s on %s (%d commands, %d IOCs) -> %s",
+                event.session_id,
+                event.decoy_service,
+                len(event.commands),
+                result.get("iocs_added", 0),
+                result.get("case_id"),
+            )
+        return result.get("status") in ("created", "duplicate")
 
     async def _drop_unstored(
         self,
@@ -657,7 +721,7 @@ Provide your assessment in the following format:
 SEVERITY: [critical/high/medium/low]
 CONFIDENCE: [0.0-1.0]
 CATEGORY: [malware/intrusion/data_exfil/credential_theft/lateral_movement/other]
-RECOMMENDED_ACTION: [isolate/block/investigate/monitor/dismiss]
+RECOMMENDED_ACTION: [{"/".join(TRIAGE_ACTIONS)}]
 REASONING: [Brief explanation]
 """
 
@@ -1034,10 +1098,21 @@ REASONING: [Brief explanation]
             ),
         )
 
+        # The MTD band adds its own candidates beside the containment ones:
+        # a probe triage recommended deceiving, and a scanning-tagged probe
+        # (T1046/T1595) whose tags say deceive even when triage chose a
+        # calmer word. Both queue only while MTD is on — with the feature
+        # off the queue sees exactly what it saw before, bit for bit.
+        mtd_candidate = self.mtd_config.enabled and (
+            recommended_action == "deceive"
+            or is_recon_probe(finding.get("mitre_predictions") or {})
+        )
+
         # Queue for response if high severity or action recommended
         should_respond = (
             severity in ["critical", "high"]
             or recommended_action in ["isolate", "block"]
+            or mtd_candidate
             or confidence >= self.response_config.review_threshold
         )
 
@@ -1100,8 +1175,11 @@ REASONING: [Brief explanation]
         if not self.fast_path_config.enabled:
             return
         # A known-answer probe exists to exercise the triage path (#923); it
-        # must never earn a restriction from either tier.
-        if finding.get("data_source") == PROBE_DATA_SOURCE:
+        # must never earn a restriction from either tier. A decoy-session
+        # finding stops at its capture plane for the same reason — the
+        # session's product is the capture, and acting on its visitor would
+        # tear the deception open.
+        if finding.get("data_source") in (PROBE_DATA_SOURCE, DECOY_SESSION_DATA_SOURCE):
             return
         try:
             decision = evaluate_fast_path(finding, triage, self.fast_path_config)

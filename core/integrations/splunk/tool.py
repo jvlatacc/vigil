@@ -33,6 +33,7 @@ except ImportError:
     pass
 
 from core.integrations._base.config import missing, resolve
+from core.integrations._base.tool_errors import classified_error
 from core.integrations._base.tool_result import run_tool
 from core.integrations.splunk.descriptor import SPLUNK
 
@@ -330,7 +331,10 @@ async def handle_call_tool(name: str, arguments: dict | None):
             return result({"error": "spl_query required"})
         splunk = get_splunk_service()
         if not splunk:
-            return result({"error": "Splunk not configured", "spl": spl})
+            # Error results never echo the caller's SPL back: a failure payload
+            # lands in the agent's context, and the query may name sensitive
+            # hunts. The caller supplied it this turn and can resend it.
+            return result({"error": "Splunk not configured"})
         try:
             # search() polls the job with time.sleep; keep it off the MCP loop.
             results = await asyncio.to_thread(
@@ -341,9 +345,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 args.get("max_results", 100),
             )
             if results is None:
-                return result(
-                    {"error": "Splunk search failed or timed out", "query": spl}
-                )
+                return result({"error": "Splunk search failed or timed out"})
             return result(
                 {
                     "success": True,
@@ -353,7 +355,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 }
             )
         except Exception as e:
-            return result({"error": str(e), "query": spl})
+            return result({"error": classified_error("splunk", name, e)})
 
     elif name == "splunk_search_ip":
         ip = args.get("ip_address")
@@ -372,7 +374,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 {"success": True, "ip": ip, "count": len(results), "results": results}
             )
         except Exception as e:
-            return result({"error": str(e)})
+            return result({"error": classified_error("splunk", name, e)})
 
     elif name == "splunk_search_host":
         host = args.get("hostname")
@@ -398,7 +400,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 }
             )
         except Exception as e:
-            return result({"error": str(e)})
+            return result({"error": classified_error("splunk", name, e)})
 
     elif name == "splunk_nl_search":
         query = args.get("query")
@@ -407,9 +409,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
         spl_result = generate_spl(query)
         splunk = get_splunk_service()
         if not splunk:
-            return result(
-                {"error": "Splunk not configured", "generated_spl": spl_result}
-            )
+            return result({"error": "Splunk not configured"})
         try:
             results = await asyncio.to_thread(
                 splunk.search,
@@ -419,12 +419,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 args.get("max_results", 100),
             )
             if results is None:
-                return result(
-                    {
-                        "error": "Splunk search failed or timed out",
-                        "spl": spl_result["spl_query"],
-                    }
-                )
+                return result({"error": "Splunk search failed or timed out"})
             return result(
                 {
                     "success": True,
@@ -436,7 +431,7 @@ async def handle_call_tool(name: str, arguments: dict | None):
                 }
             )
         except Exception as e:
-            return result({"error": str(e), "spl": spl_result["spl_query"]})
+            return result({"error": classified_error("splunk", name, e)})
 
     return result({"error": f"Unknown tool: {name}"})
 

@@ -1,0 +1,624 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-18T15:00:00Z",
+  "source": "sample",
+  "nodes": [
+    {
+      "id": "email:billing@netledger-invoices.com",
+      "kind": "entity",
+      "label": "billing@netledger-invoices.com",
+      "entityType": "email",
+      "entityKey": "email:billing@netledger-invoices.com"
+    },
+    {
+      "id": "url:https://netledger-invoices.com/invoice/0442/view",
+      "kind": "entity",
+      "label": "invoice/0442 lure link",
+      "entityType": "url",
+      "entityKey": "url:https://netledger-invoices.com/invoice/0442/view"
+    },
+    {
+      "id": "domain:netledger-invoices.com",
+      "kind": "entity",
+      "label": "netledger-invoices.com",
+      "entityType": "domain",
+      "entityKey": "domain:netledger-invoices.com"
+    },
+    {
+      "id": "domain:cdn-metrics.com",
+      "kind": "entity",
+      "label": "cdn-metrics.com",
+      "entityType": "domain",
+      "entityKey": "domain:cdn-metrics.com"
+    },
+    {
+      "id": "ip:203.0.113.47",
+      "kind": "entity",
+      "label": "203.0.113.47",
+      "entityType": "ip",
+      "entityKey": "ip:203.0.113.47"
+    },
+    {
+      "id": "ip:198.51.100.23",
+      "kind": "entity",
+      "label": "198.51.100.23",
+      "entityType": "ip",
+      "entityKey": "ip:198.51.100.23"
+    },
+    {
+      "id": "host:jw-desktop",
+      "kind": "entity",
+      "label": "JW-DESKTOP",
+      "entityType": "host",
+      "entityKey": "host:jw-desktop"
+    },
+    {
+      "id": "user:j.watson",
+      "kind": "entity",
+      "label": "j.watson",
+      "entityType": "user",
+      "entityKey": "user:j.watson"
+    },
+    {
+      "id": "process:powershell.exe",
+      "kind": "entity",
+      "label": "powershell.exe",
+      "entityType": "process",
+      "entityKey": "process:powershell.exe"
+    },
+    {
+      "id": "hash:e8d967695efbd7bc8ff7299f0a2cfb775053c4aaea4e3e582f9f5292c8cfccbe",
+      "kind": "entity",
+      "label": "dropped loader",
+      "entityType": "hash",
+      "entityKey": "hash:e8d967695efbd7bc8ff7299f0a2cfb775053c4aaea4e3e582f9f5292c8cfccbe"
+    },
+    {
+      "id": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly",
+      "kind": "entity",
+      "label": "role/Metrics-ReadOnly",
+      "entityType": "arn",
+      "entityKey": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly"
+    },
+    {
+      "id": "aws_key:AKIAIOSFODNN7EXAMPLE",
+      "kind": "entity",
+      "label": "AKIAIOSFODNN7EXAMPLE",
+      "entityType": "aws_key",
+      "entityKey": "aws_key:AKIAIOSFODNN7EXAMPLE"
+    },
+    {
+      "id": "cve:cve-2026-24817",
+      "kind": "entity",
+      "label": "CVE-2026-24817",
+      "entityType": "cve",
+      "entityKey": "cve:cve-2026-24817"
+    },
+    {
+      "id": "s-0001",
+      "kind": "sighting",
+      "label": "lure email received",
+      "entityKey": "email:billing@netledger-invoices.com",
+      "observedFrom": "2026-09-14T08:12:04Z",
+      "observedTo": "2026-09-14T08:12:04Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0002",
+      "kind": "sighting",
+      "label": "lure link clicked",
+      "entityKey": "url:https://netledger-invoices.com/invoice/0442/view",
+      "observedFrom": "2026-09-14T08:19:31Z",
+      "observedTo": "2026-09-14T08:19:31Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0003",
+      "kind": "sighting",
+      "label": "lure domain resolved",
+      "entityKey": "domain:netledger-invoices.com",
+      "observedFrom": "2026-09-14T08:19:33Z",
+      "observedTo": "2026-09-14T08:19:33Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0004",
+      "kind": "sighting",
+      "label": "loader dropped on JW-DESKTOP",
+      "entityKey": "hash:e8d967695efbd7bc8ff7299f0a2cfb775053c4aaea4e3e582f9f5292c8cfccbe",
+      "observedFrom": "2026-09-14T08:21:10Z",
+      "observedTo": "2026-09-14T08:21:10Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0005",
+      "kind": "sighting",
+      "label": "powershell spawned by loader",
+      "entityKey": "process:powershell.exe",
+      "observedFrom": "2026-09-14T08:21:14Z",
+      "observedTo": "2026-09-14T08:21:14Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0006",
+      "kind": "sighting",
+      "label": "C2 domain resolved by beacon",
+      "entityKey": "domain:cdn-metrics.com",
+      "observedFrom": "2026-09-14T09:00:02Z",
+      "observedTo": "2026-09-14T09:00:02Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0007",
+      "kind": "sighting",
+      "label": "C2 beacon to 203.0.113.47",
+      "entityKey": "ip:203.0.113.47",
+      "observedFrom": "2026-09-14T09:02:44Z",
+      "observedTo": "2026-09-14T09:02:44Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0008",
+      "kind": "sighting",
+      "label": "beacon retry, jittered interval",
+      "entityKey": "ip:203.0.113.47",
+      "observedFrom": "2026-09-14T11:47:09Z",
+      "observedTo": "2026-09-14T11:47:09Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0009",
+      "kind": "sighting",
+      "label": "second-stage fetch from 198.51.100.23",
+      "entityKey": "ip:198.51.100.23",
+      "observedFrom": "2026-09-14T12:05:51Z",
+      "observedTo": "2026-09-14T12:05:51Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0010",
+      "kind": "sighting",
+      "label": "anomalous logons as j.watson",
+      "entityKey": "user:j.watson",
+      "observedFrom": "2026-09-14T12:30:00Z",
+      "observedTo": "2026-09-14T12:36:41Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0011",
+      "kind": "sighting",
+      "label": "check-in anomaly on JW-DESKTOP",
+      "entityKey": "host:jw-desktop",
+      "observedFrom": "2026-09-14T12:31:12Z",
+      "observedTo": "2026-09-14T12:31:12Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0012",
+      "kind": "sighting",
+      "label": "lure domain registered (passive DNS)",
+      "entityKey": "domain:netledger-invoices.com",
+      "observedFrom": "2026-09-13T00:00:00Z",
+      "observedTo": "2026-09-13T23:59:59Z",
+      "sourceTier": "asserted",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0013",
+      "kind": "sighting",
+      "label": "role seen in CloudTrail, new ASN",
+      "entityKey": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly",
+      "observedFrom": "2026-09-16T03:12:27Z",
+      "observedTo": "2026-09-16T03:12:27Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "s-0014",
+      "kind": "sighting",
+      "label": "access key used from new ASN",
+      "entityKey": "aws_key:AKIAIOSFODNN7EXAMPLE",
+      "observedFrom": "2026-09-16T03:14:02Z",
+      "observedTo": "2026-09-16T03:14:02Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "s-0015",
+      "kind": "sighting",
+      "label": "patch status checked on desktop",
+      "entityKey": "cve:cve-2026-24817",
+      "observedFrom": "2026-09-16T04:00:00Z",
+      "observedTo": "2026-09-16T04:00:00Z",
+      "sourceTier": "asserted",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "s-0016",
+      "kind": "sighting",
+      "label": "shared-infra recheck of 198.51.100.23",
+      "entityKey": "ip:198.51.100.23",
+      "observedFrom": "2026-09-16T05:10:38Z",
+      "observedTo": "2026-09-16T05:10:38Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "s-0017",
+      "kind": "sighting",
+      "label": "j.watson lockout events",
+      "entityKey": "user:j.watson",
+      "observedFrom": "2026-09-16T06:00:19Z",
+      "observedTo": "2026-09-16T06:00:19Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "s-0018",
+      "kind": "sighting",
+      "label": "beacon TTL variation",
+      "entityKey": "ip:203.0.113.47",
+      "observedFrom": "2026-09-15T02:11:55Z",
+      "observedTo": "2026-09-15T02:11:55Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0019",
+      "kind": "sighting",
+      "label": "whois privacy on C2 registration",
+      "entityKey": "domain:cdn-metrics.com",
+      "observedFrom": "2026-09-13T00:00:00Z",
+      "observedTo": "2026-09-13T23:59:59Z",
+      "sourceTier": "asserted",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "s-0020",
+      "kind": "sighting",
+      "label": "scheduled-task persistence on JW-DESKTOP",
+      "entityKey": "host:jw-desktop",
+      "observedFrom": "2026-09-15T13:20:07Z",
+      "observedTo": "2026-09-15T13:20:07Z",
+      "sourceTier": "observed",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "v-0001",
+      "kind": "verdict",
+      "label": "proven: lure led to C2 beaconing",
+      "outcome": "proven",
+      "statement": "Ransomware pre-staging via the Ledger Lure confirmed: the lure led to a loader on JW-DESKTOP beaconing to cdn-metrics.com / 203.0.113.47 under account j.watson.",
+      "rationale": "Loader hash, beacon timing, and account anomalies corroborate across three independent sources.",
+      "investigationId": "inv-2026-0914-01",
+      "concludedAt": "2026-09-15T17:02:00Z",
+      "techniques": [
+        "T1566",
+        "T1059.001",
+        "T1071"
+      ]
+    },
+    {
+      "id": "v-0002",
+      "kind": "verdict",
+      "label": "disproven: lure domain used for BEC",
+      "outcome": "disproven",
+      "statement": "The lure domain saw no business-email-compromise activity beyond the initial lure; no mailbox rules or fraud attempts found.",
+      "rationale": "Mailbox audit over the window shows no rule creation or forwarding.",
+      "investigationId": "inv-2026-0914-01",
+      "concludedAt": "2026-09-15T16:10:00Z"
+    },
+    {
+      "id": "v-0003",
+      "kind": "verdict",
+      "label": "inconclusive: role assumed from second ASN",
+      "outcome": "inconclusive",
+      "statement": "Cannot confirm whether the Metrics-ReadOnly role was actually assumed; CloudTrail lacked data-event coverage for the window.",
+      "rationale": "Management events only; no data events retained.",
+      "investigationId": "inv-2026-0916-02",
+      "concludedAt": "2026-09-18T14:30:00Z"
+    },
+    {
+      "id": "v-0004",
+      "kind": "verdict",
+      "label": "handed_off: CVE-2026-24817 remediation",
+      "outcome": "handed_off",
+      "statement": "Unpatched CVE-2026-24817 on JW-DESKTOP referred to the infrastructure remediation queue.",
+      "rationale": "Patch ownership sits with endpoint management.",
+      "investigationId": "inv-2026-0916-02",
+      "concludedAt": "2026-09-18T15:00:00Z"
+    },
+    {
+      "id": "v-0005",
+      "kind": "verdict",
+      "label": "false_positive: second-stage IP",
+      "outcome": "false_positive",
+      "statement": "198.51.100.23 is a shared CDN edge, not attacker infrastructure; the second-stage fetch was benign asset loading.",
+      "rationale": "The IP serves the same ASN as the lure site's font CDN across unrelated tenants.",
+      "investigationId": "inv-2026-0914-01",
+      "concludedAt": "2026-09-15T15:45:00Z"
+    },
+    {
+      "id": "g-0001",
+      "kind": "gap",
+      "label": "gap: DNS telemetry retention",
+      "disposition": "deferred",
+      "reason": "No DNS resolution telemetry retained for the 08:00-09:00 window; beacon scheduling unconfirmed.",
+      "investigationId": "inv-2026-0914-01"
+    },
+    {
+      "id": "g-0002",
+      "kind": "gap",
+      "label": "gap: role assumption unverified",
+      "disposition": "monitoring",
+      "reason": "No data-event trail for AssumeRole; watch CloudTrail additions and re-hunt if the key recurs.",
+      "investigationId": "inv-2026-0916-02"
+    },
+    {
+      "id": "h-001",
+      "kind": "hunt",
+      "label": "hunt h-001: Ledger Lure initial access",
+      "objective": "Trace the Ledger Lure phishing email to initial access and C2 on JW-DESKTOP.",
+      "startedAt": "2026-09-14T08:30:00Z",
+      "endedAt": "2026-09-15T17:02:00Z"
+    },
+    {
+      "id": "h-002",
+      "kind": "hunt",
+      "label": "hunt h-002: cloud credential exposure",
+      "objective": "Assess credential persistence and cloud exposure after the Ledger Lure compromise.",
+      "startedAt": "2026-09-16T03:30:00Z",
+      "endedAt": "2026-09-18T15:00:00Z"
+    },
+    {
+      "id": "e-0001",
+      "kind": "episode",
+      "label": "learning: lure-to-C2 registration lag",
+      "summary": "Distilled after h-001: lure domains registered within 48h of first send now auto-correlate with fresh C2 infrastructure.",
+      "occurredAt": "2026-09-15T17:30:00Z"
+    }
+  ],
+  "links": [
+    {
+      "source": "s-0001",
+      "target": "email:billing@netledger-invoices.com",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0002",
+      "target": "url:https://netledger-invoices.com/invoice/0442/view",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0003",
+      "target": "domain:netledger-invoices.com",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0004",
+      "target": "hash:e8d967695efbd7bc8ff7299f0a2cfb775053c4aaea4e3e582f9f5292c8cfccbe",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0005",
+      "target": "process:powershell.exe",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0006",
+      "target": "domain:cdn-metrics.com",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0007",
+      "target": "ip:203.0.113.47",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0008",
+      "target": "ip:203.0.113.47",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0009",
+      "target": "ip:198.51.100.23",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0010",
+      "target": "user:j.watson",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0011",
+      "target": "host:jw-desktop",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0012",
+      "target": "domain:netledger-invoices.com",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0013",
+      "target": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0014",
+      "target": "aws_key:AKIAIOSFODNN7EXAMPLE",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0015",
+      "target": "cve:cve-2026-24817",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0016",
+      "target": "ip:198.51.100.23",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0017",
+      "target": "user:j.watson",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0018",
+      "target": "ip:203.0.113.47",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0019",
+      "target": "domain:cdn-metrics.com",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "s-0020",
+      "target": "host:jw-desktop",
+      "relation": "sighting-of"
+    },
+    {
+      "source": "v-0001",
+      "target": "domain:cdn-metrics.com",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0001",
+      "target": "ip:203.0.113.47",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0001",
+      "target": "user:j.watson",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0002",
+      "target": "domain:netledger-invoices.com",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0003",
+      "target": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0003",
+      "target": "aws_key:AKIAIOSFODNN7EXAMPLE",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0004",
+      "target": "cve:cve-2026-24817",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0005",
+      "target": "ip:198.51.100.23",
+      "relation": "verdict-subject"
+    },
+    {
+      "source": "v-0001",
+      "target": "s-0004",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0001",
+      "target": "s-0006",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0001",
+      "target": "s-0007",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0002",
+      "target": "s-0012",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0003",
+      "target": "s-0013",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0003",
+      "target": "s-0014",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "v-0005",
+      "target": "s-0009",
+      "relation": "verdict-source"
+    },
+    {
+      "source": "g-0001",
+      "target": "domain:cdn-metrics.com",
+      "relation": "gap-subject"
+    },
+    {
+      "source": "g-0002",
+      "target": "arn:arn:aws:iam::123456789012:role/Metrics-ReadOnly",
+      "relation": "gap-subject"
+    },
+    {
+      "source": "h-001",
+      "target": "v-0001",
+      "relation": "hunt-verdict"
+    },
+    {
+      "source": "h-001",
+      "target": "v-0002",
+      "relation": "hunt-verdict"
+    },
+    {
+      "source": "h-002",
+      "target": "v-0003",
+      "relation": "hunt-verdict"
+    },
+    {
+      "source": "h-002",
+      "target": "v-0004",
+      "relation": "hunt-verdict"
+    },
+    {
+      "source": "h-001",
+      "target": "v-0005",
+      "relation": "hunt-verdict"
+    },
+    {
+      "source": "h-001",
+      "target": "g-0001",
+      "relation": "hunt-gap"
+    },
+    {
+      "source": "h-002",
+      "target": "g-0002",
+      "relation": "hunt-gap"
+    },
+    {
+      "source": "e-0001",
+      "target": "domain:netledger-invoices.com",
+      "relation": "episode-entity"
+    },
+    {
+      "source": "e-0001",
+      "target": "domain:cdn-metrics.com",
+      "relation": "episode-entity"
+    }
+  ]
+}

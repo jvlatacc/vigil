@@ -14,11 +14,14 @@ from core.integrations.mcp.registry import (
 pytestmark = pytest.mark.unit
 
 TOOL = {
-    "name": "splunk_execute",
+    # Read-only shaped on purpose: the approval gate queues an execute-shaped
+    # name (``splunk_execute`` included) before it dispatches, and what this
+    # file tests is registry refresh and liveness, not that gate.
+    "name": "splunk_search",
     "description": "x",
     "inputSchema": {},
 }
-FLAT = "splunk-selfhosted_splunk_execute"
+FLAT = "splunk-selfhosted_splunk_search"
 
 
 class _Client:
@@ -90,7 +93,7 @@ async def test_execute_mcp_tool_reaches_a_runtime_enabled_server(monkeypatch):
 
     class _Callable(_Client):
         async def call_tool(self, server, tool, args, timeout=30.0):
-            assert (server, tool) == ("splunk-selfhosted", "splunk_execute")
+            assert (server, tool) == ("splunk-selfhosted", TOOL["name"])
             return {"content": [{"type": "text", "text": '{"ok": true}'}]}
 
     client = _Callable(connected=True)

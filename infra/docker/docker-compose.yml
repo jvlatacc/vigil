@@ -49,6 +49,11 @@ x-intent-env: &intent-env
   DAEMON_CRITICAL_ACTION_FLOOR: ${DAEMON_CRITICAL_ACTION_FLOOR:-0.70}
   DAEMON_HIGH_ACTION_FLOOR: ${DAEMON_HIGH_ACTION_FLOOR:-0.80}
   DAEMON_FORCE_APPROVAL: ${DAEMON_FORCE_APPROVAL:-false}
+  DAEMON_MTD_ENABLED: ${DAEMON_MTD_ENABLED:-false}
+  DAEMON_MTD_CONFIDENCE_FLOOR: ${DAEMON_MTD_CONFIDENCE_FLOOR:-0.60}
+  DAEMON_MTD_SESSION_TTL_SECONDS: ${DAEMON_MTD_SESSION_TTL_SECONDS:-3600}
+  DAEMON_MTD_INTERNAL_ONLY: ${DAEMON_MTD_INTERNAL_ONLY:-true}
+  DAEMON_ENFORCEMENT_FORCE_APPROVAL: ${DAEMON_ENFORCEMENT_FORCE_APPROVAL:-true}
   DAEMON_ESCALATE_SEVERITIES: "${DAEMON_ESCALATE_SEVERITIES:-critical,high}"
   ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-false}
   ORCHESTRATOR_MAX_COST: ${ORCHESTRATOR_MAX_COST:-5.0}
@@ -190,6 +195,12 @@ services:
       # Shared secret the agent worker presents on /internal. Unset means every
       # such call answers 503, so no workflow can run.
       AGENT_INTERNAL_TOKEN: ${AGENT_INTERNAL_TOKEN:-}
+      # Edge control plane (core/edge). Unset enrollment secret = every edge
+      # enrollment answers 503 (fail closed); unset signing key file = no
+      # bundle can be published. Both are opt-in on purpose — see
+      # docs/edge-operator-guide.md.
+      VIGIL_EDGE_ENROLLMENT_SECRET: ${VIGIL_EDGE_ENROLLMENT_SECRET:-}
+      VIGIL_EDGE_SIGNING_KEY_FILE: ${VIGIL_EDGE_SIGNING_KEY_FILE:-}
       # JWT signing secret. Unset means the backend refuses to start (auth is on);
       # mint one with `openssl rand -base64 48` or reuse ~/.vigil/jwt_secret from
       # start.sh. DEV_MODE=true is the opt-in auth bypass for a developer machine.
@@ -477,6 +488,145 @@ services:
     # Host Ollama: implicit on Docker Desktop, required on native Linux Docker.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - deeptempo-network
+
+  # Edge daemon (Local Autonomy Mesh, services/edge) — gateway mode: one
+  # sovereign defender for the segment this host fronts. Opt-in behind the
+  # `edge` profile like the daemon services above; a partitioned segment is
+  # defended by this container on the last signed bundle. Operator flow:
+  # docs/edge-operator-guide.md. The e2e that proves the loop end-to-end:
+  # scripts/edge_compose_e2e.sh.
+  edge:
+    profiles: [edge]
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.edge
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: deeptempo-edge
+    # Gateway mode's containment is nftables rules in this container's
+    # network namespace. A real VPC gateway runs with `network_mode: host`
+    # so the rules protect host-forwarded traffic (compose override — see
+    # the operator guide); this e2e keeps the bridge netns so the ruleset
+    # stays inspectable and host-firewall-free.
+    cap_add:
+      - NET_ADMIN
+    environment:
+      VIGIL_EDGE_ENABLED: "true"
+      # The enrolled node's id — names the edge_nodes row, the journal's
+      # actor string, and the finding source. Compose refuses to start the
+      # service without it: an anonymous defender is a provisioning bug.
+      VIGIL_EDGE_NODE_ID: ${VIGIL_EDGE_NODE_ID:?set VIGIL_EDGE_NODE_ID to the enrolled node id}
+      VIGIL_EDGE_MODE: ${VIGIL_EDGE_MODE:-gateway}
+      VIGIL_EDGE_CONTROL_URL: ${VIGIL_EDGE_CONTROL_URL:-http://backend:6987}
+      # One-time token, minted with VIGIL_EDGE_ENROLLMENT_SECRET set on the
+      # backend. Empty is fine on an already-enrolled node (the credential
+      # persists on the edge_data volume).
+      VIGIL_EDGE_ENROLLMENT_TOKEN: ${VIGIL_EDGE_ENROLLMENT_TOKEN:-}
+      # Must match the signed bundle's segment_scope byte-for-byte
+      # (canonical JSON) — bundle serving joins on scope equality.
+      VIGIL_EDGE_SEGMENT_SCOPE: ${VIGIL_EDGE_SEGMENT_SCOPE:-}
+      VIGIL_EDGE_NODE_LABELS: ${VIGIL_EDGE_NODE_LABELS:-}
+      VIGIL_EDGE_DATA_DIR: /var/lib/vigil-edge
+      VIGIL_EDGE_CREDENTIAL_FILE: /var/lib/vigil-edge/credential
+      # Suricata EVE JSON-lines (or similar) the daemon tails. Bind the real
+      # file over /data in production; the e2e writes synthetic records here.
+      VIGIL_EDGE_EVE_PATH: ${VIGIL_EDGE_EVE_PATH:-/data/eve.json}
+      # The offline DSSE trust root. Required: without it the daemon would
+      # boot DEGRADED (observe-only) — a provisioned-but-defenseless node is
+      # a mistake, not a state; mount the operator-published file.
+      VIGIL_EDGE_TRUST_STORE: ${VIGIL_EDGE_TRUST_STORE:?mount the DSSE trust root file for this node}
+      # Advisory classifier via Ollama (the repo's local-model default).
+      # Plain `${VAR-default}` (not `:-`) on purpose: an explicitly empty
+      # value must reach the daemon as "advisor off", not snap back to the
+      # default model. Set VIGIL_EDGE_MODEL="" to run deterministic-only.
+      VIGIL_EDGE_MODEL: ${VIGIL_EDGE_MODEL-qwen2.5:1.5b}
+      VIGIL_EDGE_MODEL_DIGEST: ${VIGIL_EDGE_MODEL_DIGEST:-}
+      VIGIL_EDGE_OLLAMA_URL: ${VIGIL_EDGE_OLLAMA_URL:-http://host.docker.internal:11434}
+      VIGIL_EDGE_HEALTH_PORT: "9091"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      # Loopback-only, same as the daemon's health port: /health is
+      # unauthenticated (state, tier, uptime) and host-local only.
+      - "127.0.0.1:9091:9091"
+    volumes:
+      # Durable per-node state: journal, policy cache, credential.
+      - edge_data:/var/lib/vigil-edge
+      # Observation source. Named volume by default; bind the live EVE file
+      # over /data in production.
+      - edge_telemetry:/data
+      - ${VIGIL_EDGE_TRUST_STORE}:/etc/vigil-edge/trust-root.dsse.json:ro
+    depends_on:
+      # service_started, not service_healthy — the daemon retries sync with
+      # backoff, so a backend still booting delays enrollment instead of
+      # failing it (the same laziness the central daemon relies on).
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    # Host Ollama: implicit on Docker Desktop, required on native Linux Docker.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deeptempo-network
+
+  # ─── Decoys (MTD plane 03) ─────────────────────────────────────────────────
+  # Canary decoys for honey-routed attacker sessions (spec, planes 02/03).
+  # Started only with the `decoys` profile — `docker compose --profile decoys
+  # up` — which is the human act of enabling decoys on a Compose install.
+  # They publish NO host ports: reachability is internal to
+  # deeptempo-network only, and the port-binding security tests fail the
+  # build on any new binding. Compose bridges cannot express default-deny
+  # egress; the containment invariant is enforced in code (the decoy makes
+  # exactly one outbound call — the ingest POST — and holds only canary
+  # data, tested in tests/security/test_decoy_containment.py), and in Helm
+  # via NetworkPolicy on the cluster path.
+  ssh-decoy:
+    profiles: [decoys]
+    image: vigil-backend:local
+    build: *backend-build
+    container_name: deeptempo-ssh-decoy
+    command: ["python", "-m", "services.decoy.ssh_decoy"]
+    environment:
+      # The profile is the opt-in; within it the decoy serves.
+      DECOY_ENABLED: ${DECOY_ENABLED:-true}
+      DECOY_INGEST_URL: ${DECOY_INGEST_URL:-http://soc-daemon:8081/ingest}
+      DECOY_SESSION_TTL_SECONDS: ${DECOY_SESSION_TTL_SECONDS:-3600}
+      # The daemon's own ingest bearer, aliased to the decoy's channel
+      # (services/decoy/emitter.py) so one token guards the webhook.
+      DECOY_INGEST_TOKEN: ${DAEMON_WEBHOOK_TOKEN:-}
+      # Canary credential through the secret plumbing — never a literal.
+      DECOY_CANARY_PASSWORD: ${DECOY_CANARY_PASSWORD:-}
+      PYTHONUNBUFFERED: "1"
+    # The backend image's HEALTHCHECK curls :6987, which this process does
+    # not serve — disable rather than report unhealthy forever.
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - deeptempo-network
+
+  http-decoy:
+    profiles: [decoys]
+    image: vigil-backend:local
+    build: *backend-build
+    container_name: deeptempo-http-decoy
+    command: ["python", "-m", "services.decoy.http_decoy"]
+    environment:
+      DECOY_ENABLED: ${DECOY_ENABLED:-true}
+      DECOY_INGEST_URL: ${DECOY_INGEST_URL:-http://soc-daemon:8081/ingest}
+      DECOY_SESSION_TTL_SECONDS: ${DECOY_SESSION_TTL_SECONDS:-3600}
+      DECOY_INGEST_TOKEN: ${DAEMON_WEBHOOK_TOKEN:-}
+      DECOY_CANARY_PASSWORD: ${DECOY_CANARY_PASSWORD:-}
+      PYTHONUNBUFFERED: "1"
+    # Serves /health on the container-internal interface only.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
     networks:
       - deeptempo-network
 
@@ -934,6 +1084,12 @@ volumes:
   misp_files:
     driver: local
   misp_logs:
+    driver: local
+  # Edge daemon durable state (journal, policy cache, credential) and its
+  # observation source. Per-node by design: state never leaves the node.
+  edge_data:
+    driver: local
+  edge_telemetry:
     driver: local
 
 networks:

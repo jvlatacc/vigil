@@ -270,6 +270,53 @@ class Settings(BaseSettings):
     daemon_high_action_floor: float = 0.80
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
+    # Kernel enforcement actions (xdp_block_ip, socket_redirect,
+    # interdict_process) wait for a person: the env reader for the INTENT.md
+    # enforcement block. Setting it false relaxes the declared posture; the
+    # executor's person-decided guard still applies at execution.
+    daemon_enforcement_force_approval: bool = True
+    # Blast-bound knobs (Feature 7, #944). core.response.guards_config bridges
+    # and validates them; nothing else reads them here. Origin enforcement is
+    # ON by default: unregistered-key deployments get human approval instead
+    # of auto-execution — registering keys restores machine speed.
+    daemon_containment_quotas_enabled: bool = True
+    # Quota scope derives from the target IP at this prefix length (0-32); a
+    # /24 yields 254 usable hosts, so 5%/min means 12 actions per minute.
+    daemon_subnet_scope_prefix: int = 24
+    daemon_containment_quota_subnet_pct_per_min: float = 5.0
+    daemon_containment_quota_global_per_min: int = 30
+    # The hourly ceiling is the breaker trip, not just a pend.
+    daemon_containment_quota_global_per_hour: int = 200
+    # While the breaker is open every action waits for a person; it opens for
+    # this long, then auto-closes. It also trips on protected-asset probes or
+    # unverified-origin floods inside a 10-minute window.
+    daemon_breaker_cooldown_seconds: int = 900
+    daemon_breaker_invariant_probe_trip: int = 3
+    daemon_breaker_origin_flood_trip: int = 10
+    # Boot seed of never-quarantine invariants: JSON array of objects.
+    daemon_protected_assets: Annotated[List[dict], NoDecode] = []
+    # Ed25519 origin trust roots: JSON array of objects.
+    daemon_trusted_origins: Annotated[List[dict], NoDecode] = []
+    # Automated MTD / honey-routing. core.response.config.MtdConfig bridges
+    # these; nothing else reads them here. Default off: enabling is a human
+    # configuration act, not a code change. The floor is its own band — it
+    # never rides the isolate/block thresholds, so raising one band's number
+    # can never widen the other's reach.
+    daemon_mtd_enabled: bool = False
+    daemon_mtd_confidence_floor: float = 0.60
+    daemon_mtd_session_ttl_seconds: int = 3600
+    daemon_mtd_internal_only: bool = True
+
+    # Decoy environment (services/decoy) — the workloads are gated twice: the
+    # compose `decoys` profile / Helm decoy values decide whether the process
+    # is even started, and this in-code switch decides whether a started
+    # process serves. Default off: enabling it is a human configuration act.
+    decoy_enabled: bool = False
+    # Where session events are POSTed — the daemon's webhook ingest.
+    decoy_ingest_url: str = "http://soc-daemon:8081/ingest"
+    # Maximum session length: long sessions are closed and emitted at the TTL
+    # so a held-open session cannot defer its capture indefinitely.
+    decoy_session_ttl_seconds: int = 3600
     daemon_escalation_enabled: bool = True
     daemon_escalate_severities: Annotated[List[str], NoDecode] = ["critical", "high"]
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
@@ -326,6 +373,10 @@ class Settings(BaseSettings):
     cloudy_ingestion_enabled: bool = False
     cloudy_webhook_max_body_kb: int = 1024
     threat_feed_poll_interval: int = 900
+    # Daily CISA KEV refresher (services/daemon/threat_feed_poller.py): keeps
+    # the bundled t=0 seed current from the official, key-less feed. Off only
+    # when an install's egress policy forbids reaching cisa.gov.
+    vigil_threat_feed_kev_enabled: bool = True
 
     # Sandbox
     sandbox_auto_submit: bool = False
@@ -350,6 +401,23 @@ class Settings(BaseSettings):
     def _split_csv(cls, v: Any) -> Any:
         if isinstance(v, str):
             return [p.strip() for p in v.split(",") if p.strip()]
+        return v
+
+    @field_validator(
+        "daemon_protected_assets",
+        "daemon_trusted_origins",
+        mode="before",
+    )
+    @classmethod
+    def _parse_json_list(cls, v: Any) -> Any:
+        # NoDecode hands the raw env string over: parse it here so a malformed
+        # seed fails validation (and boot, via validate_settings_or_exit)
+        # instead of reaching a reader as a string that reads as empty. A
+        # blank value means no seed, matching _blank_is_unset's leniency.
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            return json.loads(v)
         return v
 
     @field_validator(

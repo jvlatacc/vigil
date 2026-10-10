@@ -36,6 +36,28 @@ respond:
   # (DAEMON_FORCE_APPROVAL, or Settings -> Approvals in the UI)
   force_manual_approval: false
 
+deceive:
+  # Honey-route a suspicious recon probe aimed at an internal destination
+  # into isolated decoy services instead of answering from production, and
+  # record what the attacker does. (DAEMON_MTD_ENABLED)
+  enabled: false
+  # Minimum triage confidence for an unattended decoy routing; higher is
+  # tighter. Its own band — independent of the respond floors above.
+  # (DAEMON_MTD_CONFIDENCE_FLOOR)
+  confidence_floor: 0.60
+  # How long an approved routing may hold before it is released; lower is
+  # tighter. (DAEMON_MTD_SESSION_TTL_SECONDS)
+  session_ttl_seconds: 3600
+  # Only probes aimed at internal destinations may be routed; on is tighter.
+  # (DAEMON_MTD_INTERNAL_ONLY)
+  internal_destinations_only: true
+
+enforcement:
+  # Kernel enforcement actions (xdp_block_ip, socket_redirect,
+  # interdict_process) always wait for a person: the approval row is created
+  # human-only while this stands. (DAEMON_ENFORCEMENT_FORCE_APPROVAL)
+  force_manual_approval: true
+
 escalate:
   # Severities that page a human; a shorter list is tighter.
   # (DAEMON_ESCALATE_SEVERITIES)
@@ -81,6 +103,21 @@ daemon. Override the path with `VIGIL_INTENT_PATH`.
 a triage confidence and every approval action in a window (default 7 days,
 `--since 7d`) under this file and under the effective config, and prints the
 rows whose outcome would differ. It does not write.
+
+## Kernel enforcement
+
+The `enforcement` block is the posture for the kernel actions — `xdp_block_ip`,
+`socket_redirect`, `interdict_process` — that drive the per-host enforcement
+daemon. These are the highest-consequence actions in the system: they change
+what packets a host receives and what processes it may run. Their shipped
+posture is `force_manual_approval: true`: every such approval row is created
+human-only, whatever a caller's confidence claims, and the executor refuses to
+run any kernel action a person did not decide.
+
+Setting `DAEMON_ENFORCEMENT_FORCE_APPROVAL=false` relaxes the declared posture
+(the drift report says so, labeled `loosen`). It changes how kernel rows are
+created, not what can run unattended: the daemon's person-decided guard at
+execution still refuses any action that was never decided by a person.
 
 ## Editing
 

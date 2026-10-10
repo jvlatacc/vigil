@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.client.stdio import get_default_environment
 
-from core.integrations.mcp.child_env import ca_bundle_env
+from core.integrations.mcp.child_env import ca_bundle_env, default_child_env
 from core.integrations.mcp.client import MCPClient
 from core.integrations.mcp.service import MCPServer, MCPService
 
@@ -23,11 +23,13 @@ pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[3]
 
-# Child env is assembled in _initialize_servers (parent snapshot) and spawned
-# once via StdioServerParameters. os.environ.copy() there is the snapshot, not
-# a second spawn — the deleted Popen path used to make that ambiguous.
+# Child env is assembled in _initialize_servers (deny-by-default base) and
+# spawned once via StdioServerParameters. Each build site must forward the CA
+# bundle explicitly: stdio_client narrows the child environment to the SDK's
+# six-name allowlist, so a bundle set in the backend's environment never
+# reaches a server on its own.
 CHILD_ENV_SITES = (
-    ("core/integrations/mcp/service.py", "os.environ.copy()"),
+    ("core/integrations/mcp/service.py", "default_child_env()"),
     ("core/integrations/mcp/client.py", "StdioServerParameters("),
 )
 
@@ -100,18 +102,35 @@ def test_the_sdk_would_otherwise_strip_it(monkeypatch, tmp_path):
     assert "NODE_EXTRA_CA_CERTS" not in get_default_environment()
 
 
-@pytest.mark.parametrize("rel, env_built", CHILD_ENV_SITES)
-def test_every_child_env_site_forwards_the_bundle(rel, env_built):
-    """One ca_bundle_env() per place a child environment is built."""
+@pytest.mark.parametrize("rel, built_marker", CHILD_ENV_SITES)
+def test_every_child_env_site_marks_its_env_build(rel, built_marker):
+    """One marked build site per place a child environment is assembled.
+
+    The marker is the ratchet: a new build site (or a silent rewrite of an
+    existing one) has to surface here so its CA forwarding gets checked.
+    """
     src = (ROOT / rel).read_text()
-    built = src.count(env_built)
-    forwards = src.count("ca_bundle_env()")
-    assert built >= 1
-    assert forwards >= built, (
-        f"{rel} builds {built} child environment(s) but forwards the CA "
-        f"bundle {forwards} time(s) — a server spawned without it fails TLS "
-        "behind a private CA"
+    assert src.count(built_marker) >= 1, (
+        f"{rel} no longer contains {built_marker!r} — a child environment "
+        "build site changed shape; verify it forwards the CA bundle and "
+        "update this marker"
     )
+
+
+def test_the_default_child_env_includes_the_bundle(monkeypatch, tmp_path):
+    """service.py's base env forwards the bundle through default_child_env()."""
+    bundle = tmp_path / "corporate-ca.pem"
+    bundle.write_text("x")
+    monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+
+    assert default_child_env()["SSL_CERT_FILE"] == str(bundle)
+
+
+def test_the_spawn_site_forwards_the_bundle_verbatim():
+    """client.py merges ca_bundle_env() into the one StdioServerParameters call."""
+    src = (ROOT / "core/integrations/mcp/client.py").read_text()
+    params_site = src[: src.index("StdioServerParameters(") + 400]
+    assert "ca_bundle_env()" in params_site
 
 
 def test_mcp_server_does_not_popen_its_own_child():
@@ -121,8 +140,15 @@ def test_mcp_server_does_not_popen_its_own_child():
     assert "subprocess.Popen(" not in service
 
 
-def test_initialize_servers_snapshots_parent_env_into_server_env(tmp_path, monkeypatch):
-    """The live child env is the parent snapshot plus declared config entries."""
+def test_initialize_servers_denies_the_parent_environment_by_default(
+    tmp_path, monkeypatch
+):
+    """A child env is the reduced base plus declared config entries — nothing else.
+
+    The backend's process environment (JWT_SECRET_KEY, POSTGRES_*, integration
+    tokens) must not pass through: os.environ.copy() here was the full
+    environment-inheritance bug, so an unexported marker is the negative case.
+    """
     monkeypatch.setenv("VIGIL_PARENT_MARKER", "inherited")
     (tmp_path / "mcp-config.json").write_text(
         json.dumps(
@@ -139,9 +165,12 @@ def test_initialize_servers_snapshots_parent_env_into_server_env(tmp_path, monke
     )
     service = MCPService(project_root=tmp_path)
     env = service.servers["demo"].env
-    assert env["VIGIL_PARENT_MARKER"] == "inherited"
+    assert "VIGIL_PARENT_MARKER" not in env
     assert env["CUSTOM_FROM_CONFIG"] == "yes"
     assert env["PYTHONPATH"] == str(tmp_path)
+    assert env["VIGIL_DIR"]
+    # The SDK's safe names survive, so servers can still find their binaries.
+    assert env["PATH"]
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,11 @@ SCORE_AFTER = timedelta(hours=1)
 
 # Vocabulary _build_triage_prompt asks the model for; ``expected`` draws from it.
 SEVERITIES = ("critical", "high", "medium", "low")
-ACTIONS = ("isolate", "block", "investigate", "monitor", "dismiss")
+# ``deceive`` is the MTD verb: a probe worth diverting into a decoy rather
+# than containing — the lateral-movement family (T1021 and kin) and the
+# scanning probes the correlator tags recon (T1046/T1595). Containment
+# vocabulary keeps its place; deceive is additive, never a replacement.
+ACTIONS = ("isolate", "block", "investigate", "monitor", "dismiss", "deceive")
 
 # finding_id is String(50) and reads "probe:<name>:<YYYY-MM-DD>", so a name
 # has 33 characters. Entities are RFC 5737 / RFC 2606, so an IP lookup can only

@@ -24,7 +24,7 @@ from typing import List, NamedTuple, Optional
 
 from sqlalchemy.orm import Session
 
-from core.storage.models import McpCredential, User
+from core.storage.models import ConfigAuditLog, McpCredential, User
 from core.storage.unit_of_work import unit_of_work
 from core.time import utcnow
 
@@ -136,8 +136,19 @@ def authenticate(token: str, session: Optional[Session] = None) -> Optional[User
         return None
 
 
-def revoke(credential_id: str, session: Optional[Session] = None) -> bool:
-    """Withdraw a credential. True if this call is what withdrew it."""
+def revoke(
+    credential_id: str,
+    session: Optional[Session] = None,
+    *,
+    revoked_by: Optional[str] = None,
+) -> bool:
+    """Withdraw a credential. True if this call is what withdrew it.
+
+    ``revoked_by`` names an operator acting on a credential they do not own --
+    the admin path a terminated analyst's offboarding needs. It puts an audit
+    row in the same transaction, because a revocation that cannot be recorded
+    does not happen.
+    """
     with unit_of_work(session) as session:
         record = (
             session.query(McpCredential)
@@ -148,8 +159,57 @@ def revoke(credential_id: str, session: Optional[Session] = None) -> bool:
             return False
 
         record.revoked_at = utcnow()
+        if revoked_by is not None:
+            session.add(
+                ConfigAuditLog(
+                    config_type="mcp_credential",
+                    config_key=credential_id[:200],
+                    action="update",
+                    old_value={
+                        "revoked": False,
+                        "user_id": record.user_id,
+                        "label": record.label,
+                    },
+                    new_value={"revoked": True},
+                    changed_by=revoked_by[:100],
+                )
+            )
         logger.info("Revoked MCP credential %s", credential_id)
         return True
+
+
+def credential_exists(credential_id: str, session: Optional[Session] = None) -> bool:
+    """Whether any credential, revoked or not, carries this id."""
+    with unit_of_work(session) as session:
+        return (
+            session.query(McpCredential.credential_id)
+            .filter(McpCredential.credential_id == credential_id)
+            .first()
+            is not None
+        )
+
+
+def list_all_credentials(
+    include_revoked: bool = False,
+    session: Optional[Session] = None,
+) -> List[dict]:
+    """Every credential with its owner's name, newest first.
+
+    The admin's view: offboarding does not know which keys a person minted.
+    ``to_dict`` shapes each row -- ids, labels, timestamps -- and there is no
+    token in it in any case, since what is stored is a hash.
+    """
+    with unit_of_work(session) as session:
+        query = session.query(McpCredential, User.username).outerjoin(
+            User, McpCredential.user_id == User.user_id
+        )
+        if not include_revoked:
+            query = query.filter(McpCredential.revoked_at.is_(None))
+        rows = query.order_by(McpCredential.created_at.desc()).all()
+        return [
+            {**credential.to_dict(), "username": username}
+            for credential, username in rows
+        ]
 
 
 def list_for_user(

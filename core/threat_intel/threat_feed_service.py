@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from core.memory.entity_keys import entity_key, text_entity_keys
 from core.memory.recall_contract import ENTITY_KEY_TYPES
@@ -139,6 +139,10 @@ _INDICATOR_TO_ENTITY_TYPE: Dict[str, str] = {
     "hash_md5": "hash",
     "hash_sha1": "hash",
     "hash_sha256": "hash",
+    # Not a STIX pattern type (KEV data constructs NormalizedIndicator
+    # directly); listed so the off-vocabulary guard below keeps vouching for
+    # every type a feed row can carry, KEV rows included.
+    "cve": "cve",
 }
 _UNMAPPED = set(_STIX_TO_VIGIL_TYPE.values()) - set(_INDICATOR_TO_ENTITY_TYPE)
 _OFF_VOCABULARY = set(_INDICATOR_TO_ENTITY_TYPE.values()) - set(ENTITY_KEY_TYPES)
@@ -464,6 +468,40 @@ def lookup_indicators(
         for row in rows:
             out.setdefault(row.indicator_value, ThreatIndicatorSchema.dump(row))
     return out
+
+
+def expire_indicators_not_in(
+    source: str, indicator_type: str, live_values: Set[str]
+) -> int:
+    """Set ``valid_until`` on rows of (source, type) absent from ``live_values``.
+
+    Catalog removals, for the KEV refresher: a catalog that drops an entry
+    means "no longer known-exploited", not "never happened", so the row expires
+    and stops matching but is never hard-deleted. Rows already expired keep
+    their earlier ``valid_until`` — restamping now would blur when the row
+    actually went stale. Returns the number of rows expired.
+    """
+    from core.storage.connection import get_db_manager
+    from core.storage.models import ThreatIndicator
+
+    db = get_db_manager()
+    now = utcnow()
+    with db.session_scope() as session:
+        # The store holds at most one row per (source, type, value) — the
+        # UNIQUE triple — so loading the slice is bounded by the catalog size.
+        rows = (
+            session.query(ThreatIndicator)
+            .filter(
+                ThreatIndicator.source == source,
+                ThreatIndicator.indicator_type == indicator_type,
+                _unexpired_clause(now),
+            )
+            .all()
+        )
+        stale = [row for row in rows if row.indicator_value not in live_values]
+        for row in stale:
+            row.valid_until = now
+        return len(stale)
 
 
 # ---------------------------------------------------------------------------
