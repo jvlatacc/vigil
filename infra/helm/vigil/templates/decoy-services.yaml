@@ -1,0 +1,40 @@
+{{- /* ClusterIP Services for the decoys. The enforcement plane targets these
+       (a redirect policy pins attacker flows to a decoy Service); nothing
+       exposes them outside the cluster. */ -}}
+{{- if .Values.sshDecoy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vigil.sshDecoy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "ssh-decoy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: ssh
+      port: {{ .Values.decoys.ports.ssh }}
+      targetPort: ssh
+      protocol: TCP
+  selector:
+    {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "ssh-decoy") | nindent 4 }}
+---
+{{- end }}
+{{- if .Values.httpDecoy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vigil.httpDecoy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "http-decoy") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.decoys.ports.http }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "http-decoy") | nindent 4 }}
+{{- end }}

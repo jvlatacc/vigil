@@ -1,0 +1,100 @@
+# infra/docker/Dockerfile.edge
+# =============================================================================
+# Edge daemon (Local Autonomy Mesh) — services/edge
+#
+# Final image runs:   python -m services.edge
+# Health check:       GET /health on VIGIL_EDGE_HEALTH_PORT (default 9091)
+# Exposes ports:      9091 (health: state, tier, node, uptime)
+#
+# Built only from services/edge: the daemon imports nothing from core (the
+# `edge` contract in .importlinter), so core is not copied in and the edge
+# lock is the only dependency list — the Medic image shape.
+#
+# Modes:
+#   gateway (default): reversible egress blocks through nftables. The
+#     container needs CAP_NET_ADMIN and, on a real VPC gateway, host
+#     networking (`network_mode: host` in Compose / hostNetwork in Helm) so
+#     the rules protect the host's own traffic — in an isolated container
+#     network namespace they protect only that namespace.
+#   cluster: reversible egress-deny NetworkPolicy objects through the K8s
+#     API server — no extra capabilities, the pod's own service account
+#     (scoped RBAC) is the credential.
+#
+# Runs as uid/gid 10001 (group/user "edge"), not Vigil's 1000, so the
+# 0600/0700 modes on its journal and credential keep every Vigil container
+# out of them. Works with a read-only root filesystem: the only write path
+# is the data dir, a volume or hostPath.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: the edge venv, from its own lock
+# ---------------------------------------------------------------------------
+# PYTHON_VERSION as in the other images: .python-version is the repo's pin.
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS deps
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /usr/local/bin/uv
+
+WORKDIR /build
+ENV UV_PROJECT_ENVIRONMENT=/opt/edge/venv \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+COPY services/edge/pyproject.toml services/edge/uv.lock ./
+RUN uv sync --frozen --no-dev --no-cache
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime image
+# ---------------------------------------------------------------------------
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+
+# nftables is the gateway-mode containment mechanism; the package provides
+# the `nft` binary the executor shells out to. Cluster-mode nodes never
+# invoke it. --no-install-recommends keeps the image small.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nftables \
+    && rm -rf /var/lib/apt/lists/*
+
+# The data dir is created here, owned by 10001 and mode 0700: Docker copies
+# that ownership into a new, empty named volume (the Medic precedent). No
+# VOLUME line: Compose and Helm mount the durable state; an anonymous volume
+# would hide a missing mount instead of failing on the read-only root.
+RUN groupadd -g 10001 edge \
+    && useradd -u 10001 -g 10001 -M -d /nonexistent -s /usr/sbin/nologin edge \
+    && mkdir -p /var/lib/vigil-edge \
+    && chown 10001:10001 /var/lib/vigil-edge \
+    && chmod 0700 /var/lib/vigil-edge
+
+COPY --from=deps /opt/edge/venv /opt/edge/venv
+
+# Code stays root-owned: the daemon can read it, not change it. .dockerignore
+# keeps the edge tests, fixtures and trust material out.
+WORKDIR /app
+COPY services/edge/ ./services/edge/
+COPY VERSION ./VERSION
+# Compiled now, because a read-only root filesystem can't take __pycache__ later.
+RUN if [ -n "${VIGIL_VERSION}" ]; then echo "${VIGIL_VERSION}" > /app/VERSION; fi \
+    && /opt/edge/venv/bin/python -m compileall -q /app/services/edge
+
+ENV PATH=/opt/edge/venv/bin:$PATH \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    VIGIL_EDGE_DATA_DIR=/var/lib/vigil-edge \
+    VIGIL_EDGE_CREDENTIAL_FILE=/var/lib/vigil-edge/credential
+
+USER 10001:10001
+
+EXPOSE 9091
+
+# The health endpoint is a hand-rolled asyncio server (no framework in the
+# edge lockfile); any HTTP 200 JSON line means the loop is serving. Shell
+# form so VIGIL_EDGE_HEALTH_PORT expands at check time.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import json,os,sys,urllib.request; sys.exit(0 if 200 <= urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"VIGIL_EDGE_HEALTH_PORT\", \"9091\")}/health', timeout=4).status < 300 else 1)"
+
+CMD ["python", "-m", "services.edge"]

@@ -6,3 +6,6 @@ isort==8.0.1
 mypy==2.4.0
 import-linter==2.15
 pre-commit==4.6.2
+# Golden-test validation of generated Kubernetes manifests against vendored
+# CRD schemas (tests/unit/integrations/fixtures/cilium-lrp-crd.yaml).
+jsonschema==4.26.0

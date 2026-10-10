@@ -104,6 +104,40 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         "daemon_force_approval",
         HIGHER_TIGHTER,
     ),
+    # The MTD band's knobs (core.response.config.MtdConfig). A decoy routing
+    # is unattended action, so off is tighter (LOWER_TIGHTER, like the other
+    # enablement booleans); the floor and the internal-only restriction are
+    # the force_manual_approval shape — on/higher is tighter.
+    IntentField(
+        "deceive.enabled",
+        "mtd.enabled",
+        "daemon_mtd_enabled",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "deceive.confidence_floor",
+        "mtd.confidence_floor",
+        "daemon_mtd_confidence_floor",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "deceive.session_ttl_seconds",
+        "mtd.session_ttl_seconds",
+        "daemon_mtd_session_ttl_seconds",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
+        "deceive.internal_destinations_only",
+        "mtd.internal_destinations_only",
+        "daemon_mtd_internal_only",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "enforcement.force_manual_approval",
+        "response.enforcement_force_manual_approval",
+        "daemon_enforcement_force_approval",
+        HIGHER_TIGHTER,
+    ),
     IntentField(
         "escalate.severities",
         "escalation.escalate_severities",

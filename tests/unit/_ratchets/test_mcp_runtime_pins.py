@@ -3,8 +3,9 @@
 npx / uvx / docker entries in mcp-config.json download code at process start.
 An unpinned spec, a version range, @latest, or a git default branch makes two
 identical deploys diverge and is a supply-chain footgun. In-repo python3
-servers and joe-sandbox's local ``uv --directory`` clone are not registry
-resolves and are left alone.
+servers are not registry resolves and are left alone. A local ``uv
+--directory`` clone is not a registry resolve either, but it is still code the
+host runs, so its setup note must check the clone out at a full commit SHA.
 """
 
 from __future__ import annotations
@@ -25,9 +26,14 @@ _MCP_CONFIG = _REPO_ROOT / "mcp-config.json"
 _EXACT_VERSION = re.compile(r"^[0-9]+(\.[0-9]+)*$")
 _EXACT_PYPI = re.compile(r"==([0-9]+(?:\.[0-9]+)*)$")
 _GIT_REF = re.compile(r"\.git@([^#]+)$")
+# A pin is a full commit SHA. Tags and branch names are server-side mutable:
+# the target of v0.7.0 can be re-pointed after a compromise, so a tag is not
+# a pin, and neither is a short SHA.
+_FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+_GIT_CLONE_URL = re.compile(r"git clone (?P<url>\S+?\.git)")
+_GIT_CHECKOUT_SHA = re.compile(r"git checkout [0-9a-f]{40}\b")
 _SHA256 = re.compile(r"@sha256:[0-9a-f]{64}$")
 _MCP_REMOTE_PATCH = re.compile(r"^0\.1\.(\d+)$")
-_FLOATING_GIT_REFS = {"HEAD", "head", "main", "master", "latest", "dev", "develop"}
 
 _DOCKER_VALUE_FLAGS = {
     "-e",
@@ -59,10 +65,7 @@ def _git_pinned(spec: str) -> bool:
     match = _GIT_REF.search(spec.split("#", 1)[0])
     if not match:
         return False
-    ref = match.group(1)
-    if ref in _FLOATING_GIT_REFS or ref.startswith(("refs/heads/", "refs/remotes/")):
-        return False
-    return True
+    return bool(_FULL_SHA.fullmatch(match.group(1)))
 
 
 def _pypi_or_git_pinned(spec: str) -> bool:
@@ -125,7 +128,12 @@ def test_npm_pin_helper(spec: str, ok: bool):
         ("falcon-mcp==latest", False),
         ("mcp<2", False),
         ("mcp==1.29.1", True),
-        ("git+https://github.com/org/repo.git@v0.7.0", True),
+        (
+            "git+https://github.com/org/repo.git@07d4992089b10affff6163f296b1f6cb5734539f",
+            True,
+        ),
+        ("git+https://github.com/org/repo.git@v0.7.0", False),
+        ("git+https://github.com/org/repo.git@07d4992", False),
         ("git+https://github.com/org/repo.git", False),
         ("git+https://github.com/org/repo.git@HEAD", False),
         ("git+https://github.com/org/repo.git@main", False),
@@ -164,8 +172,8 @@ def test_runtime_fetched_mcp_servers_are_pinned():
         f"vacuous if launchers were renamed ({inspected} found)"
     )
     assert not unpinned, (
-        "runtime-fetched MCP servers must pin an exact version, git tag/SHA, "
-        "or image digest — not @latest, a range, or git HEAD:\n"
+        "runtime-fetched MCP servers must pin an exact version, git commit SHA, "
+        "or image digest — not @latest, a range, a tag, or git HEAD:\n"
         + "\n".join(f"  {name}: {detail}" for name, detail in sorted(unpinned.items()))
     )
 
@@ -208,6 +216,35 @@ def test_mcp_remote_stays_inside_the_0_1_cve_window():
 )
 def test_mcp_remote_cve_window_helper(version: str, ok: bool):
     assert _mcp_remote_in_cve_window(version) is ok
+
+
+@pytest.mark.unit
+def test_uv_directory_clones_are_pinned_to_a_commit():
+    """A local ``uv --directory`` clone is code the host runs. Its setup note
+    must check the clone out at a full commit SHA — a default-branch checkout
+    floats exactly like an unpinned registry resolve."""
+    inspected = 0
+    offenders: dict[str, str] = {}
+    for name, config in _servers().items():
+        args = [a for a in config.get("args") or [] if isinstance(a, str)]
+        if config.get("command") != "uv" or "--directory" not in args:
+            continue
+        inspected += 1
+        notes = " ".join(
+            str(v) for v in (config.get("env") or {}).values() if isinstance(v, str)
+        )
+        clone = _GIT_CLONE_URL.search(notes)
+        if clone and not _GIT_CHECKOUT_SHA.search(notes):
+            offenders[name] = clone.group("url")
+    assert inspected >= 1, (
+        "expected at least one uv --directory clone; the clone-pin ratchet is "
+        f"vacuous if the launcher shape changed ({inspected} found)"
+    )
+    assert not offenders, (
+        "uv --directory clones must check out a full 40-hex commit in their "
+        "setup note (git checkout <sha>), not a floating branch:\n"
+        + "\n".join(f"  {name}: {url}" for name, url in sorted(offenders.items()))
+    )
 
 
 _IMAGE_PACKAGES = _REPO_ROOT / "infra" / "docker" / "mcp-packages"

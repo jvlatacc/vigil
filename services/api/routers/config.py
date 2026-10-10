@@ -31,6 +31,7 @@ from core.integrations.integration_secrets import (
     redact_secrets,
     secret_fields_for,
     split_secrets,
+    unregistered_credential_fields,
 )
 from core.intent import intent_file
 from core.llm.defaults import DEFAULT_MODEL
@@ -53,9 +54,13 @@ from services.daemon.intent import effective_daemon_config, intent_report
 router = APIRouter()
 
 # Writes change what the platform connects to and trusts, so Auth.REQUIRED alone
-# (any active account) is not enough. Reads stay open to every role.
+# (any active account) is not enough. Neither is a bare login for reads (E6):
+# integration config names the vendors Vigil talks to, which credentials are
+# set, and previews of those credentials. A role denied both read grants may
+# not enumerate them.
 _SETTINGS_WRITE = [permission_gate("settings.write")]
 _INTEGRATIONS_WRITE = [permission_gate("integrations.write")]
+_INTEGRATIONS_READ = [permission_gate("integrations.read", "settings.read")]
 
 ROUTER_META = RouterMeta(
     prefix="/api/config",
@@ -81,6 +86,20 @@ def _mirror_to_file(filename: str, config_data: Dict[str, Any]) -> None:
             json.dump(config_data, f, indent=2)
     except OSError as e:
         logger.warning(f"Could not mirror {filename} to the State Directory: {e}")
+
+
+def _token_preview(secret: Optional[str]) -> Optional[str]:
+    """Last-4 preview of a stored credential, for identifying it in Settings.
+
+    Previews used to show the LEADING characters (12 of the GitHub token, 8 of
+    the Claude key) — up to a third of a 36-char secret portion, sent to every
+    reader of the config (E6). The tail identifies a credential at least as
+    well; a secret too short for its tail to be a minority of it — 8 characters
+    or fewer — gets no preview at all.
+    """
+    if not secret or len(secret) <= 8:
+        return None
+    return f"...{secret[-4:]}"
 
 
 class ClaudeConfig(BaseModel):
@@ -262,7 +281,7 @@ def get_claude_config():
 
         return {
             "configured": has_key,
-            "key_preview": f"{api_key[:8]}..." if has_key else None,
+            "key_preview": _token_preview(api_key),
         }
     except Exception as e:
         logger.error(f"Error getting Claude config: {e}")
@@ -807,7 +826,7 @@ def _secrets_set_map(integrations: dict) -> dict:
     return result
 
 
-@router.get("/integrations")
+@router.get("/integrations", dependencies=_INTEGRATIONS_READ)
 def get_integrations_config():
     """
     Get integrations configuration.
@@ -880,6 +899,29 @@ def set_integrations_config(
         Success status
     """
     config_service = _for_user(current_user)
+
+    # A credential-shaped value in an unregistered field would be persisted
+    # plaintext to the DB / JSON mirror (E7): the registry never routes it to
+    # the encrypted store. Refuse the save and name the fields — the detail
+    # carries names, never values. Typing the field as a secret (which
+    # registers it) and re-saving moves the value into the store.
+    flagged = [
+        (integration_id, field)
+        for integration_id, raw_config in config.integrations.items()
+        for field in unregistered_credential_fields(integration_id, raw_config or {})
+    ]
+    if flagged:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Credential-shaped values are stored encrypted, not in the "
+                "integration config: "
+                + "; ".join(
+                    f"integration '{iid}' field '{field}'" for iid, field in flagged
+                )
+                + ". Define the field as a secret (password-typed) and re-save."
+            ),
+        )
 
     # A stored credential is sent to whatever destination is saved, so moving
     # one requires the caller to supply the credential again. Checked for every
@@ -974,7 +1016,7 @@ def get_state_directory():
     return {"success": True, "state_directory": state_dir_status()}
 
 
-@router.get("/integrations/status")
+@router.get("/integrations/status", dependencies=_INTEGRATIONS_READ)
 def get_integrations_status(
     bridge: IntegrationBridgeService = Depends(provide_integration_bridge),
 ):
@@ -1268,7 +1310,7 @@ def set_general_config(
     return {"success": True, "message": "General settings saved"}
 
 
-@router.get("/github")
+@router.get("/github", dependencies=_INTEGRATIONS_READ)
 def get_github_config():
     """
     Get GitHub integration configuration status.
@@ -1282,7 +1324,7 @@ def get_github_config():
 
         return {
             "configured": has_token,
-            "token_preview": f"{token[:12]}..." if has_token else None,
+            "token_preview": _token_preview(token),
         }
     except Exception as e:
         logger.error(f"Error getting GitHub config: {e}")
@@ -1813,7 +1855,7 @@ DARKTRACE_DEFAULTS: Dict[str, Any] = {
 }
 
 
-@router.get("/darktrace")
+@router.get("/darktrace", dependencies=_INTEGRATIONS_READ)
 def get_darktrace_config():
     """Return the current Darktrace webhook receiver config (without the secret)."""
     try:

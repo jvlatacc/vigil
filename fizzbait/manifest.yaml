@@ -1,0 +1,115 @@
+schema_version: 1.0.0
+dataset: fizzbait
+description: 'Sample cyber-range findings for Vigil SOC: benign traffic families and
+  attack scenarios, shaped for POST /api/ingest/sync-s3-folder ingestion.'
+label_convention:
+  field: entity_context.label
+  directories:
+  - benign/
+  - malicious/
+  cluster_ids: benign-* for benign, c-<attack>-NNN for malicious
+files:
+- path: benign/dns.jsonl
+  label: benign
+  data_source: dns
+  scenario: benign_dns
+  cluster_id: benign-dns-001
+  row_count: 620
+- path: benign/proxy.jsonl
+  label: benign
+  data_source: proxy
+  scenario: benign_proxy
+  cluster_id: benign-proxy-001
+  row_count: 540
+- path: benign/firewall.jsonl
+  label: benign
+  data_source: firewall
+  scenario: benign_firewall
+  cluster_id: benign-firewall-001
+  row_count: 480
+- path: benign/edr.jsonl
+  label: benign
+  data_source: edr
+  scenario: benign_edr
+  cluster_id: benign-edr-001
+  row_count: 520
+- path: benign/email.jsonl
+  label: benign
+  data_source: email
+  scenario: benign_email
+  cluster_id: benign-email-001
+  row_count: 450
+- path: benign/flow.jsonl
+  label: benign
+  data_source: flow
+  scenario: benign_flow
+  cluster_id: benign-flow-001
+  row_count: 700
+- path: malicious/c2_beaconing.jsonl
+  label: malicious
+  data_source: flow
+  scenario: c2_beaconing
+  mitre_techniques:
+  - T1071.001
+  - T1071.004
+  cluster_id: c-beaconing-001
+  row_count: 180
+- path: malicious/lateral_movement_rdp.jsonl
+  label: malicious
+  data_source: flow
+  scenario: lateral_movement_rdp
+  mitre_techniques:
+  - T1021.001
+  cluster_id: c-lateral-movement-002
+  row_count: 140
+- path: malicious/dns_exfiltration.jsonl
+  label: malicious
+  data_source: dns
+  scenario: dns_exfiltration
+  mitre_techniques:
+  - T1048.003
+  cluster_id: c-exfiltration-003
+  row_count: 220
+- path: malicious/credential_brute_force.jsonl
+  label: malicious
+  data_source: auth
+  scenario: credential_brute_force
+  mitre_techniques:
+  - T1110.001
+  cluster_id: c-credential-theft-004
+  row_count: 240
+- path: malicious/phishing_initial_access.jsonl
+  label: malicious
+  data_source: email
+  scenario: phishing_initial_access
+  mitre_techniques:
+  - T1566.001
+  - T1566.002
+  cluster_id: c-phishing-006
+  row_count: 150
+- path: malicious/ransomware_staging.jsonl
+  label: malicious
+  data_source: edr
+  scenario: ransomware_staging
+  mitre_techniques:
+  - T1486
+  - T1490
+  cluster_id: c-ransomware-005
+  row_count: 120
+- path: malicious/powershell_encoded.jsonl
+  label: malicious
+  data_source: edr
+  scenario: powershell_encoded
+  mitre_techniques:
+  - T1027
+  - T1059.001
+  cluster_id: c-powershell-emulation-007
+  row_count: 110
+- path: malicious/port_scan.jsonl
+  label: malicious
+  data_source: firewall
+  scenario: port_scan
+  mitre_techniques:
+  - T1046
+  cluster_id: c-port-scan-008
+  row_count: 240

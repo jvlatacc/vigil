@@ -124,3 +124,19 @@ services/medic/tests/
 services/medic/contracts/tests/
 services/medic/contracts/tools/
 services/medic/contracts/fixtures/
+
+# Edge. Same reason as Medic: the Python images COPY services/ wholesale, and
+# the edge tests' fixtures include TEST-ONLY signing keys and trust roots.
+services/edge/.venv/
+services/edge/**/__pycache__/
+services/edge/**/.pytest_cache/
+services/edge/**/.ruff_cache/
+services/edge/tests/
+
+# Enforcer. Dockerfile.enforcer's Go builder stage COPYs services/enforcement
+# wholesale; test files and the runbook helpers are not build inputs, and a
+# local build-bpf.sh output tree (bpf/build/) must never satisfy the builder
+# in place of a fresh compile — stale objects would look like image content.
+services/enforcement/**/*_test.go
+services/enforcement/tcpcat.py
+services/enforcement/bpf/build/

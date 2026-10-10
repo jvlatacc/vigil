@@ -25,6 +25,7 @@ class FindingSchema(ORMSchema):
     anomaly_score: Optional[float] = None
     entity_context: Optional[Any] = None
     evidence_links: Optional[Any] = None
+    source_metadata: Optional[Any] = None
     timestamp: OptDateTime = None
     data_source: Optional[str] = None
     external_id: Optional[str] = None
@@ -48,4 +49,9 @@ class FindingSchema(ORMSchema):
     def dump(cls, obj: Any, **kwargs: Any) -> dict:
         data = super().dump(obj, **kwargs)
         data["mitre_predictions"] = _predictions_map(obj)
+        # Rows without provenance dump without the key: the v1 update endpoint
+        # embeds this dump raw (FindingUpdateResponse.finding), so a field that
+        # always serialized would put a new null key on every response body.
+        if data.get("source_metadata") is None:
+            data.pop("source_metadata", None)
         return data

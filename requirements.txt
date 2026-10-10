@@ -51,6 +51,11 @@ sshtunnel>=0.4.0
 pysocks>=1.7.1
 socksio>=1.0.0
 
+# SSH decoy (services/decoy/ssh_decoy.py) imports paramiko directly — the
+# server-side transport — so it is declared, not relied on transitively
+# through sshtunnel.
+paramiko>=3.4.0
+
 # MCP SDK (for MCP tools)
 # Install with: pip install mcp
 

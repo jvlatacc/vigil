@@ -393,25 +393,42 @@ async def mint_credential(
     }
 
 
+@router.get("/surface/credentials")
+async def list_all_credentials(
+    include_revoked: bool = False,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Every user's MCP credentials. The admin view offboarding needs.
+
+    Tokens are hashes at rest and were shown once at mint; this list carries
+    ids, labels, owners and revocation state, never a token or its hash.
+    """
+    require_integrations_admin(current_user)
+
+    from core.auth.mcp_credential_service import list_all_credentials
+
+    return {"credentials": list_all_credentials(include_revoked=include_revoked)}
+
+
 @router.delete("/surface/credentials/{credential_id}")
 async def revoke_credential(
     credential_id: str,
     current_user: User = Depends(get_current_active_user),
 ):
-    """Withdraw a credential. What it could reach, it can no longer reach."""
+    """Withdraw a credential — yours, or anyone's on the admin path.
+
+    An administrator retiring a leaver's standing access must not need the
+    leaver's cooperation, so the self-only rule of the earlier route is
+    superseded here; the audit row records who pulled it.
+    """
     require_integrations_admin(current_user)
 
-    from core.auth.mcp_credential_service import list_for_user, revoke
+    from core.auth.mcp_credential_service import credential_exists, revoke
 
-    # Only your own: a credential names a principal, and revoking someone
-    # else's is an act on their account rather than on your configuration.
-    if credential_id not in {
-        c.credential_id
-        for c in list_for_user(current_user.user_id, include_revoked=True)
-    }:
+    if not credential_exists(credential_id):
         raise HTTPException(status_code=404, detail="Credential not found")
 
-    if not revoke(credential_id):
+    if not revoke(credential_id, revoked_by=str(current_user.user_id)):
         raise HTTPException(status_code=409, detail="Already revoked")
 
     logger.warning(

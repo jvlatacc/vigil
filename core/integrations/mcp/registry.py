@@ -12,6 +12,30 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _scan_tool_descriptions(server: str, tools: List[Dict]) -> None:
+    """Warn per tool description that scans as instruction injection.
+
+    Detect-only (spec area B): a hit is surfaced to the operator through the
+    log channel and registration proceeds -- a community server's over-eager
+    description must not take its tools down. Descriptions enter LLM context
+    unguarded (tool results are wrapped at both boundaries; these are not),
+    so the log is the tripwire, not a block.
+    """
+    from core.llm.security import scan_for_injection
+
+    for tool in tools:
+        scan = scan_for_injection(tool.get("description") or "")
+        if not scan:
+            continue
+        logger.warning(
+            "Prompt-injection pattern(s) %s in tool description -- "
+            "server=%s tool=%s; registered anyway (detect-only)",
+            ",".join(sorted(set(scan.patterns))),
+            server,
+            tool.get("name") or "<unnamed>",
+        )
+
+
 class MCPRegistry:
     """
     Central registry that tracks active MCP servers and their available tools.
@@ -45,6 +69,7 @@ class MCPRegistry:
         }
         if tools:
             self._tools_cache[name] = tools
+            _scan_tool_descriptions(name, tools)
         logger.info(f"Registered MCP server: {name} ({len(tools or [])} tools)")
 
     def get_active_servers(self) -> List[str]:
@@ -173,11 +198,19 @@ def _cached_tools() -> Dict[str, List[Dict[str, Any]]]:
 
 
 def _server_config(mcp_client, name: str) -> Dict[str, Any]:
+    # Declarations, not resolved values: the registry outlives a spawn, and a
+    # fully-substituted child environment parked here would keep every
+    # integration token alive in process memory for the registry's lifetime.
+    # What a server declared (the env names its own config requires) is the
+    # reviewable fact; the resolved values live only in the spawn path.
     service = getattr(mcp_client, "mcp_service", None)
     server = getattr(service, "servers", {}).get(name) if service else None
     if server is None:
         return {}
-    return {"command": server.command, "args": server.args, "env": server.env}
+    return {
+        "command": server.command,
+        "required_env_vars": list(getattr(server, "required_env_vars", None) or []),
+    }
 
 
 def _normalised(tool: Dict[str, Any]) -> Dict[str, Any]:

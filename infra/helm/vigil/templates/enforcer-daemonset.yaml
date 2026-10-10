@@ -1,0 +1,184 @@
+{{- if .Values.enforcer.enabled }}
+{{- /*
+Kernel enforcement daemon — one privileged pod per node (DaemonSet).
+
+This is deliberately the chart's most policy-divergent workload; the
+divergence is the feature. The shared chart defaults (drop ALL caps,
+runAsNonRoot uid 1000, default-deny NetworkPolicy) exist to keep Vigil's
+control plane unprivileged — the enforcer is the ONE component that must
+hold kernel capabilities (CAP_BPF/CAP_NET_ADMIN and friends) and the host
+network namespace (XDP attaches to the node's NIC). Every override below
+is scoped to this template; nothing here leaks into the backend, daemon,
+worker, or agent workloads. Never fold these privileges into another
+workload — if another component needs kernel access, give it its own
+template and its own review.
+
+Loopback API: the default bind (values: enforcer.bind 127.0.0.1:6986) is
+reachable only from the node itself. There is no Service on purpose — a
+Service would publish the enforcement API cluster-wide, and the only
+callers are Vigil's executor (same host on bare-metal/compose installs)
+or a node-local operator.
+
+Node prerequisites (services/enforcement/runbook.md): bpffs at
+/sys/fs/bpf, cgroup2 at enforcer.cgroup, kernel BTF at /sys/kernel/btf.
+The hostPath mounts use type: Directory so a node missing a prerequisite
+fails loudly at scheduling instead of half-enforcing.
+*/ -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "vigil.enforcer.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "enforcer") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "enforcer") | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.componentLabels" (dict "context" . "component" "enforcer") | nindent 8 }}
+        {{- with .Values.enforcer.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.enforcer.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      # Share the node's network namespace: XDP must attach to the node's
+      # physical interface. Not a value — an enforcer without hostNetwork
+      # would attach to nothing and report the failure from inside a pod
+      # that looks healthy.
+      hostNetwork: true
+      # hostNetwork pods resolve cluster names through the node's resolver
+      # unless told otherwise; keep cluster DNS working for the sink and
+      # any hostname-configured Vigil URL.
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: {{ include "vigil.serviceAccountName" . }}
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      # Pod-level: dedicated uid 10002 (not Vigil's 1000, not Medic's 10001),
+      # non-root, RuntimeDefault seccomp. The container-level block below
+      # grants the kernel capabilities; nothing else in the chart shares
+      # this identity.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: enforcer
+          image: {{ include "vigil.image" (dict "context" . "component" "enforcer") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "enforcer") }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.enforcer.port }}
+              protocol: TCP
+          env:
+            - name: VIGIL_ENFORCEMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vigil.secret.fullname" . }}
+                  key: VIGIL_ENFORCEMENT_TOKEN
+            - name: VIGIL_ENFORCEMENT_BIND
+              value: {{ .Values.enforcer.bind | quote }}
+            - name: VIGIL_ENFORCEMENT_INTERFACE
+              value: {{ .Values.enforcer.interface | quote }}
+            - name: VIGIL_ENFORCEMENT_CGROUP
+              value: {{ .Values.enforcer.cgroup | quote }}
+            - name: VIGIL_ENFORCEMENT_DEFAULT_TTL_SECONDS
+              value: {{ .Values.enforcer.defaultTtlSeconds | quote }}
+            {{- with .Values.enforcer.sink }}
+            - name: VIGIL_ENFORCEMENT_SINK
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.enforcer.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Probes target /healthz on the API port — a liveness contract that
+          # never reports enforcement status (contract/healthz.schema.json).
+          # The startup probe budgets up to failureThreshold * periodSeconds
+          # = 300s for BPF object load + attach on first boot.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.enforcer.resources | nindent 12 }}
+          securityContext:
+            # Capabilities come from values (enforcer.capabilities.add) so a
+            # site can trim the set its kernel actually needs; EVERYTHING
+            # else is dropped first. allowPrivilegeEscalation stays false —
+            # capability bits are what enforcement needs, not setuid.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                {{- range .Values.enforcer.capabilities.add }}
+                - {{ . | quote }}
+                {{- end }}
+          volumeMounts:
+            # Not readOnly: pinning maps writes through this mount (bpf()
+            # obj pin resolves paths inside bpffs).
+            - name: bpffs
+              mountPath: /sys/fs/bpf
+            - name: cgroup
+              mountPath: {{ .Values.enforcer.cgroup }}
+              readOnly: true
+            # Kernel BTF for CO-RE relocation.
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+      volumes:
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+        - name: cgroup
+          hostPath:
+            path: {{ .Values.enforcer.cgroup }}
+            type: Directory
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
+      {{- with .Values.enforcer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enforcer.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.enforcer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

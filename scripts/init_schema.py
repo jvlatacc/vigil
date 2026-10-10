@@ -44,6 +44,15 @@ def main() -> int:
         logger.error("Database health check failed after schema init")
         return 1
 
+    # Bundled CISA KEV: same in-process reasoning as the reference seed (this
+    # script is the Helm db-init Job and runs before the table exists at API
+    # startup), idempotent through the upsert triple, and never fatal here.
+    # Seeded at the composition root: the storage tier must not import
+    # core.threat_intel.
+    from core.threat_intel.kev_seed import seed_kev_indicators
+
+    seed_kev_indicators()
+
     logger.info("Database schema ready")
     return 0
 
