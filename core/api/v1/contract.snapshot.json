@@ -3482,6 +3482,872 @@
         "title": "StatusBreakdownRow",
         "type": "object"
       },
+      "TwinConnectionIn": {
+        "description": "One connection observation.\n\nA connection belongs to its device \u2014 named directly by ``device`` or,\nwhen the source could attribute it, implied by the owning ``process``\n(whose ``device`` is the connection's device). Naming neither is the one\nshape the twin cannot place, so it is refused here.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "connection_type": {
+            "enum": [
+              "socket",
+              "stream",
+              "session"
+            ],
+            "title": "Connection Type",
+            "type": "string"
+          },
+          "device": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "device_key, or the hostname the device was observed under; implied by `process` when omitted, and when both are given they must resolve to the same device",
+            "title": "Device"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "inbound",
+                  "outbound"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "local_ip": {
+            "anyOf": [
+              {
+                "maxLength": 45,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Ip"
+          },
+          "local_port": {
+            "anyOf": [
+              {
+                "maximum": 65535.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Port"
+          },
+          "process": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TwinProcessRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol"
+          },
+          "remote_ip": {
+            "anyOf": [
+              {
+                "maxLength": 45,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Ip"
+          },
+          "remote_port": {
+            "anyOf": [
+              {
+                "maximum": 65535.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Port"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "connection_type"
+        ],
+        "title": "TwinConnectionIn",
+        "type": "object"
+      },
+      "TwinConnectionOut": {
+        "description": "A connection as the API returns it \u2014 the identifying 5-tuple included.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "connection_type": {
+            "enum": [
+              "socket",
+              "stream",
+              "session"
+            ],
+            "title": "Connection Type",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "local_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Ip"
+          },
+          "local_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Local Port"
+          },
+          "process_id": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Id"
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol"
+          },
+          "remote_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Ip"
+          },
+          "remote_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Port"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "id",
+          "device_id",
+          "connection_type",
+          "source",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "TwinConnectionOut",
+        "type": "object"
+      },
+      "TwinDeviceIn": {
+        "description": "One device observation.\n\nThe identity fields (``hostname``, ``mac_address``, ``serial_number``) are\nwhat the ingest derives the ``device_key`` from, so at least one is\nrequired; everything else is the last-known state of the machine.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "device_type": {
+            "anyOf": [
+              {
+                "maxLength": 30,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Type"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "maxLength": 250,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "ip_address": {
+            "anyOf": [
+              {
+                "maxLength": 45,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip Address"
+          },
+          "mac_address": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mac Address"
+          },
+          "os_info": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os Info"
+          },
+          "serial_number": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Number"
+          }
+        },
+        "title": "TwinDeviceIn",
+        "type": "object"
+      },
+      "TwinDeviceListResponse": {
+        "description": "The flat device list tables and debugging read; ``device_key`` is here.",
+        "properties": {
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/TwinDeviceOut"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total"
+        ],
+        "title": "TwinDeviceListResponse",
+        "type": "object"
+      },
+      "TwinDeviceOut": {
+        "description": "A device as the API returns it \u2014 physical identity plus last-known state.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "device_key": {
+            "title": "Device Key",
+            "type": "string"
+          },
+          "device_type": {
+            "title": "Device Type",
+            "type": "string"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "string"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "id": {
+            "title": "Id"
+          },
+          "ip_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip Address"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "mac_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mac Address"
+          },
+          "os_info": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os Info"
+          },
+          "serial_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serial Number"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "device_key",
+          "device_type",
+          "source",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "TwinDeviceOut",
+        "type": "object"
+      },
+      "TwinEdgeOut": {
+        "description": "One derived relationship between two graph nodes.\n\n``source``/``target`` are the entity ids the payload's own lists use, so\na client can join edges to nodes without a second lookup. ``runs`` and\n``binds`` are structural facts; ``talks-to`` is the v1 heuristic (a\nconnection's ``remote_ip`` matching another device's last-known\n``ip_address``) and carries ``heuristic=True`` \u2014 reused or overlapping\naddresses can fabricate one.",
+        "properties": {
+          "heuristic": {
+            "default": false,
+            "title": "Heuristic",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "runs",
+              "binds",
+              "talks-to"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target",
+          "kind"
+        ],
+        "title": "TwinEdgeOut",
+        "type": "object"
+      },
+      "TwinGraphPayload": {
+        "description": "The whole twin in one payload; every node carries its entity attributes.\n\nThe three entity lists are the wire shape the console screen consumes;\n``edges`` is the same derivation server-side (``runs`` device\u2192process,\n``binds`` process\u2192connection, heuristic ``talks-to`` device\u2192device) for\ncallers that would rather not re-derive it.",
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/TwinConnectionOut"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/TwinDeviceOut"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/TwinEdgeOut"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/TwinProcessOut"
+            },
+            "title": "Processes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generated_at"
+        ],
+        "title": "TwinGraphPayload",
+        "type": "object"
+      },
+      "TwinIngestBatch": {
+        "description": "One observation envelope from one feed: the source and what it saw.\n\nRe-posting a batch is safe and meaningful \u2014 it is how a feed says \"still\nhere\": row counts stay stable and every re-observed row's ``last_seen``\nmoves forward. A feed aggregating several vendors posts one batch per\nsource.",
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/TwinConnectionIn"
+            },
+            "title": "Connections",
+            "type": "array"
+          },
+          "devices": {
+            "items": {
+              "$ref": "#/components/schemas/TwinDeviceIn"
+            },
+            "title": "Devices",
+            "type": "array"
+          },
+          "processes": {
+            "items": {
+              "$ref": "#/components/schemas/TwinProcessIn"
+            },
+            "title": "Processes",
+            "type": "array"
+          },
+          "source": {
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "TwinIngestBatch",
+        "type": "object"
+      },
+      "TwinIngestResult": {
+        "description": "Counts of observations the batch carried, per entity class.\n\nThese echo the batch, not the database: idempotency means a re-post\nreturns the same numbers while the row counts stay put.",
+        "properties": {
+          "connections": {
+            "title": "Connections",
+            "type": "integer"
+          },
+          "devices": {
+            "title": "Devices",
+            "type": "integer"
+          },
+          "processes": {
+            "title": "Processes",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "devices",
+          "processes",
+          "connections"
+        ],
+        "title": "TwinIngestResult",
+        "type": "object"
+      },
+      "TwinProcessIn": {
+        "description": "One process observation, on the device named by ``device``.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "device": {
+            "description": "device_key of the device the process ran on, or the hostname the device was observed under",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pid": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Pid",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "device",
+          "pid",
+          "name"
+        ],
+        "title": "TwinProcessIn",
+        "type": "object"
+      },
+      "TwinProcessOut": {
+        "description": "A process as the API returns it.",
+        "properties": {
+          "attributes": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attributes"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "device_id": {
+            "title": "Device Id"
+          },
+          "first_seen": {
+            "title": "First Seen",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id"
+          },
+          "last_seen": {
+            "title": "Last Seen",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pid": {
+            "title": "Pid",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "id",
+          "device_id",
+          "pid",
+          "name",
+          "source",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "TwinProcessOut",
+        "type": "object"
+      },
+      "TwinProcessRef": {
+        "description": "Names an already-observed process by its natural key.",
+        "properties": {
+          "device": {
+            "description": "device_key of the device the process ran on, or the hostname the device was observed under",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Device",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "pid": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Pid",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device",
+          "pid",
+          "name"
+        ],
+        "title": "TwinProcessRef",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -6037,6 +6903,201 @@
         "summary": "Merge Cases",
         "tags": [
           "cases"
+        ]
+      }
+    },
+    "/api/v1/digital-twin/devices": {
+      "get": {
+        "operationId": "get_api_v1_digital-twin_devices",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwinDeviceListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Devices",
+        "tags": [
+          "digital-twin"
+        ]
+      }
+    },
+    "/api/v1/digital-twin/graph": {
+      "get": {
+        "operationId": "get_api_v1_digital-twin_graph",
+        "parameters": [
+          {
+            "description": "Keep only entities re-observed at or after this instant.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keep only entities re-observed at or after this instant.",
+              "title": "Since"
+            }
+          },
+          {
+            "description": "Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names.",
+            "in": "query",
+            "name": "device_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names.",
+              "title": "Device Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwinGraphPayload"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Graph",
+        "tags": [
+          "digital-twin"
+        ]
+      }
+    },
+    "/api/v1/digital-twin/ingest": {
+      "post": {
+        "operationId": "post_api_v1_digital-twin_ingest",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwinIngestBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TwinIngestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Observations",
+        "tags": [
+          "digital-twin"
         ]
       }
     },
