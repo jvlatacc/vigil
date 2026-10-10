@@ -13,6 +13,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from services.edge import __version__
 
@@ -80,7 +81,7 @@ class EdgeConfig:
     mode: str = "gateway"
     control_url: str = "https://vigil.internal"
     enrollment_token: str = ""
-    segment_scope: dict[str, str] = field(default_factory=dict)
+    segment_scope: dict[str, Any] = field(default_factory=dict)
     credential_file: Path = Path("/var/lib/vigil-edge/credential")
     data_dir: Path = Path("/var/lib/vigil-edge")
     trust_store: Path = Path("/etc/vigil-edge/trust-root.dsse.json")
@@ -148,18 +149,24 @@ class EdgeConfig:
                 k8s_api_url = f"https://{host}:{port}"
 
         raw_scope = (env.get(SEGMENT_SCOPE_VAR) or "").strip()
-        parsed_scope: dict[str, str] = {}
+        parsed_scope: dict[str, Any] = {}
         if raw_scope:
             try:
                 scope_json = json.loads(raw_scope)
             except ValueError as exc:
                 raise ConfigError(f"{SEGMENT_SCOPE_VAR} is not JSON: {exc}") from exc
             if not isinstance(scope_json, dict) or not all(
-                isinstance(k, str) and isinstance(v, str) for k, v in scope_json.items()
+                isinstance(k, str) for k in scope_json
             ):
                 raise ConfigError(
-                    f"{SEGMENT_SCOPE_VAR} must be a JSON object of string -> string"
+                    f"{SEGMENT_SCOPE_VAR} must be a JSON object with string keys"
                 )
+            # Values stay whatever JSON carried: the spec's scope shape is
+            # rich ({"vpc": "...", "cidrs": [...], "node_selector": {...}}),
+            # the daemon only relays this document to enrollment, and the
+            # control plane matches bundles by canonical scope equality —
+            # a flat-only parse here would make every rich-scope bundle
+            # unreachable from an env-configured node.
             parsed_scope = dict(scope_json)
 
         raw_interval = (env.get(SYNC_INTERVAL_VAR) or "").strip()
