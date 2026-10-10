@@ -22,9 +22,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from core.edge.policy import PolicyPack
+from core.edge.target_guard import TargetGuard
 from core.edge.verify import load_root
 from services.warden.config import WardenConfig
+from services.warden.engine import (
+    DecisionLoop,
+    DryRunExecutor,
+    ExecutorRegistry,
+    LoopDeps,
+)
+from services.warden.journal import Journal
 from services.warden.metrics import WardenMetrics, WardenMetricsServer
+from services.warden.modes import ModeMachine
+from services.warden.sentinel import Sentinel
+from services.warden.storage import PolicyStore
+from services.warden.sync import PolicySync
 
 logger = logging.getLogger("services.warden")
 
@@ -58,6 +71,10 @@ class Warden:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._components: dict[str, Any] = {}
         self._mode = "BOOTSTRAP"
+        self._mode_transitions: list[dict[str, str]] = []
+        self._loop: DecisionLoop | None = None
+        self._journal: Journal | None = None
+        self._registry: ExecutorRegistry | None = None
         self._process_start = clock()
         self.metrics_server = WardenMetricsServer(
             bind_host=config.bind_host,
@@ -79,6 +96,32 @@ class Warden:
         at construction belongs in its own ``run``, not here.
         """
         self._components[name] = component
+
+    def set_mode(self, mode: str) -> None:
+        """Publish a mode transition into the process status.
+
+        The decision loop calls this on every mode change, so the status
+        payload reflects the machine without the process reading loop
+        internals. Repeats (the loop publishes conservatively) are
+        collapsed, keeping one transition record per actual change.
+        """
+        if mode != self._mode:
+            self._mode_transitions.append(
+                {"mode": mode, "at": self._clock().isoformat()}
+            )
+        self._mode = mode
+
+    def attach_decision_loop(
+        self,
+        loop: DecisionLoop,
+        *,
+        journal: Journal,
+        registry: ExecutorRegistry,
+    ) -> None:
+        """Give the status payload its read path into loop state."""
+        self._loop = loop
+        self._journal = journal
+        self._registry = registry
 
     # ------------------------------------------------------------------
     # Health and status payloads (rendered through the metrics server)
@@ -123,16 +166,25 @@ class Warden:
 
     def _status_payload(self) -> dict[str, Any]:
         status, health = self._health_payload()
+        loop_status = self._loop.status() if self._loop is not None else None
         return {
             "health": health,
             "http_status": status,
             "mode": self._mode,
+            "mode_transitions": self._mode_transitions,
             "node_id": self.config.node_id,
-            "policy_version": None,
-            "journal": {"last_seq": 0, "head": None, "poisoned": None},
-            "live_actions": 0,
-            "executors": [],
-            "mode_transitions": [],
+            "policy_version": loop_status["policy_version"] if loop_status else None,
+            "journal": (
+                self._journal.status().as_dict()
+                if self._journal is not None
+                else {"last_seq": 0, "head": None, "poisoned": None}
+            ),
+            "live_actions": loop_status["live_actions"] if loop_status else 0,
+            "executors": (
+                list(self._registry.registered_types())
+                if self._registry is not None
+                else []
+            ),
         }
 
     # ------------------------------------------------------------------
@@ -205,10 +257,69 @@ def load_trust_root(path: Path | None, *, now: datetime) -> dict:
 def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
     """Assemble the process from validated config: components and wiring.
 
-    Later work items register the sync/sentinel/journal components here;
-    the skeleton ships the process shell plus the metrics server.
+    Every component shares one metrics registry and one clock. The
+    decision loop publishes mode changes back into the process status;
+    the journal and executor registry are attached for the same reason.
     """
-    return Warden(config, trust_root=trust_root)
+    warden = Warden(config, trust_root=trust_root)
+    store = PolicyStore(config.data_dir)
+    journal = Journal(config.data_dir / "journal.jsonl")
+    policy_sync = PolicySync(
+        trust_root=trust_root,
+        store=store,
+        base_url=config.control_plane_url,
+        enrollment_token=config.enrollment_token,
+        segment_labels=config.segment_labels,
+        sync_timeout_seconds=config.sync_timeout_seconds,
+        clock=warden._clock,
+        metrics=warden.metrics,
+    )
+    sentinel = Sentinel(
+        bind_host=config.bind_host,
+        port=config.sentinel_port,
+        token=config.sentinel_token,
+        max_queue=config.max_alert_queue,
+        max_batch=config.max_alert_batch,
+        max_body_bytes=config.max_alert_bytes,
+        metrics=warden.metrics,
+    )
+    registry = ExecutorRegistry()
+    registry.register(DryRunExecutor())
+
+    def guard_for(pack: PolicyPack) -> TargetGuard:
+        # The guard's categories come from the verified pack; the node
+        # addresses come from config — never from anything alert-derived.
+        return TargetGuard.from_pack(
+            pack,
+            self_addresses=config.self_addresses,
+            gateway_addresses=config.gateway_addresses,
+            control_plane_addresses=config.control_plane_addresses,
+            dns_resolvers=config.dns_resolvers,
+        )
+
+    loop = DecisionLoop(
+        deps=LoopDeps(
+            sync=policy_sync,
+            sentinel=sentinel,
+            journal=journal,
+            registry=registry,
+            guard_provider=guard_for,
+            clock=warden._clock,
+            metrics=warden.metrics,
+        ),
+        interval_seconds=config.sync_interval_seconds,
+        max_alert_batch=config.max_alert_batch,
+        grace_window_seconds=config.grace_window_seconds,
+        machine=ModeMachine(
+            grace_window_seconds=config.grace_window_seconds,
+            missed_syncs_threshold=config.missed_syncs_threshold,
+        ),
+        mode_observer=warden.set_mode,
+    )
+    warden.attach_decision_loop(loop, journal=journal, registry=registry)
+    warden.register_component("loop", loop)
+    warden.register_component("sentinel", sentinel)
+    return warden
 
 
 def main(argv: list[str] | None = None) -> int:
