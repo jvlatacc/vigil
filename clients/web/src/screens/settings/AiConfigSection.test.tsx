@@ -29,6 +29,15 @@ function render(ui: ReactElement, path = '/settings?section=ai-config') {
 
 const ON = { local_ollama_recovery_enabled: true, local_ollama_recovery_retry_limit: 1, local_ollama_recovery_restart_gateway: true }
 
+// the compiler maturity tunables ride the shared ai-operations config; every
+// save of that config now carries them (defaults merge on load)
+const POLICY = {
+  policy_compiler_min_runs: 10,
+  policy_compiler_min_consistency: 0.9,
+  policy_compiler_window_days: 30,
+  policy_compiler_drift_limit: 3,
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   getAIOperations.mockResolvedValue({ data: ON })
@@ -48,7 +57,7 @@ describe('AiConfigSection', () => {
     render(<AiConfigSection notify={() => {}} />)
     expect(await screen.findByText('Restart the local gateway first')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('switch', { name: /Retry a local model/ }))
-    await waitFor(() => expect(setAIOperations).toHaveBeenCalledWith({ ...ON, local_ollama_recovery_enabled: false }))
+    await waitFor(() => expect(setAIOperations).toHaveBeenCalledWith({ ...ON, ...POLICY, local_ollama_recovery_enabled: false }))
     expect(screen.queryByText('Restart the local gateway first')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Retry attempts')).not.toBeInTheDocument()
   })
@@ -59,9 +68,9 @@ describe('AiConfigSection', () => {
     fireEvent.change(n, { target: { value: '3' } })
     expect(setAIOperations).not.toHaveBeenCalled()
     fireEvent.blur(n)
-    await waitFor(() => expect(setAIOperations).toHaveBeenCalledWith({ ...ON, local_ollama_recovery_retry_limit: 3 }))
+    await waitFor(() => expect(setAIOperations).toHaveBeenCalledWith({ ...ON, ...POLICY, local_ollama_recovery_retry_limit: 3 }))
     fireEvent.click(screen.getByRole('button', { name: /Reset to defaults/ }))
-    await waitFor(() => expect(setAIOperations).toHaveBeenLastCalledWith(ON))
+    await waitFor(() => expect(setAIOperations).toHaveBeenLastCalledWith({ ...ON, ...POLICY }))
   })
 
   it('opens the Models tab for ?tab=catalogue', async () => {

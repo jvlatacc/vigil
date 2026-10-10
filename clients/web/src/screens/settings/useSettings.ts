@@ -619,12 +619,20 @@ export interface AIOperationsSettings {
   local_ollama_recovery_enabled: boolean
   local_ollama_recovery_retry_limit: number
   local_ollama_recovery_restart_gateway: boolean
+  policy_compiler_min_runs: number
+  policy_compiler_min_consistency: number
+  policy_compiler_window_days: number
+  policy_compiler_drift_limit: number
 }
 
 export const AI_OPS_DEFAULTS: AIOperationsSettings = {
   local_ollama_recovery_enabled: true,
   local_ollama_recovery_retry_limit: 1,
   local_ollama_recovery_restart_gateway: true,
+  policy_compiler_min_runs: 10,
+  policy_compiler_min_consistency: 0.9,
+  policy_compiler_window_days: 30,
+  policy_compiler_drift_limit: 3,
 }
 
 export function useAiOperations() {
