@@ -1,6 +1,5 @@
-# Subchart artifacts downloaded by `helm dependency update` / `build`.
-# CI re-fetches these on every run; local devs run `helm dependency update`
-# once after cloning. Do not commit — they're large and version-tracked in
-# Chart.lock.
-charts/*.tgz
-charts/*/
+# Subcharts are vendored: pinned tgz files are committed so CI never fetches
+# charts over the network (checksums live in SHA256SUMS at the chart root; see README.md for
+# the bump process). Extracted subchart directories stay untracked.
+charts/*
+!charts/*.tgz
