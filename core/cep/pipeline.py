@@ -40,6 +40,7 @@ from core.cep.engine import CepEngine, SequenceMatch
 from core.cep.graph import EntityGraph
 from core.cep.normalize import NormalizedFinding, normalize_finding
 from core.cep.rules import CepRule
+from core.telemetry import get_meter
 
 if TYPE_CHECKING:  # the protocol the snapshot manager fills these into
     from core.cep.snapshot import StateSection
@@ -78,9 +79,12 @@ class CepPipeline:
         self._bridge = bridge
         self._tap_queue = tap_queue
         # rule id -> window, for the path-evidence query on each match.
-        self._windows: Dict[str, int] = {
-            rule.id: rule.window_seconds for rule in rules
-        }
+        self._windows: Dict[str, int] = {rule.id: rule.window_seconds for rule in rules}
+        # Lifetime count of completed sequences — the "matches" of spec
+        # AC 8 — surfaced through MetricsServer and the OTEL mirror below.
+        self.stats: Dict[str, Any] = {"cep_matches_total": 0}
+        self._matches_counter: Any = None
+        self._instruments_ready = False
 
     # ------------------------------------------------------------------
     # The component task
@@ -94,9 +98,7 @@ class CepPipeline:
         try:
             while not shutdown_event.is_set():
                 try:
-                    item = await asyncio.wait_for(
-                        self._tap_queue.get(), timeout=1.0
-                    )
+                    item = await asyncio.wait_for(self._tap_queue.get(), timeout=1.0)
                 except asyncio.TimeoutError:
                     continue
                 try:
@@ -141,6 +143,7 @@ class CepPipeline:
         matches = self._engine.on_event(event)
         processed: List[SequenceMatch] = []
         for match in matches:
+            self._count_match()
             decorated = self._attach_graph_path(match)
             try:
                 self._bridge.fire(decorated)
@@ -223,11 +226,38 @@ class CepPipeline:
             if path is not None and path.edges:
                 return replace(
                     match,
-                    graph_path=tuple(
-                        f"{kind}:{value}" for kind, value in path.nodes
-                    ),
+                    graph_path=tuple(f"{kind}:{value}" for kind, value in path.nodes),
                 )
         return match
+
+    # ------------------------------------------------------------------
+    # Metrics mirror (spec AC 8)
+    # ------------------------------------------------------------------
+
+    def _count_match(self) -> None:
+        """Count one completed sequence in the stats dict and its OTEL
+        mirror (instruments created on first record, the tap's pattern)."""
+        self.stats["cep_matches_total"] += 1
+        self._ensure_instruments()
+        try:
+            if self._matches_counter is not None:
+                self._matches_counter.add(1)
+        except Exception as _err:
+            logger.debug("OTEL CEP record failed (non-fatal): %s", _err)
+
+    def _ensure_instruments(self) -> None:
+        if self._instruments_ready:
+            return
+        self._instruments_ready = True
+        try:
+            meter = get_meter("vigil.daemon")
+            self._matches_counter = meter.create_counter(
+                name="vigil.cep.matches",
+                description="Completed sequences emitted by the CEP engine",
+                unit="1",
+            )
+        except Exception as _err:
+            logger.debug("OTEL CEP instruments unavailable: %s", _err)
 
 
 class EngineSnapshotState:

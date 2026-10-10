@@ -80,9 +80,7 @@ class _RecordingApprovals:
     def create_action(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
         # Attribute-shaped like the row object the real service hands back.
-        return SimpleNamespace(
-            action_id=f"action-{len(self.calls)}", status="pending"
-        )
+        return SimpleNamespace(action_id=f"action-{len(self.calls)}", status="pending")
 
 
 def _pipeline(
@@ -212,12 +210,8 @@ def test_graph_fault_costs_only_graph_evidence() -> None:
 
     shared_graph.link = exploding_link  # type: ignore[method-assign]
 
-    first = pipeline.process_item(
-        _item(_crowdstrike_finding("cs-1", "WKS-1", _ts(10)))
-    )
-    second = pipeline.process_item(
-        _item(_splunk_finding("spl-1", "WKS-1", _ts(50)))
-    )
+    first = pipeline.process_item(_item(_crowdstrike_finding("cs-1", "WKS-1", _ts(10))))
+    second = pipeline.process_item(_item(_splunk_finding("spl-1", "WKS-1", _ts(50))))
 
     # The engine still completed the sequence and the gate still got its
     # proposal — only the graph path evidence is absent.
@@ -244,9 +238,7 @@ def test_gate_fault_is_contained_and_logged(caplog: pytest.LogCaptureFixture) ->
     )
 
     with caplog.at_level("ERROR"):
-        pipeline.process_item(
-            _item(_crowdstrike_finding("cs-1", "WKS-1", _ts(10)))
-        )
+        pipeline.process_item(_item(_crowdstrike_finding("cs-1", "WKS-1", _ts(10))))
         matches = pipeline.process_item(
             _item(_splunk_finding("spl-1", "WKS-1", _ts(50)))
         )
@@ -255,3 +247,21 @@ def test_gate_fault_is_contained_and_logged(caplog: pytest.LogCaptureFixture) ->
     assert len(matches) == 1
     assert any("proposing" in record.message for record in caplog.records)
     assert list(matches[0].finding_ids) == ["cs-1", "spl-1"]
+
+
+def test_match_stats_count_completed_sequences() -> None:
+    """Spec AC 8: the pipeline's stats surface counts every completed
+    sequence — the number MetricsServer mirrors into /status and OTEL."""
+    tap = CepTap(queue_max=10)
+    approvals = _RecordingApprovals()
+    pipeline, _shared_graph = _pipeline(approvals, tap)
+    assert pipeline.stats["cep_matches_total"] == 0
+
+    assert (
+        pipeline.process_item(_item(_crowdstrike_finding("cs-9", "WKS-9", _ts(10))))
+        == []
+    )
+    matches = pipeline.process_item(_item(_splunk_finding("spl-9", "WKS-9", _ts(50))))
+
+    assert len(matches) == 1
+    assert pipeline.stats["cep_matches_total"] == 1

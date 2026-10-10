@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Protocol
 
 from core.cep.graph import EntityGraph
+from core.telemetry import get_meter
+from core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +156,15 @@ class SnapshotManager:
             "cep_snapshots_written": 0,
             "cep_snapshot_failures": 0,
             "cep_snapshot_restored": 0,
+            # Current-state flag (the tap's cep_degraded pattern): 1 while
+            # the last write failed, so /health can show the widened loss
+            # window without reading logs.
+            "cep_snapshot_degraded": 0,
         }
+        self._written_counter: Any = None
+        self._failure_counter: Any = None
+        self._restore_counter: Any = None
+        self._instruments_ready = False
 
     def build_envelope(self) -> SnapshotEnvelope:
         return SnapshotEnvelope(
@@ -172,14 +182,21 @@ class SnapshotManager:
             self._store.save(self.build_envelope().to_payload())
         except Exception as exc:
             self.stats["cep_snapshot_failures"] += 1
+            self.stats["cep_snapshot_degraded"] = 1
+            self._record(self._failure_counter)
             logger.warning(
                 "CEP snapshot write failed (%s); the restart loss window "
                 "widens until the next successful snapshot",
                 exc,
             )
             return False
-        self.last_snapshot_at = datetime.now(timezone.utc)
+        # In-process bookkeeping on the codebase's naive-UTC clock (the
+        # shared utcnow helper), so consumers doing arithmetic on it —
+        # the metrics mirror's snapshot age — mix clock conventions never.
+        self.last_snapshot_at = utcnow()
         self.stats["cep_snapshots_written"] += 1
+        self.stats["cep_snapshot_degraded"] = 0
+        self._record(self._written_counter)
         try:
             pruned = self._store.prune(self._retention_s)
             if pruned:
@@ -233,7 +250,48 @@ class SnapshotManager:
         ).total_seconds()
         self.last_restore_age_s = max(0.0, age)
         self.stats["cep_snapshot_restored"] = 1
+        self._record(self._restore_counter)
         return self.last_restore_age_s
+
+    # ------------------------------------------------------------------
+    # Metrics mirror (spec AC 8)
+    # ------------------------------------------------------------------
+
+    def _ensure_instruments(self) -> None:
+        """The counters' OTEL mirrors, created on first record (the tap's
+        pattern) so they bind to the real meter once init_telemetry has run
+        and to the no-op one when it has not. Thread-safe: the SDK meter is,
+        and this runs off the event loop via asyncio.to_thread."""
+        if self._instruments_ready:
+            return
+        self._instruments_ready = True
+        try:
+            meter = get_meter("vigil.daemon")
+            self._written_counter = meter.create_counter(
+                name="vigil.cep.snapshots",
+                description="CEP state snapshots written to the cep_snapshots store",
+                unit="1",
+            )
+            self._failure_counter = meter.create_counter(
+                name="vigil.cep.snapshot_failures",
+                description="Failed CEP snapshot writes (the restart loss window widens)",
+                unit="1",
+            )
+            self._restore_counter = meter.create_counter(
+                name="vigil.cep.restores",
+                description="CEP correlation states restored from a snapshot on boot",
+                unit="1",
+            )
+        except Exception as _err:
+            logger.debug("OTEL CEP instruments unavailable: %s", _err)
+
+    def _record(self, counter: Any) -> None:
+        self._ensure_instruments()
+        try:
+            if counter is not None:
+                counter.add(1)
+        except Exception as _err:
+            logger.debug("OTEL CEP record failed (non-fatal): %s", _err)
 
     @staticmethod
     def _snapshot_taken_at(payload: Dict[str, Any]) -> datetime:
@@ -243,7 +301,9 @@ class SnapshotManager:
         states the interval bound regardless."""
         taken_at = payload.get("created_at")
         if isinstance(taken_at, datetime):
-            return taken_at if taken_at.tzinfo else taken_at.replace(tzinfo=timezone.utc)
+            return (
+                taken_at if taken_at.tzinfo else taken_at.replace(tzinfo=timezone.utc)
+            )
         if isinstance(taken_at, str):
             try:
                 parsed = datetime.fromisoformat(taken_at)
@@ -344,7 +404,9 @@ class PostgresSnapshotStore:
         classified once and named (the init SQL file to run) instead of
         retried into log noise."""
         if not self._available:
-            raise _StoreUnavailable("CEP snapshot store unavailable (see earlier warning)")
+            raise _StoreUnavailable(
+                "CEP snapshot store unavailable (see earlier warning)"
+            )
         try:
             from core.storage.connection import get_db_manager
 

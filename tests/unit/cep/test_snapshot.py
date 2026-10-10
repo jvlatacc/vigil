@@ -117,9 +117,7 @@ def test_restore_returns_the_snapshot_age_and_counts_one_restore():
     store = FakeStore()
     make_manager(store=store).snapshot_once()
 
-    rebooted = make_manager(
-        store=store, machines=FakeState(), seen_ids=FakeState()
-    )
+    rebooted = make_manager(store=store, machines=FakeState(), seen_ids=FakeState())
     age = rebooted.restore()
     assert age is not None
     assert 0 <= age < 60
@@ -311,3 +309,20 @@ def test_postgres_store_missing_table_disables_the_store_once(caplog, monkeypatc
 
     warnings = [r for r in caplog.records if "40_cep_snapshots.sql" in r.message]
     assert len(warnings) == 1
+
+
+def test_degraded_flag_tracks_the_last_write_outcome():
+    """Spec AC 8: the degraded flag follows the last write — 1 while the
+    last snapshot failed (the restart loss window is widening), 0 once a
+    write succeeds — so /health can show it without reading logs."""
+    store = FakeStore()
+    manager = make_manager(store)
+    assert manager.stats["cep_snapshot_degraded"] == 0
+
+    store.fail_with = RuntimeError("db down")
+    assert manager.snapshot_once() is False
+    assert manager.stats["cep_snapshot_degraded"] == 1
+
+    store.fail_with = None
+    assert manager.snapshot_once() is True
+    assert manager.stats["cep_snapshot_degraded"] == 0

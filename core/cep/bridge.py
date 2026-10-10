@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from core.cep.engine import SequenceMatch
 from core.response.approval_service import ActionType, ApprovalService, PendingAction
+from core.telemetry import get_meter
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,12 @@ class CepResponseBridge:
         self._dedupe_ttl_s = max(0.0, dedupe_ttl_s)
         self._clock = clock
         self._seen_match_ids: Dict[str, float] = {}
+        # Lifetime count of proposals that reached the gate — the "actions
+        # proposed" of spec AC 8. A dedupe-swallowed re-emission is not a
+        # proposal and does not count.
+        self.stats: Dict[str, Any] = {"cep_actions_proposed": 0}
+        self._actions_counter: Any = None
+        self._instruments_ready = False
 
     def fire(self, match: SequenceMatch) -> Optional[PendingAction]:
         """Propose ``match`` to the approval gate, exactly once.
@@ -151,6 +158,8 @@ class CepResponseBridge:
             match.rule_id,
             match.entity_key,
         )
+        self.stats["cep_actions_proposed"] += 1
+        self._record_proposed()
         return action
 
     # ------------------------------------------------------------------
@@ -199,15 +208,39 @@ class CepResponseBridge:
         }
 
     # ------------------------------------------------------------------
+    # Metrics mirror (spec AC 8)
+    # ------------------------------------------------------------------
+
+    def _record_proposed(self) -> None:
+        """Mirror the proposal into OTEL (instruments created on first
+        record, the tap's pattern)."""
+        self._ensure_instruments()
+        try:
+            if self._actions_counter is not None:
+                self._actions_counter.add(1)
+        except Exception as _err:
+            logger.debug("OTEL CEP record failed (non-fatal): %s", _err)
+
+    def _ensure_instruments(self) -> None:
+        if self._instruments_ready:
+            return
+        self._instruments_ready = True
+        try:
+            meter = get_meter("vigil.daemon")
+            self._actions_counter = meter.create_counter(
+                name="vigil.cep.actions",
+                description="Actions proposed to the approval gate by the CEP bridge",
+                unit="1",
+            )
+        except Exception as _err:
+            logger.debug("OTEL CEP instruments unavailable: %s", _err)
+
+    # ------------------------------------------------------------------
     # First-wins dedupe
     # ------------------------------------------------------------------
 
     def _forget_expired(self, now: float) -> None:
         """Drop expired match ids so the set stays bounded by TTL traffic."""
-        expired = [
-            key
-            for key, expiry in self._seen_match_ids.items()
-            if expiry <= now
-        ]
+        expired = [key for key, expiry in self._seen_match_ids.items() if expiry <= now]
         for key in expired:
             del self._seen_match_ids[key]
