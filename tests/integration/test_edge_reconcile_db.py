@@ -314,8 +314,15 @@ def test_chain_gap_merges_nothing_and_reports_the_resend_position(
 
     _seed_node(db_session)
     node = _edge_node(db_session)
-    # Server has accepted seq 1; the node skips ahead to seq 3.
-    _, held_head = _chained_records(1)
+    # First, the server accepts seq 1: a receipt is written and the
+    # watermark advances to 1.
+    accepted, held_head = _chained_records(1)
+    first = _reconcile(db_session, node=node, push=_push(accepted, held_head))
+    db_session.commit()
+    assert first.merged_count == 1
+
+    # The node skips ahead to seq 3, chaining its first record onto the
+    # head the server already holds.
     gapped, _ = _chained_records(3, prev=held_head)
 
     response = _reconcile(db_session, node=node, push=_push(gapped, "f" * 64))
@@ -325,12 +332,12 @@ def test_chain_gap_merges_nothing_and_reports_the_resend_position(
     assert response.server_last_seq == 1
     assert response.server_head == held_head
     assert response.resend_from == 2
-    assert _approval_count(reconcile_db) == 0
+    assert _approval_count(reconcile_db) == 1  # only the accepted batch's row
     with reconcile_db.connect() as conn:
         receipts = conn.execute(
             text("SELECT count(*) FROM edge_journal_receipts")
         ).scalar_one()
-    assert receipts == 0
+    assert receipts == 1
 
 
 # ---------------------------------------------------------------------------
