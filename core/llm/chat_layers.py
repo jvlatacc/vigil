@@ -111,7 +111,16 @@ def changes_for_tool(name: str) -> str:
     for the approval tool and ART execute, which the gate covers; otherwise
     ``read_only``. Vigil's own case writes are not outside changes.
     """
-    if name in EXECUTE_IDS or name == "create_approval_action":
+    from core.integrations._base.descriptor import flat_name_requires_approval
+
+    if name == "create_approval_action" or name in EXECUTE_IDS:
+        return "asks_first"
+    if flat_name_requires_approval(name):
+        # The dispatch gate queues this tool (E5): a descriptor declares it
+        # mutating or its name rides the fail-closed pattern. ``asks_first``
+        # here too, whatever the name tokens spell --
+        # pagerduty_manage_incidents changes incident state and no suffix
+        # says so, but the descriptor declares it.
         return "asks_first"
     return "on_its_own" if _is_destructive_mcp(name) else "read_only"
 
@@ -140,18 +149,24 @@ def run_id_for(session_id: str) -> str:
 
 
 # The MCP tools chat may reach through find/call_integration_tool: every
-# connected one except direct-action tools (see ``_is_destructive_mcp``), which
-# chat cannot safely gate, and those sharing a built-in's name — the backend
-# answers those, and an agent's ``wanted`` list decides whether it may.
+# connected one except those sharing a built-in's name — the backend answers
+# those, and an agent's ``wanted`` list decides whether it may — and except
+# tools the dispatch gate's classification queues (descriptor declaration or
+# the fail-closed name pattern): chat has no approval-resume path, so a parked
+# call would hang the conversation. See ``_is_destructive_mcp`` for the
+# token-level reading that survives beneath the gate.
 def integration_tools(
     mcp_tools: Optional[List[Dict[str, Any]]],
 ) -> List[Dict[str, Any]]:
+    from core.integrations._base.descriptor import flat_name_requires_approval
+
     static = {t["name"] for t in ALL_TOOLS if t.get("name")}
     return [
         t
         for t in mcp_tools or []
         if t.get("name")
         and t["name"] not in static
+        and not flat_name_requires_approval(t["name"])
         and not _is_destructive_mcp(t["name"])
     ]
 

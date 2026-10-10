@@ -1172,6 +1172,12 @@ def init_database(echo: bool = False, create_tables: bool = True):
     # the backend can create these tables, and marks it applied for good.
     if create_tables:
         seed_reference_tables(db_manager)
+        # Bundled CISA KEV: same in-process reasoning as the reference seed
+        # (a Helm db-init Job would run before the table exists), idempotent
+        # through the upsert triple, and never fatal at startup.
+        from core.threat_intel.kev_seed import seed_kev_indicators
+
+        seed_kev_indicators()
         # Only once create_all and the drift check have returned: a stamp
         # the schema never reached would hide the version it is really at.
         try:

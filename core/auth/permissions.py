@@ -19,6 +19,7 @@ from core.storage.models import Role, User
 from core.storage.unit_of_work import unit_of_work
 
 APPROVE_PERMISSION = "ai_decisions.approve"
+CASES_WRITE_PERMISSION = "cases.write"
 
 # Tool-call authorization. ``tools.execute`` is the baseline grant; a role's
 # map may also carry a per-server ``tools.server.<name>`` key whose value
@@ -29,30 +30,35 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 def require_permission(
-    permission: str, *, unsafe_only: bool = False
+    *permissions: str, unsafe_only: bool = False
 ) -> Callable[..., User]:
-    """Dependency that answers 403 unless the signed-in user holds ``permission``.
+    """Dependency that answers 403 unless the signed-in user holds the permission.
 
-    ``unsafe_only`` skips GET/HEAD/OPTIONS, for a router-level gate that guards
-    the writes of a router whose reads stay open to every role.
+    Several names mean any-of: holding one of them is enough, and a caller
+    holding none is refused. (A route that needs every name should check in
+    its handler.) ``unsafe_only`` skips GET/HEAD/OPTIONS, for a router-level
+    gate that guards the writes of a router whose reads stay open to every role.
     """
 
     def _check(request: Request, user: User = Depends(get_current_user)) -> User:
         if unsafe_only and request.method in _SAFE_METHODS:
             return user
-        if not AuthService.check_permission(user.user_id, permission):
+        if not any(
+            AuthService.check_permission(user.user_id, permission)
+            for permission in permissions
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied: {permission} required",
+                detail=f"Permission denied: {' or '.join(permissions)} required",
             )
         return user
 
     return _check
 
 
-def permission_gate(permission: str, *, unsafe_only: bool = False) -> Depends:
+def permission_gate(*permissions: str, unsafe_only: bool = False) -> Depends:
     """``Depends(require_permission(...))``, ready for ``dependencies=[...]``."""
-    return Depends(require_permission(permission, unsafe_only=unsafe_only))
+    return Depends(require_permission(*permissions, unsafe_only=unsafe_only))
 
 
 def username_has_permission(username: str, permission: str) -> bool:

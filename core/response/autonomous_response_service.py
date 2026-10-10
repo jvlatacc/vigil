@@ -5,7 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
-from core.response.config import ResponseConfig
+from core.response.config import ResponseConfig, is_recon_probe
+from core.response.protected_assets import protected_asset_hit
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,17 @@ class AutonomousResponseService:
                 reasoning.append("Lateral movement detected (T1021)")
                 indicators.append("lateral_movement")
 
+            # A scanning probe (T1046/T1595) is the deception candidate, not a
+            # containment one: a small boost that on its own stays below the
+            # review line, and an indicator the recommendation ladder reads
+            # as deceive instead of letting the finding fall into the
+            # monitor-only bands. The shared predicate is the one definition
+            # of what counts (is_recon_probe in core.response.config).
+            if is_recon_probe(mitre_predictions):
+                confidence += 0.10
+                reasoning.append("Reconnaissance scanning detected (T1046/T1595)")
+                indicators.append("recon_scanning")
+
         # Correlate CrowdStrike alerts
         if crowdstrike_alert:
             cs_alerts = crowdstrike_alert.get("alerts", [])
@@ -134,6 +146,12 @@ class AutonomousResponseService:
             return "AUTO-ISOLATE: Confidence threshold met for automatic isolation"
         elif confidence >= self.config.review_threshold:
             return "ISOLATE WITH APPROVAL: High confidence, recommend isolation with quick approval"
+        elif "recon_scanning" in indicators:
+            # The containment bands keep precedence: a scan with enough
+            # corroborating signal to reach the review line is still an
+            # isolation case. Below it, a recon-tagged finding deceives
+            # instead of landing in the monitor-only bands.
+            return "DECEIVE: Reconnaissance probe; candidate for honey-routing into a decoy environment"
         elif confidence >= self.config.monitor_threshold:
             return "MANUAL REVIEW: Moderate confidence, requires analyst review"
         else:
@@ -170,6 +188,15 @@ class AutonomousResponseService:
             ip_address if ip_address and ip_address != "unknown" else f"host:{hostname}"
         )
 
+        # Never-quarantine invariant (#944): an operator-declared asset waits
+        # for a person at any confidence or severity. Checked before the
+        # approval gate here, and re-checked in execute_approved_actions
+        # before anything dispatches. A hit does not drop the action: it
+        # forces human approval and renders the invariant's rationale as the
+        # deciding rule.
+        protected = protected_asset_hit(ip_address, hostname)
+        gate_rule = None if protected is None else protected.rule()
+
         try:
             action, inserted = self.approval_service._put_action(
                 action_type=ActionType.ISOLATE_HOST,
@@ -184,6 +211,7 @@ class AutonomousResponseService:
                 created_by=AgentId.AUTO_RESPONDER.value,
                 parameters={"hostname": hostname, "correlation": correlation_data},
                 idempotency_key=f"{ActionType.ISOLATE_HOST.value}:{target_key}",
+                gate_rule=gate_rule,
             )
 
             if not inserted:
@@ -278,6 +306,14 @@ class AutonomousResponseService:
         """
         Execute all approved actions that haven't been executed yet.
 
+        Re-checks the never-quarantine invariant (#944) before dispatching:
+        the create path and this path are different transactions, and an
+        auto-approval released at creation time is not a decision that
+        survives a protected asset declared in between. A person-approved
+        row proceeds — the deliberate emergency valve; an auto-approved row
+        against a protected asset is refused and recorded, never executed
+        and never dropped silently.
+
         Returns:
             List of execution results
         """
@@ -292,6 +328,31 @@ class AutonomousResponseService:
                 # Skip if already executed
                 if action.executed_at:
                     continue
+
+                params = action.parameters or {}
+
+                # Never-quarantine invariant re-check (#944), ahead of the
+                # person-decided guard: a row whose status says "approved"
+                # but names no approver was released by a confidence figure,
+                # and a confidence figure cannot discharge the invariant.
+                # Refused and recorded — never executed, never dropped
+                # silently. A row a person decided (approved_by set)
+                # proceeds; that is the deliberate emergency valve.
+                if not action.approved_by:
+                    protected = protected_asset_hit(
+                        action.target, params.get("hostname")
+                    )
+                    if protected is not None:
+                        logger.warning(
+                            "Action %s targets protected asset %s; refusing execution",
+                            action.action_id,
+                            protected.rule(),
+                        )
+                        self.approval_service.refuse_auto_action(
+                            action.action_id, protected.rule()
+                        )
+                        continue
+
                 # Released by a confidence figure and no person: whoever
                 # supplied that figure also chose the outcome.
                 if not action.requires_approval and not action.approved_by:
@@ -301,7 +362,6 @@ class AutonomousResponseService:
                     )
                     continue
 
-                params = action.parameters or {}
                 result: Optional[Dict] = None
 
                 if action.action_type == "isolate_host":
@@ -322,6 +382,8 @@ class AutonomousResponseService:
                         reason=action.reason,
                         parameters=params,
                     )
+                elif action.action_type == "honey_route":
+                    result = self._execute_honey_route(action)
 
                 if result is None:
                     # Unknown action type — leave for another executor or manual handling.
@@ -420,3 +482,49 @@ class AutonomousResponseService:
         except Exception as e:  # noqa: BLE001
             logger.exception("Cloudflare action %s failed", action_type)
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # MTD honey-route executor
+    # ------------------------------------------------------------------
+
+    def _execute_honey_route(self, action) -> Dict[str, Any]:
+        """Execute an approved honey_route through the honey_router integration.
+
+        Lazy import and the ``is_integration_enabled`` gate are the Cloudflare
+        precedent: the enforcement modules (and their storage imports) stay
+        off installs that never enable the integration. With no backend
+        configured this returns an honest structured failure — the
+        ``isolate_host`` rule: a fabricated success would record a routing
+        that never happened, and the attacker would keep probing production.
+        """
+        from core.config import is_integration_enabled
+
+        if not is_integration_enabled("honey_router"):
+            return {
+                "success": False,
+                "error": "unsupported_action_type",
+                "message": "No enforcement backend is configured for honey-routing",
+            }
+
+        params = action.parameters or {}
+        decoy_id = params.get("decoy_id")
+        if not decoy_id:
+            return {
+                "success": False,
+                "error": "missing_decoy_id",
+                "message": "honey_route action carries no decoy_id parameter",
+            }
+
+        try:
+            from core.integrations.honey_router import route as honey_router
+        except Exception as e:  # noqa: BLE001
+            return {
+                "success": False,
+                "error": f"core.integrations.honey_router unavailable: {e}",
+            }
+
+        return honey_router.route(
+            attacker_ip=action.target,
+            decoy_id=str(decoy_id),
+            ttl_seconds=params.get("session_ttl_seconds"),
+        )

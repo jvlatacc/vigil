@@ -586,9 +586,14 @@ class MCPClient:
                 # command to spawn; record it like any other connect failure.
                 self.last_errors[server_name] = "stdio server has no command to spawn"
                 return False
+            # The configured cwd is forwarded too: the entry resolved it
+            # (${workspaceFolder} → project root) at load time, and the SDK
+            # would otherwise spawn the child in the backend's working
+            # directory, silently discarding it (E16).
             server_params = StdioServerParameters(
                 command=server.command,
                 args=server.args,
+                cwd=server.cwd,
                 env={**ca_bundle_env(), **(server.env or {})},
             )
 

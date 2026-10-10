@@ -57,6 +57,17 @@ TECHNIQUE_NAME_FALLBACKS: dict[str, tuple[str, str]] = {
     "T1059": ("Command and Scripting Interpreter", "Execution"),
     "T1055": ("Process Injection", "Defense Evasion"),
     "T1036": ("Masquerading", "Defense Evasion"),
+    # The decoy session capture plane (core.cases.decoy_session_capture) —
+    # the techniques services/decoy/session.py tags on observed activity.
+    "T1033": ("System Owner/User Discovery", "Discovery"),
+    "T1082": ("System Information Discovery", "Discovery"),
+    "T1087": ("Account Discovery", "Discovery"),
+    "T1016": ("System Network Configuration Discovery", "Discovery"),
+    "T1083": ("File and Directory Discovery", "Discovery"),
+    "T1053": ("Scheduled Task/Job", "Execution"),
+    "T1110": ("Brute Force", "Credential Access"),
+    "T1110.001": ("Password Guessing", "Credential Access"),
+    "T1059.004": ("Unix Shell", "Execution"),
 }
 
 

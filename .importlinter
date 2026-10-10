@@ -44,6 +44,13 @@ forbidden_modules =
     core.skills
     core.threat_intel
     core.workflows
+ignore_imports =
+    ; The bundled CISA KEV seed runs inside init_database (in-process seeding:
+    ; a Helm db-init Job applies SQL before the backend can create these
+    ; tables, so the seed cannot live in SQL). Threat intel announces its seed
+    ; through this one crossing; naming it here is what stops it becoming the
+    ; precedent for the next one.
+    core.storage.connection -> core.threat_intel.kev_seed
 
 [importlinter:contract:versioned-api]
 name = the versioned API surface composes the domains; nothing under core imports it back
@@ -68,6 +75,22 @@ source_modules =
     core.workflows
 forbidden_modules =
     core.api
+
+[importlinter:contract:fastpath]
+name = the Fast-Path gate is deterministic: no model, no agents, no API surface, no deployables
+type = forbidden
+source_modules =
+    core.response.fastpath
+forbidden_modules =
+    services
+    core.agents
+    core.api
+    core.llm
+ignore_imports =
+    ; Same named crossing as the tiers contract: the in-process KEV seed in
+    ; init_database is the only path from fastpath's storage use to a
+    ; capability domain, and naming it severs every chain through it.
+    core.storage.connection -> core.threat_intel.kev_seed
 
 [importlinter:contract:ingestion]
 name = Federation drives Ingestion, never the reverse

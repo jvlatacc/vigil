@@ -49,6 +49,10 @@ x-intent-env: &intent-env
   DAEMON_CRITICAL_ACTION_FLOOR: ${DAEMON_CRITICAL_ACTION_FLOOR:-0.70}
   DAEMON_HIGH_ACTION_FLOOR: ${DAEMON_HIGH_ACTION_FLOOR:-0.80}
   DAEMON_FORCE_APPROVAL: ${DAEMON_FORCE_APPROVAL:-false}
+  DAEMON_MTD_ENABLED: ${DAEMON_MTD_ENABLED:-false}
+  DAEMON_MTD_CONFIDENCE_FLOOR: ${DAEMON_MTD_CONFIDENCE_FLOOR:-0.60}
+  DAEMON_MTD_SESSION_TTL_SECONDS: ${DAEMON_MTD_SESSION_TTL_SECONDS:-3600}
+  DAEMON_MTD_INTERNAL_ONLY: ${DAEMON_MTD_INTERNAL_ONLY:-true}
   DAEMON_ESCALATE_SEVERITIES: "${DAEMON_ESCALATE_SEVERITIES:-critical,high}"
   ORCHESTRATOR_ENABLED: ${ORCHESTRATOR_ENABLED:-false}
   ORCHESTRATOR_MAX_COST: ${ORCHESTRATOR_MAX_COST:-5.0}
@@ -490,6 +494,66 @@ services:
     # Host Ollama: implicit on Docker Desktop, required on native Linux Docker.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - deeptempo-network
+
+  # ─── Decoys (MTD plane 03) ─────────────────────────────────────────────────
+  # Canary decoys for honey-routed attacker sessions (spec, planes 02/03).
+  # Started only with the `decoys` profile — `docker compose --profile decoys
+  # up` — which is the human act of enabling decoys on a Compose install.
+  # They publish NO host ports: reachability is internal to
+  # deeptempo-network only, and the port-binding security tests fail the
+  # build on any new binding. Compose bridges cannot express default-deny
+  # egress; the containment invariant is enforced in code (the decoy makes
+  # exactly one outbound call — the ingest POST — and holds only canary
+  # data, tested in tests/security/test_decoy_containment.py), and in Helm
+  # via NetworkPolicy on the cluster path.
+  ssh-decoy:
+    profiles: [decoys]
+    image: vigil-backend:local
+    build: *backend-build
+    container_name: deeptempo-ssh-decoy
+    command: ["python", "-m", "services.decoy.ssh_decoy"]
+    environment:
+      # The profile is the opt-in; within it the decoy serves.
+      DECOY_ENABLED: ${DECOY_ENABLED:-true}
+      DECOY_INGEST_URL: ${DECOY_INGEST_URL:-http://soc-daemon:8081/ingest}
+      DECOY_SESSION_TTL_SECONDS: ${DECOY_SESSION_TTL_SECONDS:-3600}
+      # The daemon's own ingest bearer, aliased to the decoy's channel
+      # (services/decoy/emitter.py) so one token guards the webhook.
+      DECOY_INGEST_TOKEN: ${DAEMON_WEBHOOK_TOKEN:-}
+      # Canary credential through the secret plumbing — never a literal.
+      DECOY_CANARY_PASSWORD: ${DECOY_CANARY_PASSWORD:-}
+      PYTHONUNBUFFERED: "1"
+    # The backend image's HEALTHCHECK curls :6987, which this process does
+    # not serve — disable rather than report unhealthy forever.
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    networks:
+      - deeptempo-network
+
+  http-decoy:
+    profiles: [decoys]
+    image: vigil-backend:local
+    build: *backend-build
+    container_name: deeptempo-http-decoy
+    command: ["python", "-m", "services.decoy.http_decoy"]
+    environment:
+      DECOY_ENABLED: ${DECOY_ENABLED:-true}
+      DECOY_INGEST_URL: ${DECOY_INGEST_URL:-http://soc-daemon:8081/ingest}
+      DECOY_SESSION_TTL_SECONDS: ${DECOY_SESSION_TTL_SECONDS:-3600}
+      DECOY_INGEST_TOKEN: ${DAEMON_WEBHOOK_TOKEN:-}
+      DECOY_CANARY_PASSWORD: ${DECOY_CANARY_PASSWORD:-}
+      PYTHONUNBUFFERED: "1"
+    # Serves /health on the container-internal interface only.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
     networks:
       - deeptempo-network
 

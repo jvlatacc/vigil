@@ -609,10 +609,14 @@ async def test_slack_reports_the_api_level_error(monkeypatch):
 
 @respx.mock
 async def test_ip_geolocation_maps_a_successful_lookup(monkeypatch):
-    respx.get("http://ip-api.com/json/8.8.8.8").mock(
+    respx.get("https://ipwho.is/8.8.8.8").mock(
         return_value=httpx.Response(
             200,
-            json={"status": "success", "country": "United States", "isp": "Google"},
+            json={
+                "success": True,
+                "country": "United States",
+                "connection": {"isp": "Google", "org": "Google"},
+            },
         )
     )
 

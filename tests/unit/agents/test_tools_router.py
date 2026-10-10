@@ -482,6 +482,11 @@ def closes(monkeypatch):
     monkeypatch.setattr(CaseWorkflowService, "close_case", _close)
     monkeypatch.setattr(vigil, "_service_session", _session)
     monkeypatch.setattr(vigil, "add_case_activity", lambda *a, **k: None)
+    # Binding, not authorization, is the subject here; the grant itself is
+    # pinned against the real role model in tests/security/.
+    monkeypatch.setattr(
+        "core.agents.tool_registry.username_has_permission", lambda *a, **k: True
+    )
     monkeypatch.setattr(internal_auth, "get_secret", lambda name: "shhh")
     _ground_audit_and_permission_store(monkeypatch)
 
