@@ -413,7 +413,13 @@ def _reconcile(
 
     legality = check_legality(verdict.new_records, allowed_actions=allowed)
 
-    duplicate_ids: list[str] = []
+    # Seq-level replays (records at or below the held watermark) never reach
+    # the merge loop — verify_batch classifies them first. Surface them here
+    # so an at-least-once repush is visible in the response, alongside the
+    # key-level duplicates the merge loop detects below.
+    duplicate_ids: list[str] = [
+        record["idempotency_key"] for record in verdict.duplicate_records
+    ]
     merged_count = 0
     for record in legality.accepted:
         key: str = record["idempotency_key"]

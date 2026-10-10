@@ -403,6 +403,27 @@ class TestReconcile:
         assert response.merged_count == 0
         assert response.duplicate_ids == [records[0]["idempotency_key"]]
 
+    def test_replayed_batch_reports_duplicate_ids(self):
+        edge = _edge()
+        records, head = _chained_records(1)
+        session = _fake_session()
+        # The receipt query answers a held receipt: the pushed seq sits at the
+        # watermark, so verify_batch classifies it as a replay before any
+        # merge-loop dedupe could see it.
+        receipt_query = session.query.return_value.filter.return_value
+        receipt_query.order_by.return_value.first.return_value = SimpleNamespace(
+            last_seq=1, chain_head=head, receipt_id="ejr-wn-7f3a-1-1"
+        )
+        session.get.return_value = _policy_row()  # cited policy version exists
+        node = _fake_node()
+
+        response = edge._reconcile(session, node=node, push=_push(records, head))
+
+        assert response.merged_count == 0
+        assert response.duplicate_ids == [records[0]["idempotency_key"]]
+        assert response.accepted_through == 1
+        assert response.receipt_id == "ejr-wn-7f3a-1-1"
+
     def test_chain_gap_refuses_with_resend_from_the_head(self):
         edge = _edge()
         _, held_head = _chained_records(1, 2)
