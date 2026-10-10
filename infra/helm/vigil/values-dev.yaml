@@ -44,6 +44,16 @@ daemon:
   persistence:
     size: 1Gi
 
+# Edge daemon: same off-by-default as prod; dev overrides only right-size it.
+edgeDaemon:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
 postgresql:
   persistence:
     size: 5Gi

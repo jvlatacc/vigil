@@ -1,0 +1,52 @@
+{{- if and .Values.edgeDaemon.enabled .Values.edgeDaemon.rbac.create }}
+{{- /*
+Cluster-mode containment's least-privilege identity.
+
+A dedicated ServiceAccount — never the chart's shared one — plus one
+Role + RoleBinding pair per managed namespace, granting NetworkPolicy verbs
+ONLY (the executor's whole surface). Design-spec risk control: "Scoped RBAC:
+NetworkPolicy verbs in managed namespaces only; no secrets, no workload
+mutation." A RoleBinding in namespace B never reaches namespace C, so the
+default (the release namespace) is the blast radius until an operator names
+more namespaces. Never cluster-wide.
+*/ -}}
+{{- $saName := .Values.edgeDaemon.rbac.serviceAccountName | default (include "vigil.edgeDaemon.fullname" .) -}}
+{{- $managed := .Values.edgeDaemon.rbac.namespaces | default (list .Release.Namespace) -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $saName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "edge") | nindent 4 }}
+{{- range $ns := $managed }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "vigil.edgeDaemon.fullname" $ }}-networkpolicy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" $ "component" "edge") | nindent 4 }}
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "vigil.edgeDaemon.fullname" $ }}-networkpolicy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" $ "component" "edge") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "vigil.edgeDaemon.fullname" $ }}-networkpolicy
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

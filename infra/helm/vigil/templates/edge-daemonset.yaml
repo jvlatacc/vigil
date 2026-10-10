@@ -1,0 +1,205 @@
+{{- if .Values.edgeDaemon.enabled }}
+{{- /*
+The edge daemon runs one defender per segment node (Local Autonomy Mesh,
+services/edge). Unlike the SOC daemon — a singleton StatefulSet — this
+workload is deliberately a DaemonSet: every enrolled node runs its own
+sovereign daemon, and durable state lives on the node itself (hostPath),
+so a rescheduled pod replays its own journal.
+
+Cluster mode (default): reversible egress-deny NetworkPolicy objects through
+the K8s API server, via the dedicated ServiceAccount (edge-rbac.yaml) —
+NetworkPolicy verbs only, per managed namespace, no secrets, no workload
+mutation.
+
+Gateway mode: host networking + NET_ADMIN so the nftables executor protects
+the host's own traffic (VPC gateways; see docs/edge-operator-guide.md).
+
+Every VIGIL_EDGE_* name rendered here is read by
+services/edge/app/config.py (the ratchet test
+test_helm_edge_env_names_are_read.py pins that pair).
+*/ -}}
+{{- $enrollmentSecret := "" -}}
+{{- if .Values.edgeDaemon.enrollmentExistingSecret -}}
+{{- $enrollmentSecret = .Values.edgeDaemon.enrollmentExistingSecret -}}
+{{- else if or .Values.edgeDaemon.externalSecret.enabled .Values.edgeDaemon.enrollmentToken -}}
+{{- $enrollmentSecret = printf "%s-enrollment" (include "vigil.edgeDaemon.fullname" .) -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "vigil.edgeDaemon.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "edge") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "edge") | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.componentLabels" (dict "context" . "component" "edge") | nindent 8 }}
+        {{- with .Values.edgeDaemon.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.edgeDaemon.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.edgeDaemon.hostNetwork }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
+      # Dedicated ServiceAccount (edge-rbac.yaml): the edge daemon must never
+      # inherit the chart's shared account or its roles.
+      serviceAccountName: {{ .Values.edgeDaemon.rbac.serviceAccountName | default (include "vigil.edgeDaemon.fullname" .) }}
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      # First-boot volume prep: the hostPath is created root-owned by the
+      # kubelet; the daemon's uid 10001 needs the dir before it can journal.
+      # chown only — it touches nothing else on the node.
+      initContainers:
+        - name: state-init
+          image: {{ include "vigil.image" (dict "context" . "component" "edgeDaemon") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "edgeDaemon") }}
+          command: ["sh", "-c", "mkdir -p /state && chown 10001:10001 /state && chmod 0700 /state"]
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: state
+              mountPath: /state
+      containers:
+        - name: edge
+          image: {{ include "vigil.image" (dict "context" . "component" "edgeDaemon") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "edgeDaemon") }}
+          env:
+            - name: VIGIL_EDGE_ENABLED
+              value: "true"
+            - name: VIGIL_EDGE_NODE_ID
+              value: {{ required "edgeDaemon.nodeID is required when edgeDaemon.enabled" .Values.edgeDaemon.nodeID | quote }}
+            - name: VIGIL_EDGE_MODE
+              value: {{ .Values.edgeDaemon.mode | quote }}
+            - name: VIGIL_EDGE_CONTROL_URL
+              value: {{ .Values.edgeDaemon.controlURL | quote }}
+            - name: VIGIL_EDGE_SEGMENT_SCOPE
+              value: {{ .Values.edgeDaemon.segmentScope | toJson | quote }}
+            - name: VIGIL_EDGE_NODE_LABELS
+              value: {{ .Values.edgeDaemon.nodeLabels | toJson | quote }}
+            {{- if $enrollmentSecret }}
+            - name: VIGIL_EDGE_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $enrollmentSecret }}
+                  key: VIGIL_EDGE_ENROLLMENT_TOKEN
+            {{- end }}
+            - name: VIGIL_EDGE_DATA_DIR
+              value: /var/lib/vigil-edge
+            - name: VIGIL_EDGE_CREDENTIAL_FILE
+              value: /var/lib/vigil-edge/credential
+            {{- if .Values.edgeDaemon.trustStoreExistingConfigMap }}
+            - name: VIGIL_EDGE_TRUST_STORE
+              value: /etc/vigil-edge/trust-root.dsse.json
+            {{- end }}
+            {{- if .Values.edgeDaemon.model }}
+            - name: VIGIL_EDGE_MODEL
+              value: {{ .Values.edgeDaemon.model | quote }}
+            {{- end }}
+            {{- if .Values.edgeDaemon.modelDigest }}
+            - name: VIGIL_EDGE_MODEL_DIGEST
+              value: {{ .Values.edgeDaemon.modelDigest | quote }}
+            {{- end }}
+            {{- if .Values.edgeDaemon.modelURL }}
+            - name: VIGIL_EDGE_OLLAMA_URL
+              value: {{ .Values.edgeDaemon.modelURL | quote }}
+            {{- end }}
+            - name: VIGIL_EDGE_HEALTH_PORT
+              value: {{ .Values.edgeDaemon.healthPort | toString | quote }}
+            {{- with .Values.edgeDaemon.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.edgeDaemon.healthPort }}
+              {{- if .Values.edgeDaemon.hostNetwork }}
+              hostPort: {{ .Values.edgeDaemon.healthPort }}
+              {{- end }}
+              protocol: TCP
+          # /health is the daemon's own hand-rolled endpoint (state, tier,
+          # uptime): any 200 means the defense loop is serving.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.edgeDaemon.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            {{- if eq .Values.edgeDaemon.mode "gateway" }}
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_ADMIN"]
+            {{- else }}
+            capabilities:
+              drop: ["ALL"]
+            {{- end }}
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/vigil-edge
+            {{- if .Values.edgeDaemon.trustStoreExistingConfigMap }}
+            - name: trust-store
+              mountPath: /etc/vigil-edge
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: state
+          hostPath:
+            path: {{ .Values.edgeDaemon.stateHostPath | quote }}
+            type: DirectoryOrCreate
+        {{- if .Values.edgeDaemon.trustStoreExistingConfigMap }}
+        - name: trust-store
+          configMap:
+            name: {{ .Values.edgeDaemon.trustStoreExistingConfigMap | quote }}
+        {{- end }}
+      {{- with .Values.edgeDaemon.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.edgeDaemon.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.edgeDaemon.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -52,6 +52,7 @@ from core.storage.models.digital_twin import (
     TwinDevice,
     TwinProcess,
 )
+from core.storage.models.edge import EdgeBundle, EdgeNode
 from core.storage.models.episodic import (
     EpisodicDistilFailure,
     EpisodicDistilMarker,
@@ -106,6 +107,8 @@ __all__ = [
     "Conversation",
     "CustomAgent",
     "CustomWorkflow",
+    "EdgeBundle",
+    "EdgeNode",
     "EpisodicDistilFailure",
     "EpisodicDistilMarker",
     "EpisodicGap",
