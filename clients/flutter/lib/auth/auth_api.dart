@@ -1,0 +1,156 @@
+import 'package:dio/dio.dart';
+
+import 'errors.dart';
+import 'session.dart';
+
+/// Hand-written client for the console-surface auth endpoints and health.
+///
+/// These sit outside the frozen `/api/v1` snapshot (the only public paths the
+/// app needs), so they are typed by hand against `services/api/routers/auth.py`
+/// and covered by unit tests instead of codegen. The Dio instance passed in is
+/// the *bare* one — login/refresh run before any session exists and must never
+/// pass through [VigilAuthenticator] (a refresh routed back through the
+/// interceptor could recurse into itself). Calls that need authentication take
+/// the access token explicitly and send `Authorization: Bearer` themselves.
+///
+/// Every request carries the byte-stable User-Agent: tokens bind an `sfp`
+/// claim of `sha256(User-Agent)[:16]`, verified per request.
+class AuthApi {
+  AuthApi({required Dio dio, required String userAgent})
+      : _dio = dio,
+        _userAgent = userAgent;
+
+  static const _userAgentHeader = 'user-agent';
+  static const _mfaRequiredHeader = 'x-mfa-required';
+  static const _retryAfterHeader = 'retry-after';
+
+  final Dio _dio;
+  final String _userAgent;
+
+  Options _options({Map<String, String> extra = const {}}) => Options(
+        headers: {_userAgentHeader: _userAgent, ...extra},
+      );
+
+  /// POST `/api/auth/login` — exchanges credentials (plus optional TOTP code)
+  /// for a token pair. Throws [MfaRequired] when the server demands a TOTP
+  /// code (retry once with `mfaCode`), [AccountLocked] on 423, and
+  /// [InvalidCredentials] on a plain 401.
+  Future<Session> login({
+    required String usernameOrEmail,
+    required String password,
+    String? mfaCode,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/login',
+        data: {
+          'username_or_email': usernameOrEmail,
+          'password': password,
+          if (mfaCode != null) 'mfa_code': mfaCode,
+        },
+        options: _options(),
+      );
+      return Session.fromBody(res.data!);
+    } on DioException catch (e) {
+      throw _loginFailure(e);
+    }
+  }
+
+  /// POST `/api/auth/refresh` — single-use rotation: the passed refresh token
+  /// is consumed and a NEW pair is returned. Throws [AuthRevoked] when the
+  /// server refuses (blacklisted/consumed/invalid token) — sign-in required.
+  Future<Session> refresh({required String refreshToken}) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/refresh',
+        data: {'refresh_token': refreshToken},
+        options: _options(),
+      );
+      return Session.fromBody(res.data!);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        throw AuthRevoked(
+          reason: _detail(e) ?? 'refresh token rejected',
+          statusCode: 401,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  /// POST `/api/auth/logout` — blacklists the access token (from the Bearer
+  /// header) and the refresh token passed in the body, so neither can outlive
+  /// the sign-out. Bearer-flow clients must send the refresh token in the
+  /// body; the cookie fallback does not exist here.
+  Future<void> logout({
+    required String accessToken,
+    required String refreshToken,
+  }) async {
+    try {
+      await _dio.post<void>(
+        '/api/auth/logout',
+        data: {'refresh_token': refreshToken},
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        // Already signed out server-side — treat as success, the tokens are
+        // dead either way and the caller clears them.
+        return;
+      }
+      rethrow;
+    }
+  }
+
+  /// GET `/api/auth/me` — the current user with the resolved permissions map
+  /// the shell gates navigation on.
+  Future<UserProfile> me({required String accessToken}) async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/api/auth/me',
+      options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+    );
+    return UserProfile.fromBody(res.data!);
+  }
+
+  /// GET `/api/health` — public liveness probe, also used to validate a
+  /// server URL during onboarding. Returns the payload (includes version).
+  Future<Map<String, dynamic>> health() async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/api/health',
+      options: _options(),
+    );
+    return res.data ?? const {};
+  }
+
+  VigilAuthException _loginFailure(DioException e) {
+    final res = e.response;
+    switch (res?.statusCode) {
+      case 401:
+        final mfa = res?.headers.value(_mfaRequiredHeader);
+        if (mfa != null && mfa.toLowerCase() == 'true') return MfaRequired();
+        return InvalidCredentials(statusCode: 401);
+      case 423:
+        return AccountLocked(retryAfter: _parseRetryAfter(res));
+      default:
+        return UnexpectedAuthResponse(
+          _detail(e) ?? 'Login failed',
+          statusCode: res?.statusCode,
+        );
+    }
+  }
+
+  static String? _detail(DioException e) {
+    final data = e.response?.data;
+    if (data is Map<String, dynamic> && data['detail'] is String) {
+      return data['detail'] as String;
+    }
+    return null;
+  }
+
+  static Duration? _parseRetryAfter(Response<dynamic>? res) {
+    final value = res?.headers.value(_retryAfterHeader);
+    if (value == null) return null;
+    final seconds = int.tryParse(value.trim());
+    return seconds == null ? null : Duration(seconds: seconds);
+  }
+}
