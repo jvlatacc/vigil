@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from core.edge.signing import deterministic_json
+from core.edge.wire import parse_ts
 
 # prev_hash of the first record ever pushed by a node — the chain's zero.
 GENESIS_PREV_HASH = "0" * 64
@@ -260,3 +261,83 @@ def check_legality(
                 )
             )
     return LegalityVerdict(accepted=tuple(accepted), rejected=tuple(rejected))
+
+
+# --- the wire pushability gate -------------------------------------------------
+#
+# The frozen contract's ceilings, restated from the control plane's
+# JournalRecord / JournalExecutionModel wire models (the server-side models
+# stay authoritative; tests cross-check the two). The node needs this shape
+# check on ITS side because a record the server would 422 is worse than an
+# unpushed one: contiguity means nothing behind it could merge either, so a
+# malformed record would wedge reconciliation silently and forever.
+
+_WIRE_EXECUTION_STATUSES = frozenset({"executed", "failed", "dry_run"})
+
+
+def record_wire_error(record: Mapping[str, Any]) -> str | None:
+    """Why the frozen journal wire contract cannot carry ``record``, or None.
+
+    The reconciler's pre-push gate: a record this refuses must never be
+    sent — the server would refuse the whole batch (422), and with batch
+    contiguity there is no way around the bad record. Field-by-field it
+    mirrors the control plane's ``JournalRecord`` model, including the
+    execution dict's exact key set — extras are dropped by the server's
+    parser, and a dropped extra is a recomputed hash that no longer
+    matches: the wedge the pin exists to prevent.
+    """
+    if not isinstance(record, Mapping):
+        return "record is not a mapping"
+    keys = set(record)
+    allowed_keys = set(RECORD_FIELDS) | {"prev_hash"}
+    missing = allowed_keys - keys
+    if missing:
+        return f"missing fields: {sorted(missing)}"
+    extra = keys - allowed_keys
+    if extra:
+        return f"unknown fields: {sorted(extra)}"
+    seq = record["seq"]
+    if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+        return f"seq must be a positive integer, got {seq!r}"
+    for field_name, limit in (
+        ("ts", 32),
+        ("mode", 32),
+        ("idempotency_key", 200),
+        ("action_type", 40),
+        ("target", 256),
+        ("decision_rule", 1000),
+    ):
+        value = record[field_name]
+        if not isinstance(value, str) or not 1 <= len(value) <= limit:
+            return f"{field_name} must be a string of 1..{limit} chars"
+    try:
+        parse_ts(record["ts"])
+    except ValueError:
+        return "ts is not a wire timestamp"
+    execution = record["execution"]
+    if not isinstance(execution, Mapping):
+        return "execution must be an object"
+    if set(execution) - {"status", "executor", "at"}:
+        return "execution carries fields the wire contract drops"
+    status = execution.get("status")
+    if status not in _WIRE_EXECUTION_STATUSES:
+        return f"execution.status must be one of {sorted(_WIRE_EXECUTION_STATUSES)}"
+    executor = execution.get("executor")
+    if not isinstance(executor, str) or not 1 <= len(executor) <= 100:
+        return "execution.executor must be a string of 1..100 chars"
+    at = execution.get("at")
+    if at is not None:
+        if not isinstance(at, str) or len(at) > 32:
+            return "execution.at must be a wire timestamp or absent"
+        try:
+            parse_ts(at)
+        except ValueError:
+            return "execution.at is not a wire timestamp"
+    prev_hash = record["prev_hash"]
+    if (
+        not isinstance(prev_hash, str)
+        or len(prev_hash) != 64
+        or any(c not in "0123456789abcdef" for c in prev_hash)
+    ):
+        return "prev_hash must be 64 lowercase hex chars"
+    return None

@@ -2,9 +2,10 @@
 
 The loop is the process's beating heart — one component task that, on an
 interval: runs a policy-sync cycle, folds the outcome into the mode
-machine, undoes live actions when authority lapses or revocation is
-observed, and — only in AUTONOMOUS, with a verified pack in force —
-drains the Sentinel's queue through the decision ladder and the
+machine, undoes live actions when their authority lapses (per-action TTL,
+policy expiry, a policy version that no longer authorizes them, or
+revocation), and — only in AUTONOMOUS, with a verified pack in force —
+drains the Sentinel's queue through the decision ladder and the core
 executor registry, journaling every decision either way.
 
 Enforcement truth table (fail-closed by construction):
@@ -13,15 +14,35 @@ Enforcement truth table (fail-closed by construction):
   queued (bounded) and are handled when — if — AUTONOMOUS arrives.
 - AUTONOMOUS but no verified pack → no enforcement (nothing authorizes).
 - AUTONOMOUS with a pack → the ladder decides; refusals journal, allows
-  execute through the registry and journal with the execution status.
-- An action type with no registered executor never reaches a
-  subprocess: the registry returns an honest ``unexecuted`` result.
+  execute through the core registry and journal with the execution
+  status.
+- An action type with no registered executor never reaches a subprocess:
+  the registry answers with an honest failed result the journal records.
 
-The executor seam is a Protocol plus an allowlist registry (the
-``core/platform/service_manager.py`` pattern). v1 ships a DryRun
-executor: every decision journals, nothing actually blocks, and the
-status payload reports the registry — the concrete nftables executor is
-the parallel executors work item's deliverable.
+The executor seam is ``core.edge.executors`` — the same Protocol,
+allowlist registry, and DryRun fallback the executors work item ships
+for every local caller. The loop dispatches only through
+``executor_for``; an action type the registry does not name cannot reach
+a subprocess.
+
+Journal records are wire-exact by construction: they must survive the
+frozen ``POST /api/v1/edge/journal`` contract unchanged, because the
+server recomputes the hash over the record as parsed — any field it
+drops, the chain would break at reconcile time. The shapes:
+
+- **Enforcement** — ``action_type``/``target`` name what was acted on;
+  ``idempotency_key = f"{type}:{target}"`` is the server's dedupe key;
+  ``execution.status`` maps the executor result onto the wire
+  vocabulary (a ``no-op`` enforcement reports ``executed``: the
+  containment is in force either way — that is what the record commits
+  to).
+- **Refusals and undos** are non-enforcement records: ``action_type``
+  is ``none`` — in no envelope, so the control plane's legality gate
+  refuses them from the approval merge while the chain still advances
+  and the record stays tamper-evidently journaled — and
+  ``execution.status`` is ``failed``, the wire's only not-an-enforcement
+  value. The class of refusal and the outcome of the undo ride
+  ``decision_rule``.
 """
 
 from __future__ import annotations
@@ -29,11 +50,24 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable, Protocol
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Mapping
 
-from core.edge.decision import decide_local_action
+from core.edge.decision import EdgeDecision, decide_local_action
 from core.edge.envelope import budget_for
+from core.edge.executors import (
+    BLOCKED,
+    CLEAR,
+    DRY_RUN,
+    EXECUTED,
+    FAILED,
+    NO_OP,
+    UNKNOWN,
+    ExecutionResult,
+    LocalExecutor,
+    UnregisteredActionType,
+    executor_for,
+)
 from core.edge.policy import AutonomyEnvelope, EdgeAction, EdgeRule, PolicyPack
 from core.edge.target_guard import TargetGuard
 from services.warden.journal import Journal
@@ -52,120 +86,61 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DecisionLoop",
-    "DryRunExecutor",
-    "ExecutionResult",
-    "ExecutorRegistry",
-    "LocalExecutor",
+    "LiveAction",
     "LoopDeps",
     "MatchedCandidate",
     "match_alerts",
 ]
+
+#: The wire contract's ceilings for free-text record fields. The journal
+#: must carry every decision — the chain's contiguity is what makes
+#: reconciliation credible — so an over-long alert-shaped value is clipped
+#: to what the frozen wire can carry, never dropped.
+_KEY_LIMIT = 200
+_TARGET_LIMIT = 256
+_RULE_LIMIT = 1000
+
+#: Executor result status → the wire's execution.status vocabulary.
+_WIRE_EXECUTION_STATUS = {
+    EXECUTED: "executed",
+    NO_OP: "executed",
+    DRY_RUN: "dry_run",
+    FAILED: "failed",
+}
 
 
 def _iso(now: datetime) -> str:
     return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _clip(text: str, limit: int) -> str:
+    return text[:limit]
+
+
 # ---------------------------------------------------------------------------
-# The executor seam
+# Live actions — what is currently in force and must be undone when it lapses
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class ExecutionResult:
-    """What an executor did — or honestly did not do."""
+class LiveAction:
+    """A reversible action in force: what, where, enforced until when."""
 
-    status: str  # "executed" | "dry_run" | "unexecuted" | "failed"
-    executor: str
-    detail: str = ""
+    action: EdgeAction
+    target: str
+    enforced_at: datetime
+    expires_at: datetime
 
 
-class LocalExecutor(Protocol):
-    """One local enforcement primitive, idempotent on retry.
+def _is_live_result(result: ExecutionResult) -> bool:
+    """Whether an enforcement result leaves containment possibly in force.
 
-    ``enforce`` and ``undo`` are synchronous on purpose: v1 executors are
-    local subprocess/OS calls (nftables), not network I/O, and the loop
-    treats a slow executor as an operator-visible problem (metrics), not
-    a concurrency puzzle.
+    BLOCKED obviously; UNKNOWN deliberately — a probe that could not
+    answer must not orphan a possibly-live block, so an unknown state
+    reads as live and gets an undo attempt at expiry. Dry-run never
+    changes the system and is never live.
     """
-
-    name: str
-    action_type: str  # e.g. "block_ip"
-
-    def enforce(self, action: EdgeAction, target: str) -> ExecutionResult: ...
-
-    def undo(self, action: EdgeAction, target: str) -> ExecutionResult: ...
-
-
-class ExecutorRegistry:
-    """The allowlist between decisions and subprocesses.
-
-    An action type with no registered executor can never reach a
-    subprocess — the registry answers with an honest ``unexecuted``
-    result that the journal records. The registry also isolates the
-    loop from executor exceptions: a raising executor reads as a failed
-    execution, not a dead warden.
-    """
-
-    def __init__(self) -> None:
-        self._executors: dict[str, LocalExecutor] = {}
-
-    def register(self, executor: LocalExecutor) -> None:
-        self._executors[executor.action_type] = executor
-
-    def registered_types(self) -> tuple[str, ...]:
-        return tuple(sorted(self._executors))
-
-    def enforce(self, action: EdgeAction, target: str) -> ExecutionResult:
-        return self._dispatch("enforce", action, target)
-
-    def undo(self, action: EdgeAction, target: str) -> ExecutionResult:
-        return self._dispatch("undo", action, target)
-
-    def _dispatch(
-        self, operation: str, action: EdgeAction, target: str
-    ) -> ExecutionResult:
-        executor = self._executors.get(action.type)
-        if executor is None:
-            return ExecutionResult(
-                status="unexecuted",
-                executor="none",
-                detail=f"no executor registered for {action.type}",
-            )
-        try:
-            method = getattr(executor, operation)
-            return method(action, target)
-        except Exception as exc:  # noqa: BLE001 - executor isolation by design
-            logger.exception("warden executor %s %s raised", executor.name, operation)
-            return ExecutionResult(
-                status="failed", executor=executor.name, detail=str(exc)
-            )
-
-
-class DryRunExecutor:
-    """The v1 fallback executor: journals honestly, changes nothing.
-
-    Default whenever no concrete executor is registered for a type —
-    every decision still journals, nothing actually blocks, and the
-    status payload reports the registry so the mode is never a lie.
-    """
-
-    name = "dry_run"
-    action_type = "block_ip"
-
-    def enforce(self, action: EdgeAction, target: str) -> ExecutionResult:
-        return ExecutionResult(
-            status="dry_run",
-            executor=self.name,
-            detail="dry-run mode: no system change",
-        )
-
-    def undo(self, action: EdgeAction, target: str) -> ExecutionResult:
-        return ExecutionResult(
-            status="dry_run",
-            executor=self.name,
-            detail="dry-run mode: nothing to undo",
-        )
+    return result.end_state in (BLOCKED, UNKNOWN)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +223,7 @@ class LoopDeps:
     sync: PolicySync
     sentinel: Sentinel
     journal: Journal
-    registry: ExecutorRegistry
+    registry: Mapping[str, LocalExecutor]
     guard_provider: Callable[[PolicyPack], TargetGuard]
     clock: Callable[[], datetime]
     metrics: WardenMetrics
@@ -293,7 +268,7 @@ class DecisionLoop:
         self._mode_observer = mode_observer
         self._pack: PolicyPack | None = None
         self._budget = budget_for(_ZERO_ENVELOPE)
-        self._live: dict[str, tuple[EdgeAction, str]] = {}
+        self._live: dict[str, LiveAction] = {}
         self._halted = False
 
     # ------------------------------------------------------------------
@@ -317,7 +292,7 @@ class DecisionLoop:
     # ------------------------------------------------------------------
 
     async def tick(self) -> None:
-        """One cycle: sync, fold, expire, grace-check, enforce."""
+        """One cycle: sync, fold, undo lapses, grace-check, enforce."""
         if self._halted:
             return
         outcome = await self._deps.sync.sync_once()
@@ -328,25 +303,30 @@ class DecisionLoop:
         self.machine.note_sync(outcome, now=now)
         self._publish_mode()
         if outcome.pack is not None:
-            self._install_pack(outcome.pack)
+            self._install_pack(outcome.pack, now=now)
 
         if self.machine.mode is OperatingMode.REVOKED:
-            # Revocation can only tighten: undo what is live, then halt.
+            # Revocation can only tighten: undo what is live (one best-
+            # effort pass — a lift that fails is journaled and logged, and
+            # the halt leaves the journal for forensic pull), then halt.
             self._undo_all("revoked", now=now)
             self._halted = True
             logger.error("warden: revocation observed — halting the loop")
             return
 
-        if (
-            self._pack is not None
-            and now >= self._pack.not_after
-            and self.machine.mode is not OperatingMode.PASSIVE
-        ):
-            # Authority lapsed: undo first, then PASSIVE. A crash between
-            # the two retries the undo (idempotent) — never the reverse.
+        if self._pack is not None and now >= self._pack.not_after:
+            # Authority lapsed: PASSIVE, and every PASSIVE tick below
+            # lifts what is still live until the node is clean. A failed
+            # lift retries — a block must not outlive its authority by
+            # outliving one attempt.
+            if self.machine.mode is not OperatingMode.PASSIVE:
+                self.machine.note_pack_expiry(now=now)
+                self._publish_mode()
+
+        self._expire_live(now=now)
+
+        if self.machine.mode is OperatingMode.PASSIVE and self._live:
             self._undo_all("policy-expired", now=now)
-            self.machine.note_pack_expiry(now=now)
-            self._publish_mode()
 
         if self._pack is not None:
             self.machine.note_grace_check(
@@ -381,7 +361,9 @@ class DecisionLoop:
                     self._budget,
                     now=now,
                 )
-                self._record_decision(decision, now=now, folded=candidate.folded)
+                self._record_decision(
+                    decision, rule, target, now=now, folded=candidate.folded
+                )
 
     def _count_slm_outcome(self, candidate: MatchedCandidate) -> None:
         """How the SLM channel contributed to this candidate — when configured.
@@ -401,89 +383,202 @@ class DecisionLoop:
         self._deps.metrics.slm_opinions.labels(outcome=outcome).inc()
 
     def _record_decision(
-        self, decision: Any, *, now: datetime, folded: FoldedTriage | None = None
+        self,
+        decision: EdgeDecision,
+        rule: EdgeRule,
+        target: str,
+        *,
+        now: datetime,
+        folded: FoldedTriage | None = None,
     ) -> None:
         """Journal one ladder outcome — allows and refusals alike.
 
         The decision_rule the journal records is the ladder's render plus
         the fold's advisory annotation: an operator reading the record
-        sees both channels and which one decided.
+        sees both channels and which one decided. Refusals are
+        non-enforcement records — action_type ``none``, wire-legal
+        execution fields (the wire has no "refused" status, so the
+        refusal code rides decision_rule) — the chain stays contiguous
+        and the legality gate keeps them out of the approval merge.
         """
         metrics = self._deps.metrics
-        decision_rule = render_decision_rule(decision.decision_rule, folded)
+        rule_text = render_decision_rule(decision.decision_rule, folded)
         if not decision.allowed:
             metrics.decisions.labels(result="refused").inc()
             self._journal(
                 mode=self.machine.mode.value,
-                idempotency_key="none",
+                idempotency_key=_clip(
+                    f"refused:{rule.action.type}:{target}", _KEY_LIMIT
+                ),
                 action_type="none",
-                target="",
-                decision_rule=decision_rule,
-                execution={
-                    "status": "refused",
-                    "reason": decision.code,
-                    "at": _iso(now),
-                },
+                target=_clip(target, _TARGET_LIMIT),
+                decision_rule=_clip(f"{decision.code}: {rule_text}", _RULE_LIMIT),
+                execution={"status": "failed", "executor": "decision", "at": _iso(now)},
                 ts=_iso(now),
             )
             return
         assert decision.action is not None and decision.target is not None
         metrics.decisions.labels(result="allowed").inc()
-        result = self._deps.registry.enforce(decision.action, decision.target)
+        result = self._enforce(decision.action, decision.target)
         metrics.enforcements.labels(
             status=result.status, executor=result.executor
         ).inc()
         key = f"{decision.action.type}:{decision.target}"
-        if result.status == "executed":
-            # Only a real execution is live; dry-run has nothing to undo.
-            self._live[key] = (decision.action, decision.target)
+        if _is_live_result(result):
+            self._live[key] = LiveAction(
+                action=decision.action,
+                target=decision.target,
+                enforced_at=now,
+                expires_at=now + timedelta(minutes=decision.action.ttl_minutes),
+            )
             self._deps.metrics.live_actions.set(len(self._live))
+        if not result.success:
+            # The rule allowed the action; the execution failed. The wire
+            # execution dict has no free-text field, so the reason rides
+            # decision_rule — an auditor can see why nothing was blocked.
+            rule_text = (
+                f"{rule_text} — execution failed ({result.code}): {result.message}"
+            )
         self._journal(
             mode=self.machine.mode.value,
-            idempotency_key=key,
+            idempotency_key=_clip(key, _KEY_LIMIT),
             action_type=decision.action.type,
-            target=decision.target,
-            decision_rule=decision_rule,
+            target=_clip(decision.target, _TARGET_LIMIT),
+            decision_rule=_clip(rule_text, _RULE_LIMIT),
             execution={
-                "status": result.status,
+                "status": _WIRE_EXECUTION_STATUS[result.status],
                 "executor": result.executor,
-                "detail": result.detail,
                 "at": _iso(now),
             },
             ts=_iso(now),
         )
 
-    def _undo_all(self, reason: str, *, now: datetime) -> None:
-        """Undo every live action, journaling each undo."""
-        for key, (action, target) in self._live.items():
-            result = self._deps.registry.undo(action, target)
-            self._deps.metrics.enforcements.labels(
-                status=result.status, executor=result.executor
-            ).inc()
-            self._deps.metrics.undo_total.labels(reason=reason).inc()
-            self._journal(
-                mode=self.machine.mode.value,
-                idempotency_key=f"{key}:undo",
-                action_type=action.type,
-                target=target,
-                decision_rule=f"undo of {key} ({reason})",
-                execution={
-                    "status": "undone",
-                    "executor": result.executor,
-                    "detail": result.detail,
-                    "reason": reason,
-                    "at": _iso(now),
-                },
-                ts=_iso(now),
+    def _enforce(self, action: EdgeAction, target: str) -> ExecutionResult:
+        """One dispatch through the core registry — the allowlist's only door."""
+        try:
+            executor = executor_for(self._deps.registry, action.type)
+        except UnregisteredActionType:
+            return ExecutionResult(
+                success=False,
+                status=FAILED,
+                executor="none",
+                end_state=CLEAR,
+                code="unregistered-action-type",
+                message=f"no executor registered for {action.type}",
             )
-        self._live.clear()
-        self._deps.metrics.live_actions.set(0)
+        try:
+            return executor.enforce(action, target)
+        except Exception as exc:  # noqa: BLE001 - executor isolation by design
+            logger.exception("warden executor %s enforce raised", executor.name)
+            return ExecutionResult(
+                success=False,
+                status=FAILED,
+                executor=executor.name,
+                end_state=UNKNOWN,
+                code="executor-raised",
+                message=str(exc),
+            )
+
+    def _undo_dispatch(self, action: EdgeAction, target: str) -> ExecutionResult:
+        try:
+            executor = executor_for(self._deps.registry, action.type)
+        except UnregisteredActionType:
+            return ExecutionResult(
+                success=False,
+                status=FAILED,
+                executor="none",
+                end_state=UNKNOWN,
+                code="unregistered-action-type",
+                message=f"no executor registered for {action.type}",
+            )
+        try:
+            return executor.undo(action, target)
+        except Exception as exc:  # noqa: BLE001 - executor isolation by design
+            logger.exception("warden executor %s undo raised", executor.name)
+            return ExecutionResult(
+                success=False,
+                status=FAILED,
+                executor=executor.name,
+                end_state=UNKNOWN,
+                code="executor-raised",
+                message=str(exc),
+            )
+
+    # ------------------------------------------------------------------
+    # Undo paths — journal-driven, so allowed in every mode
+    # ------------------------------------------------------------------
+
+    def _undo(self, key: str, live: LiveAction, reason: str, *, now: datetime) -> bool:
+        """One lift attempt; True when the entry may leave the live set.
+
+        A failed lift stays live — the next tick retries it. The record
+        is a non-enforcement record (action_type ``none``; see module
+        docstring), so the wire status is ``failed`` either way and the
+        decision_rule carries the true outcome.
+        """
+        result = self._undo_dispatch(live.action, live.target)
+        self._deps.metrics.enforcements.labels(
+            status=result.status, executor=result.executor
+        ).inc()
+        self._deps.metrics.undo_total.labels(reason=reason).inc()
+        if not result.success:
+            logger.error(
+                "warden undo failed (%s): %s -> %s: %s",
+                reason,
+                key,
+                live.target,
+                result.message,
+            )
+        self._journal(
+            mode=self.machine.mode.value,
+            idempotency_key=_clip(f"{key}:undo", _KEY_LIMIT),
+            action_type="none",
+            target=_clip(live.target, _TARGET_LIMIT),
+            decision_rule=_clip(
+                f"undo of {key} ({reason}): {result.status} {result.message}".rstrip(),
+                _RULE_LIMIT,
+            ),
+            execution={
+                "status": "failed",
+                "executor": result.executor,
+                "at": _iso(now),
+            },
+            ts=_iso(now),
+        )
+        return result.success
+
+    def _undo_all(self, reason: str, *, now: datetime) -> None:
+        """Undo every live action, journaling each lift; failures retry."""
+        for key, live in list(self._live.items()):
+            if self._undo(key, live, reason, now=now):
+                del self._live[key]
+        self._deps.metrics.live_actions.set(len(self._live))
+
+    def _expire_live(self, *, now: datetime) -> None:
+        """Undo live actions whose TTL lapsed — every mode, every tick."""
+        for key, live in list(self._live.items()):
+            if now >= live.expires_at:
+                if self._undo(key, live, "ttl-expired", now=now):
+                    del self._live[key]
+        self._deps.metrics.live_actions.set(len(self._live))
+
+    def _shed_unauthorized(self, *, now: datetime) -> None:
+        """Lift live actions the pack in force no longer authorizes."""
+        pack = self._pack
+        if pack is None:
+            return
+        allowed = set(pack.autonomy_envelope.allowed_actions)
+        for key, live in list(self._live.items()):
+            if live.action.type not in allowed:
+                if self._undo(key, live, "policy-version-change", now=now):
+                    del self._live[key]
+        self._deps.metrics.live_actions.set(len(self._live))
 
     # ------------------------------------------------------------------
     # State plumbing
     # ------------------------------------------------------------------
 
-    def _install_pack(self, pack: PolicyPack) -> None:
+    def _install_pack(self, pack: PolicyPack, *, now: datetime) -> None:
         self._pack = pack
         # The budget is derived from the envelope — the only sanctioned
         # construction (budget_for), so the cap cannot drift from the pack.
@@ -493,6 +588,7 @@ class DecisionLoop:
         # Idempotent on a same-manifest re-presentation; never raises.
         if self._deps.slm is not None:
             self._deps.slm.reload_for_pack(pack)
+        self._shed_unauthorized(now=now)
 
     def _journal(self, **fields: Any) -> None:
         try:
@@ -516,6 +612,10 @@ class DecisionLoop:
     # ------------------------------------------------------------------
     # Status surface (the process's status payload reads through these)
     # ------------------------------------------------------------------
+
+    def current_policy_version(self) -> int | None:
+        """The verified pack version the loop holds — the reconciler's citation."""
+        return self._pack.policy_version if self._pack is not None else None
 
     def status(self) -> dict[str, Any]:
         """Loop facts for the process status payload."""

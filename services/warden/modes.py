@@ -13,8 +13,10 @@ Ladder (spec §Autonomy is a mode, not a switch):
 
     BOOTSTRAP ──first verified pack──▶ SYNCED ──3 missed syncs──▶ DEGRADED
     DEGRADED ──grace window lapses, pack still in force──▶ AUTONOMOUS
-    AUTONOMOUS ──link restored──▶ SYNCED (RECONCILING arrives with the
-                                     reconciler work item)
+    AUTONOMOUS ──link restored──▶ RECONCILING (the journal drains to the
+                                     control plane; enforcement blocked)
+    RECONCILING ──all batches accepted──▶ SYNCED
+    RECONCILING ──sync fails──▶ DEGRADED (the partition ladder re-arms)
     any non-BOOTSTRAP mode ──pack expiry observed──▶ PASSIVE
     any mode ──observed 401/403──▶ REVOKED (terminal)
     PASSIVE ──fresh verified pack──▶ SYNCED
@@ -45,13 +47,15 @@ class OperatingMode(str, Enum):
     SYNCED = "SYNCED"
     DEGRADED = "DEGRADED"
     AUTONOMOUS = "AUTONOMOUS"
+    RECONCILING = "RECONCILING"
     PASSIVE = "PASSIVE"
     REVOKED = "REVOKED"
 
 
 #: Modes in which local enforcement may run. v1 envelopes carry no
 #: synced-mode enforcement, so AUTONOMOUS is the only enforcing mode —
-#: SYNCED and DEGRADED observe and journal, nothing more.
+#: SYNCED, DEGRADED, and RECONCILING observe and journal, nothing more
+#: (RECONCILING runs journal-driven undos; it never enforces).
 ENFORCING_MODES = frozenset({OperatingMode.AUTONOMOUS})
 
 #: Consecutive failed syncs that take SYNCED into DEGRADED.
@@ -88,9 +92,11 @@ class ModeMachine:
 
         REVOKED is terminal: observed once, never left. A successful sync
         recovers to SYNCED from any live mode (BOOTSTRAP's first pack,
-        DEGRADED's recovery, PASSIVE's fresh authority). Failures only
-        ever count; they degrade SYNCED and leave BOOTSTRAP and PASSIVE
-        to wait for the facts that can actually move them.
+        DEGRADED's recovery, PASSIVE's fresh authority) — except from
+        AUTONOMOUS, which hands to RECONCILING: the journal drains before
+        the node may call itself SYNCED again. Failures only ever count;
+        they degrade SYNCED or RECONCILING and leave BOOTSTRAP and
+        PASSIVE to wait for the facts that can actually move them.
         """
         if self.mode is OperatingMode.REVOKED:
             return
@@ -100,16 +106,29 @@ class ModeMachine:
         if outcome.ok:
             self.missed_syncs = 0
             self._first_miss_at = None
-            self.mode = OperatingMode.SYNCED
+            if self.mode is OperatingMode.AUTONOMOUS:
+                self.mode = OperatingMode.RECONCILING
+            elif self.mode is not OperatingMode.RECONCILING:
+                self.mode = OperatingMode.SYNCED
             return
         self.missed_syncs += 1
         if self._first_miss_at is None:
             self._first_miss_at = now
         if (
-            self.mode is OperatingMode.SYNCED
+            self.mode in (OperatingMode.SYNCED, OperatingMode.RECONCILING)
             and self.missed_syncs >= self.missed_syncs_threshold
         ):
             self.mode = OperatingMode.DEGRADED
+
+    def note_reconcile_complete(self) -> None:
+        """The journal drained: RECONCILING closes back to SYNCED.
+
+        Only the Reconciler calls this — an ok sync HOLDS RECONCILING, so
+        a drained journal, not sync cadence, decides when the node may
+        re-enter the enforcing postures. No-op outside RECONCILING.
+        """
+        if self.mode is OperatingMode.RECONCILING:
+            self.mode = OperatingMode.SYNCED
 
     def note_pack_expiry(self, *, now: datetime) -> None:
         """The clock passed ``not_after`` on the verified pack.
