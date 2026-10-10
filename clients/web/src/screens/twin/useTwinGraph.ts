@@ -287,8 +287,14 @@ export function useTwinGraph(): {
   const [error, setError] = useState<string | null>(null)
   const requestRef = useRef(0)
   const liveRef = useRef(true)
-  useEffect(() => () => {
-    liveRef.current = false
+  useEffect(() => {
+    // StrictMode's simulated unmount disarms this guard; the second (real)
+    // mount must re-arm it or every response is discarded and the screen
+    // sits in Loading forever.
+    liveRef.current = true
+    return () => {
+      liveRef.current = false
+    }
   }, [])
 
   const run = useCallback(async (mode: 'full' | 'refresh') => {
