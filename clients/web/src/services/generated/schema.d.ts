@@ -3748,6 +3748,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/fast-path/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Fast Path Actions
+         * @description List every speculative-era action the fast path created, newest first.
+         */
+        get: operations["get_api_fast-path_actions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/fast-path/actions/{action_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Fast Path Action
+         * @description Release a live speculative restriction now, as a person's decision.
+         *
+         *     Rides the rollback service's release verb unchanged — the same guarded
+         *     claim the adjudicator and the TTL sweep race through — and records the
+         *     session user as the resolver. The restriction is lifted through the
+         *     enforcement adapter before the row is marked; a lifted-something-else
+         *     is never reported as a release.
+         */
+        post: operations["post_api_fast-path_actions_action_id_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/federation/health": {
         parameters: {
             query?: never;
@@ -10306,6 +10352,70 @@ export interface components {
         ExclusionRemove: {
             /** Reason */
             reason?: string | null;
+        };
+        /**
+         * FastPathAction
+         * @description One speculative-era ledger row as the console renders it.
+         */
+        FastPathAction: {
+            /** Action Id */
+            action_id: string;
+            /** Action Type */
+            action_type: string;
+            /** Confidence */
+            confidence?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Escalation */
+            escalation?: {
+                [key: string]: unknown;
+            } | null;
+            /** Evidence */
+            evidence?: unknown[] | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Outcome */
+            outcome?: {
+                [key: string]: unknown;
+            } | null;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Simulated
+             * @default false
+             */
+            simulated: boolean;
+            /** Status */
+            status: string;
+            /** Target */
+            target?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** FastPathListResponse */
+        FastPathListResponse: {
+            /** Actions */
+            actions?: components["schemas"]["FastPathAction"][];
+            /** Count */
+            count: number;
+            /** Counts */
+            counts?: {
+                [key: string]: number;
+            };
+        };
+        /** FastPathReleaseResponse */
+        FastPathReleaseResponse: {
+            action?: components["schemas"]["FastPathAction"] | null;
+            /** Detail */
+            detail: string;
+            /** Released */
+            released: boolean;
         };
         /** FederationGlobalSettings */
         FederationGlobalSettings: {
@@ -19316,6 +19426,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExclusionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_fast-path_actions": {
+        parameters: {
+            query?: {
+                /** @description Filter by status: speculative | rolled_back | escalated | failed. */
+                status?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastPathListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_fast-path_actions_action_id_release": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                action_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FastPathReleaseResponse"];
                 };
             };
             /** @description Validation Error */
