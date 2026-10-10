@@ -6,6 +6,28 @@ import '../auth/errors.dart';
 import '../auth/session.dart';
 import '../auth/token_store.dart';
 import '../auth/vigil_authenticator.dart';
+import 'config_api.dart';
+
+/// Builds a [VigilClient] for a server. Injectable so tests script the
+/// transport — one adapter captures every request the app makes, across
+/// every client a session (or onboarding flow) builds.
+typedef VigilClientFactory = VigilClient Function({
+  required String baseUrl,
+  required TokenStore tokenStore,
+  required String userAgent,
+});
+
+/// Production factory — real secure storage, default HTTP transport.
+VigilClient defaultClientFactory({
+  required String baseUrl,
+  required TokenStore tokenStore,
+  required String userAgent,
+}) =>
+    VigilClient(
+      baseUrl: baseUrl,
+      tokenStore: tokenStore,
+      userAgent: userAgent,
+    );
 
 /// Composition root for the Vigil data plane.
 ///
@@ -58,6 +80,7 @@ class VigilClient {
     authenticator.attach(_apiDio);
 
     v1 = VigilApiV1(dio: _apiDio);
+    config = ConfigApi(dio: _apiDio);
   }
 
   final TokenStore _tokenStore;
@@ -68,6 +91,11 @@ class VigilClient {
 
   /// Generated client for the frozen `/api/v1` contract.
   late final VigilApiV1 v1;
+
+  /// Console-surface config endpoints the shell needs (theme persistence).
+  /// Bare `/api` carries no stability promise — the accepted exception,
+  /// like [auth] — so only the calls with console parity live here.
+  late final ConfigApi config;
 
   /// Whether a session is stored on this device (drives the sign-in gate).
   Future<bool> get hasSession async => (await _tokenStore.readAccess()) != null;
@@ -101,14 +129,49 @@ class VigilClient {
     return auth.me(accessToken: token);
   }
 
+  /// Rebuilds the signed-in user from stored tokens after an app restart:
+  /// `/auth/me` with the stored access token; on 401, one refresh-then-retry
+  /// — the same one-shot rule the interceptor applies to `/api/v1` calls
+  /// (`/auth/me` runs on the bare auth Dio, so it cannot rely on it).
+  /// Returns null when there is no stored session or it is revoked
+  /// (consumed jti / blacklist) — sign-in required.
+  Future<UserProfile?> restoreSession() async {
+    final access = await _tokenStore.readAccess();
+    if (access == null) return null;
+    try {
+      return await auth.me(accessToken: access);
+    } on DioException catch (e) {
+      if (e.response?.statusCode != 401) rethrow;
+      final refresh = await _tokenStore.readRefresh();
+      if (refresh == null) return null;
+      try {
+        final session = await auth.refresh(refreshToken: refresh);
+        await _tokenStore.save(
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+        );
+        return await auth.me(accessToken: session.accessToken);
+      } on AuthRevoked {
+        await _tokenStore.clear();
+        return null;
+      }
+    }
+  }
+
   /// Revokes both tokens server-side (refresh token in the body — bearer
   /// clients have no cookie fallback) and clears local state.
   Future<void> signOut() async {
-    final access = await _tokenStore.readAccess();
-    final refresh = await _tokenStore.readRefresh();
-    if (access != null && refresh != null) {
-      await auth.logout(accessToken: access, refreshToken: refresh);
+    try {
+      final access = await _tokenStore.readAccess();
+      final refresh = await _tokenStore.readRefresh();
+      if (access != null && refresh != null) {
+        await auth.logout(accessToken: access, refreshToken: refresh);
+      }
+    } finally {
+      // The local session ends even when the revocation call fails
+      // (offline): an orphaned refresh token dies at its TTL, and a
+      // successful sign-in here replaces it.
+      await _tokenStore.clear();
     }
-    await _tokenStore.clear();
   }
 }

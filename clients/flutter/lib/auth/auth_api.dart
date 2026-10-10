@@ -102,6 +102,61 @@ class AuthApi {
     }
   }
 
+  /// GET `/api/auth/bootstrap` — whether the instance still needs its first
+  /// account. There is no self-service signup, so an empty instance cannot
+  /// be signed into at all; onboarding offers first-admin creation instead.
+  Future<bool> bootstrapRequired() async {
+    final res = await _dio.get<Map<String, dynamic>>(
+      '/api/auth/bootstrap',
+      options: _options(),
+    );
+    return res.data?['required'] == true;
+  }
+
+  /// POST `/api/auth/bootstrap` — creates the first admin account (201) and
+  /// returns its profile (no tokens: the caller signs in right after).
+  /// Throws [BootstrapClosed] once any account exists (403 — the endpoint
+  /// closes permanently) and [BootstrapRejected] when the password policy
+  /// refuses (400 — the message carries the policy reason).
+  Future<UserProfile> bootstrap({
+    required String username,
+    required String email,
+    required String password,
+    String? fullName,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/bootstrap',
+        data: {
+          'username': username,
+          'email': email,
+          'password': password,
+          if (fullName != null && fullName.isNotEmpty) 'full_name': fullName,
+        },
+        options: _options(),
+      );
+      return UserProfile.fromBody(res.data!);
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final detail = _detail(e);
+      switch (status) {
+        case 403:
+          throw BootstrapClosed(
+            detail: detail ?? 'An account already exists.',
+          );
+        case 400:
+          throw BootstrapRejected(
+            detail: detail ?? 'The password was rejected.',
+          );
+        default:
+          throw UnexpectedAuthResponse(
+            detail ?? 'Could not create the account',
+            statusCode: status,
+          );
+      }
+    }
+  }
+
   /// GET `/api/auth/me` — the current user with the resolved permissions map
   /// the shell gates navigation on.
   Future<UserProfile> me({required String accessToken}) async {
