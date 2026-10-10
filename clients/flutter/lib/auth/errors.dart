@@ -67,3 +67,29 @@ class BootstrapClosed extends VigilAuthException {
 class UnexpectedAuthResponse extends VigilAuthException {
   UnexpectedAuthResponse(super.message, {super.statusCode});
 }
+
+/// 401 from change-password — the current password did not verify. Nothing
+/// was changed; the form stays open.
+class CurrentPasswordRejected extends VigilAuthException {
+  CurrentPasswordRejected({super.statusCode = 401})
+      : super('Current password is incorrect');
+}
+
+/// 400 from change-password — the new password failed the server's strength
+/// policy. [detail] carries the server's reason (it names the rule).
+class PasswordPolicyRejected extends VigilAuthException {
+  PasswordPolicyRejected({required String detail})
+      : super(detail, statusCode: 400);
+}
+
+/// 400 from POST /mfa/verify — the TOTP code did not verify; MFA stays off.
+class InvalidMfaCode extends VigilAuthException {
+  InvalidMfaCode({super.statusCode = 400}) : super('Invalid MFA code');
+}
+
+/// 400 from POST /mfa/recovery-codes — MFA is not set up (or was disabled
+/// elsewhere while this screen was open).
+class MfaNotSetUp extends VigilAuthException {
+  MfaNotSetUp({super.statusCode = 400})
+      : super('MFA is not set up for this user');
+}

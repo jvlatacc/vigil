@@ -6,9 +6,12 @@ import 'auth/session.dart';
 import 'auth/token_store.dart';
 import 'auth/user_agent.dart';
 import 'onboarding/onboarding_flow.dart';
+import 'onboarding/server_probe.dart';
 import 'onboarding/server_profile.dart';
 import 'onboarding/sign_in_pane.dart';
+import 'settings/notification_preferences.dart';
 import 'settings/scheme_controller.dart';
+import 'settings/settings_screen.dart';
 import 'shell/screens.dart';
 import 'shell/vigil_shell.dart';
 import 'theme/extensions.dart';
@@ -29,14 +32,18 @@ class VigilApp extends StatefulWidget {
     super.key,
     ServerProfileStore? profileStore,
     TokenStore? tokenStore,
+    NotificationPreferencesStore? notificationPreferencesStore,
     VigilClientFactory clientFactory = defaultClientFactory,
     this.initialRoute,
   })  : profileStore = profileStore ?? SecureServerProfileStore(),
         tokenStore = tokenStore ?? SecureTokenStore(),
+        notificationPreferencesStore =
+            notificationPreferencesStore ?? SecureNotificationPreferencesStore(),
         _clientFactoryOverride = clientFactory;
 
   final ServerProfileStore profileStore;
   final TokenStore tokenStore;
+  final NotificationPreferencesStore notificationPreferencesStore;
   final VigilClientFactory _clientFactoryOverride;
   final String? initialRoute;
 
@@ -49,9 +56,11 @@ enum _Phase { booting, onboarding, signIn, ready, bootError }
 class _VigilAppState extends State<VigilApp> {
   late final ServerProfileStore _profileStore;
   late final TokenStore _tokenStore;
+  late final NotificationPreferencesStore _notificationPrefs;
   late final VigilClientFactory _clientFactory;
 
   VigilClient? _client;
+  ServerProfile? _profile;
   UserProfile? _user;
   SchemeController? _scheme;
   VigilScreen? _deepLink;
@@ -62,6 +71,7 @@ class _VigilAppState extends State<VigilApp> {
     super.initState();
     _profileStore = widget.profileStore;
     _tokenStore = widget.tokenStore;
+    _notificationPrefs = widget.notificationPreferencesStore;
     _clientFactory = widget._clientFactoryOverride;
     _deepLink = screenFromRoute(widget.initialRoute);
     _restore();
@@ -95,6 +105,7 @@ class _VigilAppState extends State<VigilApp> {
         setState(() => _phase = _Phase.onboarding);
         return;
       }
+      _profile = profile;
       final client = _clientFor(profile);
       final user = await client.restoreSession();
       if (!mounted) return;
@@ -150,6 +161,31 @@ class _VigilAppState extends State<VigilApp> {
     });
   }
 
+  /// Re-reads /auth/me after a settings-side state change (MFA toggled) so
+  /// the shell's gating and chips reflect the server's answer.
+  Future<void> _refreshUser() async {
+    final user = await _client?.restoreSession();
+    if (user == null || !mounted) return;
+    setState(() => _user = user);
+  }
+
+  /// The user pointed the app at a different server: persist the profile,
+  /// rebuild the client, and require sign-in against the new server — the
+  /// old session's tokens are meaningless there.
+  Future<void> _switchServer(ServerProfile profile) async {
+    await _profileStore.save(profile);
+    if (!mounted) return;
+    setState(() {
+      _profile = profile;
+      _client = _clientFor(profile);
+      _user = null;
+      _deepLink = null;
+      _scheme?.dispose();
+      _scheme = null;
+      _phase = _Phase.signIn;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = _scheme;
@@ -173,6 +209,11 @@ class _VigilAppState extends State<VigilApp> {
             clientFactory: _clientFactory,
             onFinished: (client, session) {
               _client = client;
+              // The flow saved the profile before handing over; read it back
+              // so the settings pane shows the server this session talks to.
+              _profileStore.read().then((profile) {
+                if (mounted) setState(() => _profile = profile);
+              });
               _enterShell(session.user);
             },
           ),
@@ -201,12 +242,46 @@ class _VigilAppState extends State<VigilApp> {
         onSignOut: _signOut,
       );
     }
+    final profile = _profile;
     return VigilShell(
       user: user,
       initialScreen: target ?? _landing(user),
       scheme: _scheme,
       onSignOut: _signOut,
+      settingsPane: profile == null
+          ? null
+          : SettingsScreen(
+              client: _client!,
+              user: user,
+              profile: profile,
+              scheme: _scheme,
+              notifications: _notificationPrefs,
+              probeServer: _probeServer,
+              onServerChanged: _switchServer,
+              onSignOut: _signOut,
+              onMfaToggled: _refreshUser,
+              // The watch companion's token handoff lands with the watch
+              // task; until then the card shows its honest not-yet state.
+              onPairWatch: null,
+            ),
     );
+  }
+
+  /// Probes a candidate server the way onboarding does — a throwaway
+  /// client, never the session's tokens. Transport and NotVigilServer
+  /// failures propagate to the section for translation.
+  Future<Map<String, dynamic>> _probeServer(String url) {
+    final profile = ServerProfile.tryParse(url);
+    if (profile == null) {
+      return Future.error(
+          const FormatException('Enter a URL like https://host:6987'));
+    }
+    final probeFactory = defaultProbeClientFactory(
+      clientFactory: _clientFactory,
+      userAgent: vigilUserAgent(),
+    );
+    return probeVigilHealth(
+        profile: profile, probe: probeFactory(profile.baseUrl));
   }
 
   /// First destination the role can see (Ask Vigil is ungated, so this

@@ -71,6 +71,13 @@ class VigilTypography {
     fontFamily: monoFamily,
   );
 
+  /// Roboto Mono — secrets, codes, and other copy-as-data (DESIGN.md §6).
+  static const TextStyle mono = TextStyle(
+    fontSize: 12.5,
+    fontWeight: FontWeight.w400,
+    fontFamily: monoFamily,
+  );
+
   /// Styles keyed by token name (parity-test surface).
   static const Map<String, TextStyle> byName = {
     'page-title': pageTitle,

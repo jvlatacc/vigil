@@ -51,6 +51,16 @@ void main() {
     );
   }
 
+  /// Pins the view metrics for a golden capture — without this the pixel
+  /// ratio comes from the ambient test default, which varies by host and
+  /// makes every golden environment-dependent. Call before setSurfaceSize.
+  void pinView(WidgetTester tester, Size size) {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = size;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+  }
+
   /// A user the shell renders with — every gated screen visible, so the
   /// chrome goldens show the full destination set.
   const approver = UserProfile(
@@ -73,10 +83,7 @@ void main() {
     Size size, {
     Brightness brightness = Brightness.dark,
   }) async {
-    tester.view.devicePixelRatio = 1.0;
-    tester.view.physicalSize = size;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+    pinView(tester, size);
     await tester.binding.setSurfaceSize(size);
     addTearDown(() => tester.binding.setSurfaceSize(null));
     // MaterialApp supplies MaterialLocalizations and the default text
@@ -97,6 +104,7 @@ void main() {
   }
 
   testWidgets('color swatches render every token, dark scheme', (tester) async {
+    pinView(tester, const Size(720, 760));
     await tester.binding.setSurfaceSize(const Size(720, 760));
     await tester
         .pumpWidget(surface(const SwatchGallery(colors: VigilColors.dark)));
@@ -108,6 +116,7 @@ void main() {
 
   testWidgets('color swatches render every token, light scheme',
       (tester) async {
+    pinView(tester, const Size(720, 760));
     await tester.binding.setSurfaceSize(const Size(720, 760));
     await tester.pumpWidget(
       surface(const SwatchGallery(colors: VigilColors.light),
@@ -120,6 +129,7 @@ void main() {
   });
 
   testWidgets('the 82-icon line set renders', (tester) async {
+    pinView(tester, const Size(720, 720));
     await tester.binding.setSurfaceSize(const Size(720, 720));
     await tester.pumpWidget(surface(const IconGallery()));
     await expectLater(
@@ -129,6 +139,7 @@ void main() {
   });
 
   testWidgets('the token type ramp renders', (tester) async {
+    pinView(tester, const Size(480, 560));
     await tester.binding.setSurfaceSize(const Size(480, 560));
     await tester.pumpWidget(surface(
       const TypeRampGallery(),

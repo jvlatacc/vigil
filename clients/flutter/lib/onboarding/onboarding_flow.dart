@@ -10,14 +10,9 @@ import '../theme/vigil_icon.dart';
 import '../theme/vigil_icons.dart';
 import '../theme/vigil_typography.dart';
 import 'bootstrap_pane.dart';
+import 'server_probe.dart';
 import 'server_profile.dart';
 import 'sign_in_pane.dart';
-
-/// The response answered, but not with a Vigil `/api/health` payload — a
-/// URL valid as HTTP but not pointing at Vigil.
-class _NotVigil implements Exception {
-  const _NotVigil();
-}
 
 /// Fresh-install onboarding, mirroring the console's SetupGate
 /// (setup once, then console): pick the server, then either create the
@@ -86,8 +81,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         tokenStore: widget.tokenStore,
         userAgent: widget.userAgent,
       );
-      final health = await client.auth.health();
-      if (!health.containsKey('version')) throw const _NotVigil();
+      await probeVigilHealth(
+        profile: profile,
+        probe: client.auth.health,
+      );
       final needsBootstrap = await client.auth.bootstrapRequired();
       await widget.profileStore.save(profile);
       if (!mounted) return;
@@ -103,7 +100,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> {
         _busy = false;
         _error = "Couldn't reach a Vigil server at ${profile.baseUrl}.";
       });
-    } on _NotVigil {
+    } on NotVigilServer {
       if (!mounted) return;
       setState(() {
         _busy = false;
