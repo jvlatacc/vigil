@@ -105,3 +105,22 @@ forbidden_modules =
     services.api
     services.daemon
     services.worker
+    services.warden
+
+[importlinter:contract:warden]
+name = Warden is edge-deployable: from core it imports only the edge domain — no
+ storage, no Redis queues, no control-plane internals
+; core.edge (signed-policy verification, decision ladder, journal hashing,
+; enrollment charset) is the shared surface both sides of the mesh import;
+; everything else under core assumes the control plane's DB and Redis. The
+; forbidden contract lists `core` wholesale — fail-closed for domains added
+; later — and ignore_imports carves out exactly core.edge. Unmatched ignore
+; expressions fail the run (import-linter's default), so a rename that
+; outdates the carve-out is loud, not silent.
+type = forbidden
+source_modules =
+    services.warden
+forbidden_modules =
+    core
+ignore_imports =
+    services.warden.** -> core.edge.**
