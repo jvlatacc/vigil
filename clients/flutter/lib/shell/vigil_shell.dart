@@ -21,6 +21,7 @@ class VigilShell extends StatefulWidget {
     required this.initialScreen,
     required this.onSignOut,
     this.scheme,
+    this.settingsPane,
   });
 
   final UserProfile user;
@@ -31,6 +32,11 @@ class VigilShell extends StatefulWidget {
 
   /// The server-persisted color scheme; null hides the app-bar toggle.
   final SchemeController? scheme;
+
+  /// The Settings pane, built by the app root (which owns the client, the
+  /// profile, and the scheme). Null keeps the honest placeholder — the
+  /// pane lands with the settings port task.
+  final Widget? settingsPane;
 
   final VoidCallback onSignOut;
 
@@ -193,6 +199,9 @@ class _VigilShellState extends State<VigilShell> {
   }
 
   Widget _withRail(VigilColors colors) {
+    // NavigationRail requires two or more destinations — a role with a
+    // single visible screen gets the pane alone (nothing to switch to).
+    if (_visible.length < 2) return _pane(colors);
     return Row(
       children: [
         NavigationRail(
@@ -216,6 +225,9 @@ class _VigilShellState extends State<VigilShell> {
 
   Widget _pane(VigilColors colors) {
     if (_screen == VigilScreen.home) return _homePane(colors);
+    if (_screen == VigilScreen.settings && widget.settingsPane != null) {
+      return widget.settingsPane!;
+    }
     return _placeholderPane(colors, _screen);
   }
 

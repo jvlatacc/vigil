@@ -86,6 +86,11 @@ class VigilClient {
   final TokenStore _tokenStore;
   late final Dio _apiDio;
 
+  /// The session's token store — read-only access for callers of the
+  /// bare-Dio auth endpoints (change-password, MFA), which take the current
+  /// access token explicitly rather than routing through the interceptor.
+  TokenStore get tokenStore => _tokenStore;
+
   /// Hand-written auth endpoints (`/api/auth/*`, `/api/health`).
   late final AuthApi auth;
 

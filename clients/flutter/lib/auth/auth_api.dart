@@ -167,6 +167,118 @@ class AuthApi {
     return UserProfile.fromBody(res.data!);
   }
 
+  /// POST `/api/auth/change-password` — verifies the current password, applies
+  /// the strength policy, and revokes every outstanding token for the user:
+  /// a successful change ends this session server-side and the caller must
+  /// return the user to sign-in. Throws [CurrentPasswordRejected] (401) and
+  /// [PasswordPolicyRejected] (400, with the server's reason).
+  Future<void> changePassword({
+    required String accessToken,
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await _dio.post<void>(
+        '/api/auth/change-password',
+        data: {
+          'current_password': currentPassword,
+          'new_password': newPassword,
+        },
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+    } on DioException catch (e) {
+      final detail = _detail(e);
+      switch (e.response?.statusCode) {
+        case 401:
+          throw CurrentPasswordRejected(statusCode: 401);
+        case 400:
+          throw PasswordPolicyRejected(
+            detail: detail ?? 'The new password was rejected.',
+          );
+        default:
+          throw UnexpectedAuthResponse(
+            detail ?? 'Could not change the password',
+            statusCode: e.response?.statusCode,
+          );
+      }
+    }
+  }
+
+  /// POST `/api/auth/mfa/setup` — begins TOTP enrollment: a secret to enter
+  /// into an authenticator app and the matching `otpauth://` URI. Codes are
+  /// not issued here; [mfaVerify] returns them once the first TOTP confirms.
+  Future<MfaSetup> mfaSetup({required String accessToken}) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/mfa/setup',
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+      return MfaSetup.fromBody(res.data!);
+    } on DioException catch (e) {
+      throw UnexpectedAuthResponse(
+        _detail(e) ?? 'Could not start MFA setup',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  /// POST `/api/auth/mfa/verify` — confirms the first TOTP code and enables
+  /// MFA, returning the one-time recovery codes. Throws [InvalidMfaCode] on
+  /// 400; the enrollment stays open.
+  Future<RecoveryCodes> mfaVerify({
+    required String accessToken,
+    required String code,
+  }) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/mfa/verify',
+        data: {'code': code},
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+      return RecoveryCodes.fromBody(res.data!);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 400) throw InvalidMfaCode(statusCode: 400);
+      throw UnexpectedAuthResponse(
+        _detail(e) ?? 'Could not verify the code',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  /// POST `/api/auth/mfa/recovery-codes` — a fresh set of one-time codes,
+  /// invalidating any previous set. Requires MFA to already be enabled;
+  /// throws [MfaNotSetUp] on 400.
+  Future<RecoveryCodes> mfaRecoveryCodes({required String accessToken}) async {
+    try {
+      final res = await _dio.post<Map<String, dynamic>>(
+        '/api/auth/mfa/recovery-codes',
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+      return RecoveryCodes.fromBody(res.data!);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 400) throw MfaNotSetUp(statusCode: 400);
+      throw UnexpectedAuthResponse(
+        _detail(e) ?? 'Could not generate recovery codes',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  /// DELETE `/api/auth/mfa` — turns MFA off for the account.
+  Future<void> mfaDisable({required String accessToken}) async {
+    try {
+      await _dio.delete<void>(
+        '/api/auth/mfa',
+        options: _options(extra: {'authorization': 'Bearer $accessToken'}),
+      );
+    } on DioException catch (e) {
+      throw UnexpectedAuthResponse(
+        _detail(e) ?? 'Could not disable MFA',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   /// GET `/api/health` — public liveness probe, also used to validate a
   /// server URL during onboarding. Returns the payload (includes version).
   Future<Map<String, dynamic>> health() async {
