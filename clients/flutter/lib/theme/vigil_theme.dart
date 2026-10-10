@@ -243,5 +243,17 @@ ThemeData buildVigilThemeData(Brightness brightness) {
       unselectedLabelTextStyle:
           VigilTypography.label.copyWith(color: colors.tx2),
     ),
+    // Material 3 button defaults don't reliably inherit ThemeData's
+    // fontFamily — pin the ramp's label style so buttons render Plus
+    // Jakarta Sans everywhere, not the platform fallback.
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(textStyle: VigilTypography.label),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(textStyle: VigilTypography.label),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(textStyle: VigilTypography.label),
+    ),
   );
 }
