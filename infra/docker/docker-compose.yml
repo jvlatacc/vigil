@@ -898,6 +898,69 @@ services:
     profiles:
       - misp
 
+  # ============================================================================
+  # Warden — edge containment runtime (Local Autonomy Mesh)
+  # ============================================================================
+  # Opt-in: docker compose --profile edge up warden. One Warden per defended
+  # host/segment — this service suits a single-node edge appliance or local
+  # bring-up; cluster deployments use the warden DaemonSet in infra/helm/vigil.
+  #
+  # Deliberately NOT wired to postgres/redis: the edge runtime speaks HTTP to
+  # the control plane (backend) and keeps state in its own volume.
+  warden:
+    profiles: [edge]
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.warden
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: deeptempo-warden
+    environment:
+      # Control plane (policy fetch + journal reconcile): the backend service
+      # from the default set.
+      WARDEN_CONTROL_PLANE_URL: ${WARDEN_CONTROL_PLANE_URL:-http://backend:6987}
+      # Operator-provided trust root for offline pack verification, mounted
+      # read-only below. A missing root keeps Warden in BOOTSTRAP (fail-closed).
+      WARDEN_TRUST_ROOT_PATH: /etc/vigil/warden/trust-root.json
+      WARDEN_DATA_DIR: /var/lib/vigil-warden
+      # Enrollment: the one-time token is needed on first start only; an
+      # already-enrolled node restarting needs its node id (env.example →
+      # Warden Edge Runtime).
+      WARDEN_NODE_ID: ${WARDEN_NODE_ID:-}
+      WARDEN_ENROLLMENT_TOKEN: ${WARDEN_ENROLLMENT_TOKEN:-}
+      WARDEN_SEGMENT_LABELS: ${WARDEN_SEGMENT_LABELS:-segment:local}
+      # Local alert intake (Sentinel) — fail-closed without its token.
+      WARDEN_SENTINEL_TOKEN: ${WARDEN_SENTINEL_TOKEN:-}
+      # 0.0.0.0 so probes, scrapers and alert producers reach the listeners.
+      WARDEN_BIND_HOST: 0.0.0.0
+      WARDEN_LOG_LEVEL: ${WARDEN_LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8091:8091"              # Sentinel alert intake (bearer-token gated)
+      - "127.0.0.1:9092:9092"    # Health /health (unauthenticated; host-local)
+      - "127.0.0.1:9093:9093"    # Prometheus /metrics
+    volumes:
+      - warden_data:/var/lib/vigil-warden
+      # Read-only trust material, separate from the writable state volume.
+      # Docker creates a directory at a missing bind source — an absent root
+      # fails pack verification and Warden reports BOOTSTRAP, by design.
+      - ${WARDEN_TRUST_ROOT_FILE:-/etc/vigil/warden/trust-root.json}:/etc/vigil/warden/trust-root.json:ro
+    # The image is built for a read-only root filesystem: the only write path
+    # is the data volume.
+    read_only: true
+    # Default posture: no capabilities granted, so the executor registry runs
+    # DryRun — every decision still journals, nothing blocks. An operator
+    # standing Warden up on a real gateway switches the nftables executor on:
+    #
+    #   cap_add:
+    #     - NET_ADMIN
+    #
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - deeptempo-network
+
 volumes:
   postgres_data:
     driver: local
@@ -934,6 +997,9 @@ volumes:
   misp_files:
     driver: local
   misp_logs:
+    driver: local
+  # Warden edge runtime: policy store + hash-chained decision journal.
+  warden_data:
     driver: local
 
 networks:

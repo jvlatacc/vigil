@@ -91,6 +91,22 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
     "VIGIL_DIR",
+    # Warden (services/warden) reads its configuration with WardenConfig.from_env()
+    # straight from the process environment: the edge runtime has no Settings
+    # object (it must not import core.config; see the import-linter contract).
+    # The complete list lives in services/warden/config.py.
+    "WARDEN_BIND_HOST",
+    "WARDEN_CONTROL_PLANE_URL",
+    "WARDEN_DATA_DIR",
+    "WARDEN_ENROLLMENT_TOKEN",
+    "WARDEN_HEALTH_PORT",
+    "WARDEN_METRICS_PORT",
+    "WARDEN_NODE_ID",
+    "WARDEN_SENTINEL_PORT",
+    "WARDEN_SENTINEL_TOKEN",
+    "WARDEN_SEGMENT_LABELS",
+    "WARDEN_SYNC_INTERVAL_SECONDS",
+    "WARDEN_TRUST_ROOT_PATH",
 }
 
 
