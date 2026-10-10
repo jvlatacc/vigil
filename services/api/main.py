@@ -68,6 +68,12 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset(
         # First-run account creation — unauthenticated by necessity; only ever
         # live on an empty instance (see services/api/routers/auth.py bootstrap).
         "/api/auth/bootstrap",
+        # Federated sign-in: the redirect out to the IdP and the callback
+        # back (see services/api/routers/auth.py oidc_login/oidc_callback).
+        # Gated at request time — both answer 404 unless OIDC federation
+        # is configured and enabled, so off is the default install.
+        "/api/auth/oidc/login",
+        "/api/auth/oidc/callback",
         # Health check — used by load balancers and Docker.
         "/api/health",
         "/api/health/ready",

@@ -6,8 +6,9 @@ import os
 import platform
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from core.config import vigil_path
 from core.detections.detection_rules_service import DetectionRulesService
@@ -32,6 +33,12 @@ _PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::-((?:\$\{[^}]+\}|[^{}])*))?\}")
 # Backwards-compatible alias: the extractor matches the same grammar the
 # substitution engine does.
 _ENV_PLACEHOLDER_RE = _PLACEHOLDER_RE
+
+# The substitution grammar above is deliberately permissive (any-name
+# ${var:-default}); a secret NAME must stay a strict env identifier. The
+# client_secret_env check leans on this pattern, not on the substitution
+# grammar, so loosening substitution can never let a malformed name through.
+_STRICT_ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 # Placeholders that are path sentinels, not credentials — never treat as
 # required env vars.
@@ -90,17 +97,39 @@ def extract_required_env_vars(
     return sorted(found)
 
 
+@dataclass(frozen=True)
+class OAuthConnectorConfig:
+    """A connector's OAuth client registration, declared in mcp-config.json.
+
+    ``client_secret_env`` names the secret, it never carries the value: the
+    value resolves through ``get_secret`` at use — the one credential-read
+    channel.
+    """
+
+    client_id: str
+    client_secret_env: Optional[str] = None
+    scopes: Tuple[str, ...] = ()
+
+    def client_secret(self) -> Optional[str]:
+        """The registered secret, resolved through the credential channel."""
+        if not self.client_secret_env:
+            return None
+        return get_secret(self.client_secret_env)
+
+
 class MCPServer:
     """Represents an MCP server process."""
 
     def __init__(
         self,
         name: str,
-        command: str,
+        command: Optional[str],
         args: List[str],
         cwd: str,
         env: Dict[str, str],
         required_env_vars: Optional[List[str]] = None,
+        http_url: Optional[str] = None,
+        oauth: Optional[OAuthConnectorConfig] = None,
     ):
         self.name = name
         self.command = command
@@ -110,6 +139,16 @@ class MCPServer:
         # Credential placeholders declared in mcp-config.json for this
         # server. Read by mcp_client.connect_to_server at connect time.
         self.required_env_vars: List[str] = list(required_env_vars or [])
+        # An HTTP-capable connector dispatches over Streamable HTTP instead
+        # of a spawned child; ``oauth`` carries its client registration and
+        # is None for a connector that accepts a static bearer or none.
+        self.http_url: Optional[str] = http_url
+        self.oauth: Optional[OAuthConnectorConfig] = oauth
+
+    @property
+    def is_http(self) -> bool:
+        """Whether this connector dispatches over Streamable HTTP."""
+        return self.http_url is not None
 
 
 class MCPService:
@@ -220,7 +259,7 @@ class MCPService:
         return {name: self.is_server_enabled(name) for name in self.servers}
 
     def _substitute_env_vars(
-        self, value: str, env: Optional[Dict[str, str]] = None
+        self, value: str, env: Optional[Mapping[str, str]] = None
     ) -> str:
         """Expand ``${VAR}`` and ``${VAR:-default}`` in a config string.
 
@@ -293,6 +332,81 @@ class MCPService:
         re-substituted into the init-time-cached spawn args."""
         self._initialize_servers()
 
+    def _http_server_config(
+        self, server_name: str, server_config: Mapping
+    ) -> Tuple[Optional[Dict], Optional[str]]:
+        """Parse one HTTP-capable connector entry.
+
+        Returns ``(config, None)`` when the entry declares a well-formed
+        ``http`` block, ``(None, None)`` when the entry is a stdio server,
+        and ``(None, reason)`` for a malformed http block — malformed must
+        skip the server rather than fall through to stdio parsing, which
+        would spawn a pointless default command.
+        """
+        http_cfg = server_config.get("http")
+        if not isinstance(http_cfg, dict) or not http_cfg:
+            return None, None
+
+        # Substitution sources mirror the stdio path: the backend's own
+        # environment, so `${CONNECTOR_MCP_URL}` from an integration's
+        # connectorUrl resolves exactly as it does for a spawned server.
+        # Read-only use — no child env is built here (nothing spawns), so
+        # the CA-bundle forwarding the child-env ratchet requires does not
+        # apply to this site.
+        env = os.environ  # noqa: ENV001
+
+        raw_url = str(http_cfg.get("url") or "")
+        url = self._substitute_env_vars(raw_url, env)
+
+        raw_auth = http_cfg.get("auth") or {}
+        if not isinstance(raw_auth, dict):
+            raw_auth = {}
+        auth_type = raw_auth.get("type")
+        raw_client_id = str(raw_auth.get("client_id") or "")
+
+        error = None
+        if not raw_url or not url:
+            error = "http.url is missing or empty"
+        elif auth_type != "oauth":
+            error = "http.auth.type must be 'oauth' (only the MCP authorization model is supported)"
+        elif not raw_client_id or not self._substitute_env_vars(raw_client_id, env):
+            error = "http.auth.client_id is missing or empty"
+        if error:
+            return None, error
+
+        client_id = self._substitute_env_vars(raw_client_id, env)
+        raw_secret_env = raw_auth.get("client_secret_env")
+        client_secret_env = str(raw_secret_env).strip() if raw_secret_env else None
+        # Secret values are never declared inline: the entry names the
+        # secret's env var, and the value resolves through get_secret.
+        if raw_secret_env and not _STRICT_ENV_NAME_RE.fullmatch(
+            client_secret_env or ""
+        ):
+            return None, "http.auth.client_secret_env must name an env var"
+
+        scopes = tuple(str(s) for s in raw_auth.get("scopes") or [])
+        required = extract_required_env_vars({}, [raw_url, raw_client_id])
+        if client_secret_env:
+            required = sorted(set(required) | {client_secret_env})
+
+        return (
+            {
+                "name": server_name,
+                "command": None,
+                "args": [],
+                "cwd": str(self.project_root),
+                "env": {},
+                "required_env_vars": required,
+                "http_url": url,
+                "oauth": OAuthConnectorConfig(
+                    client_id=client_id,
+                    client_secret_env=client_secret_env,
+                    scopes=scopes,
+                ),
+            },
+            None,
+        )
+
     def _initialize_servers(self):
         """
         Initialize MCP server configurations from mcp-config.json.
@@ -325,6 +439,22 @@ class MCPService:
                 ).items():
                     # Skip comment keys
                     if server_name.startswith("_comment"):
+                        continue
+
+                    # An HTTP-capable connector declares an "http" block
+                    # instead of a spawn command: it dispatches over
+                    # Streamable HTTP (see client.py) and must be handled
+                    # here, before any stdio parsing could misread it.
+                    http_entry, http_error = self._http_server_config(
+                        server_name, server_config
+                    )
+                    if http_error:
+                        logger.error(
+                            "Skipping MCP server %s: %s", server_name, http_error
+                        )
+                        continue
+                    if http_entry is not None:
+                        server_configs.append(http_entry)
                         continue
 
                     # Convert config format from mcp-config.json to our internal format

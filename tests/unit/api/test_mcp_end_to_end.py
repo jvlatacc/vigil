@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import BigInteger, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
@@ -25,7 +25,7 @@ from sqlalchemy.pool import StaticPool
 
 from core.auth import mcp_credential_service as credentials
 from core.cases.case_workflow_service import CaseWorkflowService
-from core.storage.models import McpCredential, Role, User
+from core.storage.models import McpCredential, Role, ToolCallAudit, User
 from core.storage.models.base import Base
 from tools.mcp import vigil
 
@@ -39,6 +39,14 @@ def _jsonb_is_json_on_sqlite(type_, compiler, **kw):
     return "JSON"
 
 
+# `tool_call_audit` takes a BigInteger primary key (the PostgreSQL DDL is
+# BIGSERIAL); SQLite only rowid-aliases a plain INTEGER primary key, so the
+# dialect override is what lets the audit writer's inserts autoincrement.
+@compiles(BigInteger, "sqlite")
+def _bigint_is_integer_on_sqlite(type_, compiler, **kw):  # pragma: no cover
+    return "INTEGER"
+
+
 @pytest.fixture
 def issued_credential():
     """A credential the service really minted, and the store it lives in."""
@@ -48,7 +56,13 @@ def issued_credential():
         poolclass=StaticPool,
     )
     Base.metadata.create_all(
-        engine, tables=[Role.__table__, User.__table__, McpCredential.__table__]
+        engine,
+        tables=[
+            Role.__table__,
+            User.__table__,
+            McpCredential.__table__,
+            ToolCallAudit.__table__,
+        ],
     )
     maker = sessionmaker(bind=engine)
     session = maker()
@@ -60,7 +74,13 @@ def issued_credential():
             role_id="r-analyst",
             name="analyst",
             description="",
-            permissions={"cases.write": True},
+            # Two grants, both load-bearing: tools.execute because the
+            # tool-execution gate (tool-call RBAC) refuses every call without
+            # it, and cases.write because the surface's case tools answer to
+            # the caller's grant and resolve the bound user's role themselves.
+            # The store is also the permission-check database, so the real
+            # role model decides.
+            permissions={"cases.write": True, "tools.execute": True},
         )
     )
     session.add(
@@ -83,6 +103,10 @@ def issued_credential():
         yield session
 
     with patch("core.auth.mcp_credential_service.unit_of_work", _this_store), patch(
+        "core.auth.permissions.unit_of_work", _this_store
+    ), patch("core.auth.auth_service.unit_of_work", _this_store), patch(
+        "core.audit.tool_calls.unit_of_work", _this_store
+    ), patch(
         "core.storage.unit_of_work.get_db_session", maker
     ):
         yield minted.token

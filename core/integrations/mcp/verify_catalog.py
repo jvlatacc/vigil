@@ -45,6 +45,10 @@ def check_catalog(root: Path) -> dict:
     missing = []
     for name, server in service.servers.items():
         command = server.command
+        # HTTP-only connectors have no launcher process to verify; catalog
+        # presence is their check, and Path(None) would raise.
+        if command is None:
+            continue
         if not (Path(command).is_file() or shutil.which(command)):
             missing.append(name)
         elif any("git+" in arg for arg in server.args) and not shutil.which("git"):

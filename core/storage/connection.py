@@ -64,6 +64,7 @@ from core.storage.models import (  # noqa: F401
     SketchMapping,
     SLAPolicy,
     SystemConfig,
+    ToolCallAudit,
     User,
     UserPreference,
 )

@@ -15,7 +15,8 @@ from core.storage.models.ai import (
     LLMInteractionLog,
     LLMProviderConfig,
 )
-from core.storage.models.auth import McpCredential, Role, User
+from core.storage.models.audit import ToolCallAudit
+from core.storage.models.auth import McpCredential, Role, RoleGroupMapping, User
 from core.storage.models.base import Base, JSONBList, case_findings
 from core.storage.models.case import Case
 from core.storage.models.case_entities import (
@@ -135,11 +136,13 @@ __all__ = [
     "MtdIpExclusion",
     "ProtectedAsset",
     "Role",
+    "RoleGroupMapping",
     "SLAPolicy",
     "SharedIOC",
     "SketchMapping",
     "SystemConfig",
     "ThreatIndicator",
+    "ToolCallAudit",
     "TwinConnection",
     "TwinDevice",
     "TwinProcess",

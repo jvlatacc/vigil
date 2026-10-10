@@ -605,8 +605,10 @@ dbInit:
     - 40_edge_nodes.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
+    - 40_role_group_mappings.sql
     - 41_edge_bundles.sql
     - 41_finding_origin_stamps.sql
+    - 41_tool_call_audit.sql
     - 42_digital_twin.sql
     - 42_edge_node_watermark.sql
   resources:

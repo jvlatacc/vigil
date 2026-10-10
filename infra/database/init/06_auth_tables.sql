@@ -56,6 +56,12 @@ CREATE INDEX IF NOT EXISTS idx_user_role_id ON users(role_id);
 CREATE INDEX IF NOT EXISTS idx_user_is_active ON users(is_active);
 
 -- Insert default roles
+--
+-- The tools.* vocabulary gates MCP tool calls: `tools.execute` is the
+-- baseline grant and a per-server `tools.server.<name>` key (written per
+-- deployment, not seeded) is a scoped override. Roles that may drive the
+-- agent — every role holding ai_chat.use — hold the baseline; Viewer does
+-- not. Enforcement lives in the tool-call paths.
 INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALUES
 ('role-viewer', 'Viewer', 'Read-only access to findings and cases', '{
     "findings.read": true,
@@ -64,7 +70,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "users.read": false,
     "settings.read": false,
     "ai_chat.use": false,
-    "ai_decisions.approve": false
+    "ai_decisions.approve": false,
+    "tools.execute": false
 }', true),
 ('role-analyst', 'Analyst', 'Full access to findings and cases, limited integrations', '{
     "findings.read": true,
@@ -80,7 +87,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
-    "ai_decisions.approve": false
+    "ai_decisions.approve": false,
+    "tools.execute": true
 }', true),
 ('role-senior-analyst', 'Senior Analyst', 'Full analyst access plus approval rights', '{
     "findings.read": true,
@@ -96,7 +104,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "tools.execute": true
 }', true),
 ('role-manager', 'Manager', 'User management and all integrations', '{
     "findings.read": true,
@@ -114,7 +123,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "tools.execute": true
 }', true),
 ('role-admin', 'Admin', 'Full system access', '{
     "findings.read": true,
@@ -132,7 +142,8 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "tools.execute": true
 }', true)
 ON CONFLICT (role_id) DO NOTHING;
 

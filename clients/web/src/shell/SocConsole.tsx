@@ -16,6 +16,7 @@ import CaseDrawer from './CaseDrawer'
 import Chat from './Chat'
 import CommandBar from './CommandBar'
 import DevModeWarning from './DevModeWarning'
+import UnmappedUserState, { hasNoPermissions } from './UnmappedUserState'
 import UserMenu from './UserMenu'
 import { HOME_PERM, landingScreen } from './landing'
 import ConsoleTour, { type TourStopId } from './ConsoleTour'
@@ -83,6 +84,12 @@ const SCREEN_PERMS: Partial<Record<ConsoleScreenKey, string>> = {
 const CHAT_WIDTH = 400
 
 export default function SocConsole() {
+  const { user } = useAuth()
+  // An authenticated session with zero permissions — where a federated
+  // sign-in lands when no directory group maps to a role — replaces the
+  // console: without this, every screen is silent 403s on an empty shell.
+  // Checked before the extension provider so nothing loads for that session.
+  if (hasNoPermissions(user)) return <UnmappedUserState />
   return (
     <ExtensionProvider>
       <SocConsoleInner />
