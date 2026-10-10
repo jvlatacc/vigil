@@ -93,10 +93,14 @@ class TestDenialAtTheBoundary:
 
     def test_the_refusal_names_the_server_the_tool_belongs_to(self, app, store):
         """A per-server key is scoped to one server, so the row says which."""
-        schema = MagicMock()
-        schema.name = "create_issue"
-        schema.description = "open an issue"
-        schema.inputSchema = {"type": "object", "properties": {}}
+        # The registry's tool contract is the dict shape client.py caches
+        # ({"name", "description", "inputSchema"}) — register_server scans
+        # descriptions with tool.get(...), so objects don't survive registration.
+        schema = {
+            "name": "create_issue",
+            "description": "open an issue",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
         registry = MCPRegistry()
         registry.register_server("github", {}, [schema])
 

@@ -34,6 +34,12 @@ _PLACEHOLDER_RE = re.compile(r"\$\{([^}:]+)(?::-((?:\$\{[^}]+\}|[^{}])*))?\}")
 # substitution engine does.
 _ENV_PLACEHOLDER_RE = _PLACEHOLDER_RE
 
+# The substitution grammar above is deliberately permissive (any-name
+# ${var:-default}); a secret NAME must stay a strict env identifier. The
+# client_secret_env check leans on this pattern, not on the substitution
+# grammar, so loosening substitution can never let a malformed name through.
+_STRICT_ENV_NAME_RE = re.compile(r"[A-Z_][A-Z0-9_]*")
+
 # Placeholders that are path sentinels, not credentials — never treat as
 # required env vars.
 _PLACEHOLDER_BLACKLIST = {"workspaceFolder", "HOME", "PYTHONPATH", "VIGIL_DIR"}
@@ -347,7 +353,7 @@ class MCPService:
         # Read-only use — no child env is built here (nothing spawns), so
         # the CA-bundle forwarding the child-env ratchet requires does not
         # apply to this site.
-        env = os.environ
+        env = os.environ  # noqa: ENV001 - read-only substitution source; no child env built
 
         raw_url = str(http_cfg.get("url") or "")
         url = self._substitute_env_vars(raw_url, env)
@@ -373,8 +379,8 @@ class MCPService:
         client_secret_env = str(raw_secret_env).strip() if raw_secret_env else None
         # Secret values are never declared inline: the entry names the
         # secret's env var, and the value resolves through get_secret.
-        if raw_secret_env and not _ENV_PLACEHOLDER_RE.fullmatch(
-            f"${{{client_secret_env}}}"
+        if raw_secret_env and not _STRICT_ENV_NAME_RE.fullmatch(
+            client_secret_env or ""
         ):
             return None, "http.auth.client_secret_env must name an env var"
 
