@@ -510,13 +510,6 @@ class AutonomousResponder:
         rule: str,
     ):
         """Create a response action (pending or auto-approved)."""
-        if self.response_config.dry_run:
-            logger.info(
-                f"[DRY RUN] Would create {action_type} action for finding "
-                f"{finding.get('finding_id')}; {rule}"
-            )
-            return
-
         finding_id = finding.get("finding_id")
         confidence = finding.get("triage_confidence", 0.5)
 
@@ -525,6 +518,28 @@ class AutonomousResponder:
         target_ip = _first_actionable_ip(entity_context)
         if entity_context.get("hostnames"):
             hostname = entity_context["hostnames"][0]
+
+        if self.response_config.dry_run:
+            # Dry run creates nothing — but it still asks the guards what
+            # they would have said (#944, Verification row 8): the operator
+            # sees every gate verdict without a containment or a quota slot
+            # (spend_quota=False judges the windows, spends nothing).
+            verdict = self._response_service.evaluate_guards(
+                action_type,
+                target_ip,
+                hostname,
+                origin_statuses_for(finding),
+                spend_quota=False,
+            )
+            logger.info(
+                f"[DRY RUN] Guard evaluation for {action_type}: "
+                f"{verdict.state.value}; {verdict.rule}"
+            )
+            logger.info(
+                f"[DRY RUN] Would create {action_type} action for finding "
+                f"{finding.get('finding_id')}; {rule}"
+            )
+            return
 
         if not target_ip and not hostname:
             logger.warning(f"No target available for response action on {finding_id}")
