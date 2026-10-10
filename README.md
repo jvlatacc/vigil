@@ -320,6 +320,7 @@ vigil/
 ├── clients/
 │   ├── web/           # React + Tailwind frontend
 │   └── desktop/       # Desktop app
+├── vigilmap/          # Standalone 3D memory-context explorer (see vigilmap/README.md)
 ├── tools/mcp/         # Vigil's own MCP server and frozen tool snapshot
 ├── mcp-config.json    # MCP integration catalogue
 └── infra/             # Docker Compose, Helm chart, DB init
