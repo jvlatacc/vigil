@@ -204,12 +204,23 @@ ThemeData buildVigilThemeData(Brightness brightness) {
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: colors.bg1,
       indicatorColor: colors.acBg,
-      iconTheme: WidgetStatePropertyAll(
-        IconThemeData(color: colors.tx1),
+      // Selected state reads as accent, like the console's active nav row.
+      iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+            color: states.contains(WidgetState.selected) ? colors.ac : colors.tx1,
+          )),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (states) => VigilTypography.label.copyWith(
+              color: states.contains(WidgetState.selected) ? colors.tx0 : colors.tx2,
+            ),
       ),
-      labelTextStyle: WidgetStatePropertyAll(
-        VigilTypography.label.copyWith(color: colors.tx2),
-      ),
+    ),
+    navigationRailTheme: NavigationRailThemeData(
+      backgroundColor: colors.bg1,
+      indicatorColor: colors.acBg,
+      selectedIconTheme: IconThemeData(color: colors.ac),
+      unselectedIconTheme: IconThemeData(color: colors.tx1),
+      selectedLabelTextStyle: VigilTypography.label.copyWith(color: colors.tx0),
+      unselectedLabelTextStyle: VigilTypography.label.copyWith(color: colors.tx2),
     ),
   );
 }

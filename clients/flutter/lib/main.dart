@@ -53,6 +53,7 @@ class _NeedsYouHomeState extends State<NeedsYouHome> {
   @override
   Widget build(BuildContext context) {
     final colors = context.vigilColors;
+    final wide = MediaQuery.sizeOf(context).width >= 600;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: colors.bg0,
@@ -87,19 +88,47 @@ class _NeedsYouHomeState extends State<NeedsYouHome> {
           ),
         ],
       ),
-      body: _pane(colors),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: [
-          for (final (iconName, label) in _destinations)
-            NavigationDestination(
-              icon: VigilIcon(_iconFor(iconName)),
-              selectedIcon: VigilIcon(_iconFor(iconName), color: colors.ac),
-              label: label,
-            ),
-        ],
-      ),
+      body: wide ? _withRail(colors) : _pane(colors),
+      bottomNavigationBar: wide ? null : _bottomBar(colors),
+    );
+  }
+
+  /// Bottom bar on phones, navigation rail on tablets/desktop (>= 600 dp),
+  /// mirroring the console's narrow-screen rules.
+  Widget _bottomBar(VigilColors colors) {
+    return NavigationBar(
+      selectedIndex: _index,
+      onDestinationSelected: (i) => setState(() => _index = i),
+      destinations: [
+        for (final (iconName, label) in _destinations)
+          NavigationDestination(
+            icon: VigilIcon(_iconFor(iconName)),
+            selectedIcon: VigilIcon(_iconFor(iconName), color: colors.ac),
+            label: label,
+          ),
+      ],
+    );
+  }
+
+  Widget _withRail(VigilColors colors) {
+    return Row(
+      children: [
+        NavigationRail(
+          selectedIndex: _index,
+          onDestinationSelected: (i) => setState(() => _index = i),
+          labelType: NavigationRailLabelType.all,
+          destinations: [
+            for (final (iconName, label) in _destinations)
+              NavigationRailDestination(
+                icon: VigilIcon(_iconFor(iconName)),
+                selectedIcon: VigilIcon(_iconFor(iconName), color: colors.ac),
+                label: Text(label),
+              ),
+          ],
+        ),
+        const VerticalDivider(width: 1, thickness: 1),
+        Expanded(child: _pane(colors)),
+      ],
     );
   }
 

@@ -49,6 +49,20 @@ void main() {
     );
   }
 
+  /// Sizes BOTH the render surface (what the golden captures) and the view
+  /// metrics (what MediaQuery reports) — setSurfaceSize alone leaves the
+  /// view at the 800x600 test default, so adaptive shells never switch.
+  Future<void> pumpApp(WidgetTester tester, Size size) async {
+    tester.view.devicePixelRatio = 1.0;
+    tester.view.physicalSize = size;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.binding.setSurfaceSize(size);
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const VigilApp());
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('color swatches render every token, dark scheme', (tester) async {
     await tester.binding.setSurfaceSize(const Size(720, 760));
     await tester.pumpWidget(surface(const SwatchGallery(colors: VigilColors.dark)));
@@ -91,12 +105,19 @@ void main() {
   });
 
   testWidgets('Home empty state with the shell chrome', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(390, 844));
-    await tester.pumpWidget(const VigilApp());
-    await tester.pumpAndSettle();
+    await pumpApp(tester, const Size(390, 844));
     await expectLater(
       find.byType(NeedsYouHome),
       matchesGoldenFile('goldens/home-empty.png'),
+    );
+  });
+
+  testWidgets('Home empty state, desktop form factor with the nav rail',
+      (tester) async {
+    await pumpApp(tester, const Size(1100, 844));
+    await expectLater(
+      find.byType(NeedsYouHome),
+      matchesGoldenFile('goldens/home-empty-desktop.png'),
     );
   });
 }
