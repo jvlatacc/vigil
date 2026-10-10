@@ -1,0 +1,11 @@
+{
+  "access_token": "watch-access-token",
+  "refresh_token": "watch-refresh-token",
+  "token_type": "bearer",
+  "user": {
+    "id": 7,
+    "username": "jvl",
+    "role_id": 3,
+    "permissions": { "ai_decisions.approve": true }
+  }
+}

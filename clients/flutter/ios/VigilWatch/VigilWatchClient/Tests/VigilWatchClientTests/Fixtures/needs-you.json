@@ -1,0 +1,30 @@
+{
+  "count": 3,
+  "items": [
+    {
+      "kind": "response_action",
+      "source_id": "act_iso_host",
+      "title": "Isolate host web-prod-3",
+      "reason": "Confidence below the 0.90 auto-approve line",
+      "created_at": "2026-10-10T13:58:02Z",
+      "reversibility": "reversible",
+      "case_id": "case_1042"
+    },
+    {
+      "kind": "response_action",
+      "source_id": "act_quarantine_mailbox",
+      "title": "Quarantine mailbox j.doe",
+      "reason": "",
+      "created_at": "2026-10-10T14:02:44Z",
+      "reversibility": "irreversible"
+    },
+    {
+      "kind": "workflow_run_paused",
+      "source_id": "act_unknown_shape",
+      "title": "Unknown reversibility renders the review chip",
+      "reason": "Server sent a reversibility value this client predates",
+      "created_at": "2026-10-10T14:05:00Z",
+      "reversibility": "soft-delete"
+    }
+  ]
+}

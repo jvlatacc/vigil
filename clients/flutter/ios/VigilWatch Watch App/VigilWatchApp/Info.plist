@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Vigil</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>WKApplication</key>
+	<true/>
+	<!-- Companion of the iOS Runner app (ai.deeptempo.vigil). -->
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>ai.deeptempo.vigil</string>
+	<!-- Analysts point Vigil at LAN servers (http://host:6987 is the default
+	     deployment); relax ATS for local-network origins only. Remote
+	     https servers are unaffected. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- watchOS local-network privacy: the watch polls the paired Vigil
+	     server directly, which may be a LAN address. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Vigil connects to your SOC server, which may be on your local network.</string>
+</dict>
+</plist>
