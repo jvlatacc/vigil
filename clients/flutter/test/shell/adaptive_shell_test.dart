@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:vigil_flutter/api/vigil_client.dart';
 import 'package:vigil_flutter/auth/session.dart';
+import 'package:vigil_flutter/auth/token_store.dart';
 import 'package:vigil_flutter/shell/screens.dart';
 import 'package:vigil_flutter/shell/vigil_shell.dart';
 import 'package:vigil_flutter/theme/vigil_theme.dart';
@@ -54,6 +56,13 @@ VigilShell shell({
 }) =>
     VigilShell(
       user: user,
+      client: VigilClient(
+        // Tests never reach the network from the shell's placeholder
+        // panes; the URL is inert.
+        baseUrl: 'http://localhost:6987',
+        tokenStore: InMemoryTokenStore(),
+        userAgent: 'VigilTest/1.0',
+      ),
       initialScreen: initial,
       onSignOut: onSignOut ?? () {},
     );
@@ -73,12 +82,14 @@ void main() {
       expect(hasNavigationBar(tester), isTrue,
           reason: 'at or below 600 dp the console-style bar shows');
       expect(hasNavigationRail(tester), isFalse);
-      // All five destinations visible for a full-permission user.
+      // The console's PRIMARY/MORE split: four human-work destinations on
+      // the bar; queues, chat, and settings live under More.
       expect(find.text('Home'), findsOneWidget);
       expect(find.text('AI Decisions'), findsOneWidget);
       expect(find.text('Cases'), findsOneWidget);
-      expect(find.text('Ask Vigil'), findsOneWidget);
-      expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('More'), findsOneWidget);
+      expect(find.text('Ask Vigil'), findsNothing);
+      expect(find.text('Settings'), findsNothing);
     });
 
     testWidgets('700 dp renders the navigation rail, no bottom bar',
@@ -122,6 +133,26 @@ void main() {
         find.descendant(
           of: find.byType(AppBar),
           matching: find.text('AI Decisions'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('phone: overflow destinations live under More', (tester) async {
+      await pumpShell(tester, const Size(400, 800), shell: shell());
+
+      // Seven destinations do not fit the bar — the tail is behind More.
+      expect(find.byKey(const Key('nav-settings')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('nav-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('nav-more-settings')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.text('Settings'),
         ),
         findsOneWidget,
       );

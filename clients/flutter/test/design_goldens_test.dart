@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:vigil_flutter/api/vigil_client.dart';
 import 'package:vigil_flutter/auth/session.dart';
+import 'package:vigil_flutter/auth/token_store.dart';
 import 'package:vigil_flutter/design/galleries.dart';
 import 'package:vigil_flutter/shell/screens.dart';
 import 'package:vigil_flutter/shell/vigil_shell.dart';
 import 'package:vigil_flutter/theme/vigil_colors.dart';
 import 'package:vigil_flutter/theme/vigil_theme.dart';
+
+import 'helpers/vigil_fonts.dart';
 
 /// Golden captures of the design-system galleries — every color token in
 /// both schemes, the whole 82-icon set, the full type ramp — plus the shell
@@ -16,28 +19,7 @@ import 'package:vigil_flutter/theme/vigil_theme.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUpAll(() async {
-    // The bundled static TTFs must actually load in the test environment;
-    // without these loaders goldens silently fall back to the Ahem font.
-    Future<void> load(String family, List<String> files) async {
-      final loader = FontLoader(family);
-      for (final file in files) {
-        loader.addFont(rootBundle.load('assets/fonts/$file'));
-      }
-      await loader.load();
-    }
-
-    await load('Plus Jakarta Sans', [
-      'plus-jakarta-sans-400.ttf',
-      'plus-jakarta-sans-500.ttf',
-      'plus-jakarta-sans-600.ttf',
-      'plus-jakarta-sans-700.ttf',
-    ]);
-    await load('Roboto Mono', [
-      'roboto-mono-400.ttf',
-      'roboto-mono-500.ttf',
-    ]);
-  });
+  setUpAll(loadVigilFonts);
 
   Widget surface(Widget child, {Brightness brightness = Brightness.dark}) {
     return Directionality(
@@ -87,6 +69,12 @@ void main() {
         home: Scaffold(
           body: VigilShell(
             user: approver,
+            client: VigilClient(
+              // The shell's Home pane never polls; the URL is inert.
+              baseUrl: 'http://localhost:6987',
+              tokenStore: InMemoryTokenStore(),
+              userAgent: 'VigilTest/1.0',
+            ),
             initialScreen: VigilScreen.home,
             onSignOut: () {},
           ),

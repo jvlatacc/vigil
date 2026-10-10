@@ -2,6 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../auth/session.dart';
 import '../api/config_api.dart';
+import '../api/vigil_client.dart';
+import '../screens/cases/cases_screen.dart';
+import '../screens/findings/findings_screen.dart';
+import '../screens/shared/approval_fuse.dart';
+import '../screens/triage/triage_screen.dart';
 import '../settings/scheme_controller.dart';
 import '../theme/extensions.dart';
 import '../theme/vigil_colors.dart';
@@ -18,16 +23,24 @@ class VigilShell extends StatefulWidget {
   const VigilShell({
     super.key,
     required this.user,
+    required this.client,
     required this.initialScreen,
     required this.onSignOut,
+    this.initialCaseId,
     this.scheme,
   });
 
   final UserProfile user;
 
+  /// The authenticated client — the data plane for the ported screens.
+  final VigilClient client;
+
   /// Where the shell opens — the landing destination, or the deep-linked
   /// screen (already permission-checked by the app root).
   final VigilScreen initialScreen;
+
+  /// `?case=<id>` — a deep-linked case the Cases screen opens on arrival.
+  final String? initialCaseId;
 
   /// The server-persisted color scheme; null hides the app-bar toggle.
   final SchemeController? scheme;
@@ -47,6 +60,44 @@ class _VigilShellState extends State<VigilShell> {
       visibleDestinations(widget.user.permissions);
 
   late VigilScreen _screen = _initialScreen();
+
+  /// The shell's undo fuse — owned here so a reversible approval keeps
+  /// ticking while the user reads another screen (the console's toast
+  /// fuses are owned by the shell too).
+  late final FuseController _fuse = FuseController(onEvent: _onFuseEvent);
+
+  /// A case handed over by a deep link or another screen's case door —
+  /// the Cases screen remounts ([_casesKey]) to open it.
+  String? _pendingCaseId;
+  int _casesKey = 0;
+
+  @override
+  void dispose() {
+    _fuse.dispose();
+    super.dispose();
+  }
+
+  void _onFuseEvent(FuseEvent event) {
+    final error = event.error;
+    final text = error != null
+        ? 'The decision could not be recorded — it was not applied.'
+        : (event.doneText ?? 'Done.');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Another screen's case door (triage rows, findings) hands the case id
+  /// over; Cases opens it, keeping the console's one-case deep-link
+  /// semantics between screens.
+  void _openCase(String caseId) {
+    setState(() {
+      _screen = VigilScreen.cases;
+      _pendingCaseId = caseId;
+      _casesKey += 1;
+    });
+  }
 
   VigilScreen _initialScreen() {
     if (canSeeScreen(widget.initialScreen, widget.user.permissions)) {
@@ -176,11 +227,21 @@ class _VigilShellState extends State<VigilShell> {
       );
 
   Widget _bottomBar(VigilColors colors) {
+    // The console's PRIMARY/MORE split (`SocConsole.tsx`): four human-work
+    // destinations on the bar, the rest under More — seven destinations
+    // clip a phone bottom bar. The rail (wide) shows everything.
+    const barCount = 4;
+    final inBar = _visible.take(barCount).toList();
+    final overflow = _visible.skip(barCount).toList();
+    final selected = inBar.indexOf(_screen);
     return NavigationBar(
-      selectedIndex: _visible.indexOf(_screen),
-      onDestinationSelected: (i) => _select(_visible[i]),
+      selectedIndex: selected < 0 ? inBar.length : selected,
+      onDestinationSelected: (i) {
+        if (i < inBar.length) return _select(inBar[i]);
+        _showMoreSheet(colors, overflow);
+      },
       destinations: [
-        for (final screen in _visible)
+        for (final screen in inBar)
           NavigationDestination(
             key: Key('nav-${screen.name}'),
             icon: VigilIcon(screen.icon),
@@ -188,7 +249,48 @@ class _VigilShellState extends State<VigilShell> {
             label: screen.navLabel,
             tooltip: screen.appBarTitle,
           ),
+        if (overflow.isNotEmpty)
+          NavigationDestination(
+            key: const Key('nav-more'),
+            icon: const VigilIcon(VigilIcons.more),
+            selectedIcon: VigilIcon(VigilIcons.more, color: colors.ac),
+            label: 'More',
+            tooltip: 'More screens',
+          ),
       ],
+    );
+  }
+
+  /// The destinations that don't fit the phone bar — the console's
+  /// "More" menu (`SocConsole.tsx` MORE_KEYS), as a bottom sheet.
+  void _showMoreSheet(VigilColors colors, List<VigilScreen> overflow) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: colors.bg1,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final screen in overflow)
+              ListTile(
+                key: Key('nav-more-${screen.name}'),
+                leading: VigilIcon(
+                  screen.icon,
+                  color: _screen == screen ? colors.ac : colors.tx1,
+                ),
+                title: Text(
+                  screen.navLabel,
+                  style: VigilTypography.body
+                      .copyWith(color: _screen == screen ? colors.ac : colors.tx0),
+                ),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _select(screen);
+                },
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -215,8 +317,27 @@ class _VigilShellState extends State<VigilShell> {
   }
 
   Widget _pane(VigilColors colors) {
-    if (_screen == VigilScreen.home) return _homePane(colors);
-    return _placeholderPane(colors, _screen);
+    final pane = switch (_screen) {
+      VigilScreen.cases => CasesScreen(
+          key: ValueKey('cases-$_casesKey'),
+          client: widget.client,
+          fuse: _fuse,
+          initialCaseId: _pendingCaseId,
+        ),
+      VigilScreen.findings => FindingsScreen(client: widget.client),
+      VigilScreen.triage =>
+        TriageScreen(client: widget.client, onOpenCase: _openCase),
+      VigilScreen.home => _homePane(colors),
+      _ => _placeholderPane(colors, _screen),
+    };
+    // The fuse banner docks above the shell's bottom chrome; when idle it
+    // collapses to nothing.
+    return Column(
+      children: [
+        Expanded(child: pane),
+        FusedActionBanner(controller: _fuse),
+      ],
+    );
   }
 
   /// Home — "What needs a person". The needs-you feed arrives with the

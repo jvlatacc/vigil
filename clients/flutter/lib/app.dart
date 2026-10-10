@@ -54,7 +54,7 @@ class _VigilAppState extends State<VigilApp> {
   VigilClient? _client;
   UserProfile? _user;
   SchemeController? _scheme;
-  VigilScreen? _deepLink;
+  DeepLink? _deepLink;
   _Phase _phase = _Phase.booting;
 
   @override
@@ -63,7 +63,7 @@ class _VigilAppState extends State<VigilApp> {
     _profileStore = widget.profileStore;
     _tokenStore = widget.tokenStore;
     _clientFactory = widget._clientFactoryOverride;
-    _deepLink = screenFromRoute(widget.initialRoute);
+    _deepLink = deepLinkFromRoute(widget.initialRoute);
     _restore();
   }
 
@@ -194,16 +194,18 @@ class _VigilAppState extends State<VigilApp> {
   Widget _readyBody() {
     final user = _user!;
     final target = _deepLink;
-    if (target != null && !canSeeScreen(target, user.permissions)) {
+    if (target != null && !canSeeScreen(target.screen, user.permissions)) {
       return PermissionDeniedScreen(
-        screen: target,
+        screen: target.screen,
         user: user,
         onSignOut: _signOut,
       );
     }
     return VigilShell(
       user: user,
-      initialScreen: target ?? _landing(user),
+      client: _client!,
+      initialScreen: target?.screen ?? _landing(user),
+      initialCaseId: target?.caseId,
       scheme: _scheme,
       onSignOut: _signOut,
     );
