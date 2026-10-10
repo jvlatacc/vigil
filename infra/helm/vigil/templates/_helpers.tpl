@@ -73,6 +73,10 @@ Per-component names and labels.
 {{- printf "%s-agent-serve" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "vigil.edgeDaemon.fullname" -}}
+{{- printf "%s-edge" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "vigil.postgres.fullname" -}}
 {{- printf "%s-postgres" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -167,6 +171,7 @@ The "llmWorker" component always reuses the backend image.
          which command the Deployment runs (infra/docker/Dockerfile.agent). */ -}}
   {{- if eq $comp "agentWorker" -}}{{- $suffix = "agent" -}}{{- end -}}
   {{- if eq $comp "agentServe" -}}{{- $suffix = "agent" -}}{{- end -}}
+  {{- if eq $comp "edgeDaemon" -}}{{- $suffix = "edge" -}}{{- end -}}
   {{- $repo = printf "%s/%s-%s" $registry $ns $suffix -}}
 {{- end -}}
 {{- if eq $tag "" -}}
