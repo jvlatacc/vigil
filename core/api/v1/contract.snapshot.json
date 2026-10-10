@@ -2077,6 +2077,17 @@
             ],
             "title": "Mitre Predictions"
           },
+          "origin_trust": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Trust"
+          },
           "severity": {
             "anyOf": [
               {

@@ -215,6 +215,48 @@ class TestTransforms:
 
 
 class TestSignatureVerification:
+    def test_a_verified_webhook_stamps_the_finding_signed(self, client):
+        # The receiver proved the sender holds the shared secret: the row
+        # carries the strongest tier into storage.
+        p = patch("darktrace_webhook_under_test.DarktraceIngestionService")
+        MockSvc = p.start()
+        instance = MockSvc.return_value
+        instance.transform_model_breach.return_value = {
+            "finding_id": "f-20260101-deadbeef"
+        }
+        instance.ingestion_service.ingest_finding.return_value = True
+        try:
+            r = _post(
+                client, "/api/webhooks/darktrace/model-breach", MODEL_BREACH_SAMPLE
+            )
+        finally:
+            p.stop()
+        assert r.status_code == 202
+        stamped = instance.ingestion_service.ingest_finding.call_args[0][0]
+        assert stamped["origin_trust"] == "signed"
+
+    def test_a_bad_signature_is_rejected_and_never_ingested(self, client):
+        # Fail-closed: a payload that failed verification is rejected (401)
+        # and nothing reaches storage, so nothing can inherit trust.
+        p = patch("darktrace_webhook_under_test.DarktraceIngestionService")
+        MockSvc = p.start()
+        instance = MockSvc.return_value
+        instance.transform_model_breach.return_value = {
+            "finding_id": "f-20260101-deadbeef"
+        }
+        instance.ingestion_service.ingest_finding.return_value = True
+        try:
+            r = _post(
+                client,
+                "/api/webhooks/darktrace/model-breach",
+                MODEL_BREACH_SAMPLE,
+                sig="deadbeef" * 8,
+            )
+        finally:
+            p.stop()
+        assert r.status_code == 401
+        instance.ingestion_service.ingest_finding.assert_not_called()
+
     def test_missing_signature_rejected(self, client):
         body = json.dumps(MODEL_BREACH_SAMPLE).encode()
         r = client.post(

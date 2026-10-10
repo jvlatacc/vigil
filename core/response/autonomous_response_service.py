@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from core.agents.builtins import AgentId
 from core.response.approval_service import ActionStatus, ActionType, ApprovalService
 from core.response.config import ContainmentCounts, ResponseConfig, blast_bound_decision
+from core.response.origin import FINDING_CONTEXT_KEY
 from core.response.protected_targets import CONTAINMENT_ACTION_TYPES, containment_hold
 
 logger = logging.getLogger(__name__)
@@ -148,10 +149,16 @@ class AutonomousResponseService:
         reason: str,
         evidence: List[str],
         correlation_data: Dict,
+        finding_context: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """
         Create an isolation action (auto-executes when the approval gate
         approves it, i.e. at or above ``config.confidence_threshold``).
+
+        ``finding_context`` names the finding this row responds to
+        (finding_id, origin_trust, data_source) under ``FINDING_CONTEXT_KEY``:
+        the origin floor reads it at the gate. The unattended creator always
+        supplies it; a row without it is outside that gate's sight.
 
         Args:
             ip_address: Target IP address
@@ -183,7 +190,15 @@ class AutonomousResponseService:
                 reason=reason,
                 evidence=evidence,
                 created_by=AgentId.AUTO_RESPONDER.value,
-                parameters={"hostname": hostname, "correlation": correlation_data},
+                parameters={
+                    "hostname": hostname,
+                    "correlation": correlation_data,
+                    **(
+                        {FINDING_CONTEXT_KEY: finding_context}
+                        if finding_context
+                        else {}
+                    ),
+                },
                 idempotency_key=f"{ActionType.ISOLATE_HOST.value}:{target_key}",
             )
 

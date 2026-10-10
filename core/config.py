@@ -306,6 +306,15 @@ class Settings(BaseSettings):
     # default) is manual reset only. Resuming machine-speed containment
     # after an anomaly is a promoting decision, and promoting is yours.
     daemon_breaker_auto_resume_minutes: int = 0
+    # Origin trust: the minimum tier a motivating finding must carry before
+    # unattended containment acts on it (unverified < transport < signed), and
+    # how many distinct data sources must name the same target inside the
+    # corroboration window to release a below-floor finding. A tier proves
+    # who sent an alert, never that the alert is true - the never-quarantine
+    # invariants bound what even a trusted feed can cause.
+    daemon_min_origin_trust_for_auto_containment: str = "transport"
+    daemon_min_corroboration_for_unverified: int = 2
+    # TODO(PR6): Settings UI fields for the origin floor and corroboration.
     # Call sites disagree on the default (config.from_env on, orchestrator off), so
     # this stays tri-state and each site supplies its own fallback.
     daemon_slack_enabled: Optional[bool] = None

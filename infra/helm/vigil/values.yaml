@@ -432,6 +432,7 @@ dbInit:
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
     - 40_protected_targets.sql
+    - 41_finding_origin_trust.sql
   resources:
     requests:
       cpu: 50m
@@ -743,6 +744,8 @@ config:
   DAEMON_BREAKER_DISTINCT_TARGETS: "8"
   DAEMON_BREAKER_FAILURE_RATE: "0.5"
   DAEMON_BREAKER_AUTO_RESUME_MINUTES: "0"
+  DAEMON_MIN_ORIGIN_TRUST_FOR_AUTO_CONTAINMENT: "transport"
+  DAEMON_MIN_CORROBORATION_FOR_UNVERIFIED: "2"
   DAEMON_DRY_RUN: "false"
   DAEMON_ESCALATION_ENABLED: "true"
   DAEMON_ESCALATE_SEVERITIES: "critical,high"

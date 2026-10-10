@@ -65,7 +65,9 @@ def spooled(tmp_path):
 
 
 def _patch_service(monkeypatch, service):
-    monkeypatch.setattr(ingestion_service, "IngestionService", lambda: service)
+    monkeypatch.setattr(
+        ingestion_service, "IngestionService", lambda *args, **kwargs: service
+    )
 
 
 # --- summarize_stats ------------------------------------------------------

@@ -67,7 +67,8 @@ def env(monkeypatch):
 
 def _processor(monkeypatch, store: _Store) -> FindingProcessor:
     monkeypatch.setattr(
-        "core.ingestion.ingestion_service.IngestionService", lambda: store
+        "core.ingestion.ingestion_service.IngestionService",
+        lambda *args, **kwargs: store,
     )
     processor = FindingProcessor(
         ProcessingConfig(

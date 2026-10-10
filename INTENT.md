@@ -75,6 +75,17 @@ respond:
   # default) is manual reset only: resuming machine-speed containment after
   # an anomaly is a promoting decision. (DAEMON_BREAKER_AUTO_RESUME_MINUTES)
   breaker_auto_resume_minutes: 0
+  breaker_auto_resume_minutes: 0
+
+  # Origin trust: the minimum tier a finding must carry before unattended
+  # containment acts on it (unverified < transport < signed; ranks 0-2, so
+  # the diff has a number). A tier proves who sent an alert, never that the
+  # alert is true. (DAEMON_MIN_ORIGIN_TRUST_FOR_AUTO_CONTAINMENT)
+  min_origin_trust: 1
+  # Distinct data sources that must name the same target inside a 30-minute
+  # window to release a below-floor finding for unattended containment.
+  # (DAEMON_MIN_CORROBORATION_FOR_UNVERIFIED)
+  min_corroboration_for_unverified: 2
 
 escalate:
   # Severities that page a human; a shorter list is tighter.

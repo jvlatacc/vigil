@@ -31,6 +31,9 @@ class FindingSchema(ORMSchema):
     cluster_id: Optional[str] = None
     severity: Optional[str] = None
     status: Optional[str] = None
+    # Who vouches for this row (core/response/origin.py):
+    # unverified < transport < signed.
+    origin_trust: Optional[str] = None
     ai_enrichment: Optional[Any] = None
     created_at: OptDateTime = None
     updated_at: OptDateTime = None

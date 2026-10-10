@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 from core.ingestion.ack import Pending, new_ack, stored_keys, wait_all
 from core.ingestion.dedup import RedisDedupSet
 from core.ingestion.kafka_config import KafkaConfig
+from core.storage.origin_trust import ORIGIN_TRANSPORT
 from core.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,11 @@ class KafkaConsumerService:
                     continue
 
                 finding.setdefault("data_source", f"kafka:{topic}")
+                # SASL/SSL transport authenticated the broker and the
+                # consumer's credentials; nothing signed the payload.
+                # The receiver stamps the tier — a payload-claimed one is
+                # never trusted.
+                finding["origin_trust"] = ORIGIN_TRANSPORT
                 ack = new_ack()
                 await self._output_queue.put(
                     {

@@ -55,7 +55,9 @@ def client(monkeypatch):
 
     registry = IngestionJobRegistry()
     monkeypatch.setattr(ingestion_api, "get_job_registry", lambda: registry)
-    monkeypatch.setattr(ingestion_service, "IngestionService", lambda: _FakeService())
+    monkeypatch.setattr(
+        ingestion_service, "IngestionService", lambda *args, **kwargs: _FakeService()
+    )
 
     app = FastAPI()
     app.include_router(ingestion_api.router, prefix="/api/ingest")

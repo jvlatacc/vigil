@@ -23,6 +23,7 @@ from core.storage.models import (
     Finding,
     FindingMitrePrediction,
 )
+from core.storage.origin_trust import trusted_tier
 from core.storage.schemas import FindingSchema
 from core.time import utcnow
 
@@ -149,6 +150,9 @@ class DatabaseService:
                 cluster_id=kwargs.get("cluster_id"),
                 severity=kwargs.get("severity"),
                 status=kwargs.get("status", "new"),
+                # The receiver's trust verdict for this row; a stamp that
+                # names no tier falls back to unverified.
+                origin_trust=trusted_tier(kwargs.get("origin_trust")),
             )
             _set_mitre_prediction_rows(finding, mitre_predictions)
             session.add(finding)
@@ -243,6 +247,7 @@ class DatabaseService:
                     cluster_id=r.get("cluster_id"),
                     severity=r.get("severity"),
                     status=r.get("status", "new"),
+                    origin_trust=trusted_tier(r.get("origin_trust")),
                 )
                 _set_mitre_prediction_rows(finding, r.get("mitre_predictions") or {})
                 session.add(finding)

@@ -76,7 +76,7 @@ def _processor(monkeypatch) -> FindingProcessor:
 def _patch_ingest(monkeypatch, ingest: _Ingest) -> None:
     monkeypatch.setattr(
         "core.ingestion.ingestion_service.IngestionService",
-        lambda: ingest,
+        lambda *args, **kwargs: ingest,
     )
 
 

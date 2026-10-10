@@ -59,6 +59,13 @@ class Finding(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="new", server_default="new"
     )
+    # Who vouches for this row, decided by the receiver that accepted it
+    # (core/response/origin.py): unverified < transport < signed. Set once at
+    # ingest, never read from the payload; the response gate holds unattended
+    # containment whose finding sits below the configured floor.
+    origin_trust: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unverified", server_default="unverified"
+    )
     # A noise mark hides the row from the Overview feed. It is not a disposition
     # and does not change status or scoring.
     noise_marked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -96,6 +103,15 @@ class Finding(Base):
         Index("idx_finding_severity", "severity"),
         Index("idx_finding_status", "status"),
         Index("idx_finding_data_source", "data_source"),
+        Index("idx_finding_origin_trust", "origin_trust"),
+        # The corroboration lookup (origin floor) resolves findings by the
+        # target they name: one JSONB containment query over src_ips or
+        # hostnames.
+        Index(
+            "idx_finding_entity_context_gin",
+            "entity_context",
+            postgresql_using="gin",
+        ),
         Index("idx_finding_cluster_id", "cluster_id"),
         Index("idx_finding_anomaly_score", "anomaly_score"),
         Index(
