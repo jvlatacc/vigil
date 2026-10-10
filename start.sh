@@ -354,6 +354,52 @@ start_agent_layer() {
     scripts/agent_up.sh || echo "Warning: agent layer failed to start (workflow runs won't be picked up)."
 }
 
+# Kernel enforcement daemon (services/enforcement — Go, eBPF/XDP). Dormant
+# unless VIGIL_ENFORCEMENT_TOKEN is set, mirroring the integration slice's
+# env-gated dormancy: hosts without an enforcer see nothing new. When opted
+# in, the health wait is fatal on failure — like the backend — because an
+# install that asked for enforcement must not come up silently not
+# enforcing. The kernel backend needs runtime access (bpffs/cgroup2 mounted,
+# capabilities granted — see services/enforcement/runbook.md); a dev host
+# without it can exercise the API path with VIGIL_ENFORCEMENT_KERNEL=fake.
+start_enforcer() {
+    [ -n "${VIGIL_ENFORCEMENT_TOKEN:-}" ] || return 0
+    local bin="${VIGIL_ENFORCER_BIN:-}"
+    if [ -z "$bin" ]; then
+        if command -v go &>/dev/null; then
+            # Build in place — services/enforcement/enforcement is gitignored,
+            # the same output path the runbook's build lands on.
+            bin="services/enforcement/enforcement"
+            (cd services/enforcement && go build -o enforcement ./cmd/enforcement) \
+                || { echo "Enforcer build failed." >&2; return 1; }
+        else
+            echo "Enforcer requested (VIGIL_ENFORCEMENT_TOKEN set) but no go toolchain found." >&2
+            echo "Build services/enforcement (go build -o enforcement ./cmd/enforcement) and" >&2
+            echo "point VIGIL_ENFORCER_BIN at the binary." >&2
+            return 1
+        fi
+    fi
+    [ -x "$bin" ] || { echo "Enforcer binary not found/executable: $bin" >&2; return 1; }
+
+    local logdir="${LOGS_DIR:-${PWD}/logs}"
+    rotate_log "$logdir/enforcer.log"
+    nohup "$bin" > "$logdir/enforcer.log" 2>&1 &
+    echo $! > "$logdir/enforcer.pid"
+
+    # Health wait on the configured bind (0.0.0.0 probes loopback) — the
+    # same pidfile + health-wait lifecycle as the backend and SOC daemon.
+    local ebind="${VIGIL_ENFORCEMENT_BIND:-127.0.0.1:6986}"
+    local eport="${ebind##*:}" ehost="${ebind%%:*}"
+    [ "$ehost" = "0.0.0.0" ] && ehost="127.0.0.1"
+    if ! wait_for_url "http://${ehost}:${eport}/healthz" 30 \
+        || ! kill -0 "$(cat "$logdir/enforcer.pid")" 2>/dev/null; then
+        echo "Enforcer failed to start. See $logdir/enforcer.log:" >&2
+        tail -n 20 "$logdir/enforcer.log" >&2 2>/dev/null || true
+        return 1
+    fi
+    echo "Enforcer: kernel enforcement API on ${ehost}:${eport} (pid $(cat "$logdir/enforcer.pid"))"
+}
+
 if [ "$DAEMON" -eq 0 ]; then
     # Foreground
     cleanup() {
@@ -363,6 +409,7 @@ if [ "$DAEMON" -eq 0 ]; then
         [ -n "${FRONTEND_PID:-}" ] && kill $FRONTEND_PID 2>/dev/null
         [ -f logs/agent-worker.pid ] && kill "$(cat logs/agent-worker.pid)" 2>/dev/null
         [ -f logs/agent-serve.pid ] && kill "$(cat logs/agent-serve.pid)" 2>/dev/null
+        [ -f logs/enforcer.pid ] && kill "$(cat logs/enforcer.pid)" 2>/dev/null
         pkill -f "uvicorn services.api.main:app" 2>/dev/null
         exit 0
     }
@@ -388,6 +435,7 @@ if [ "$DAEMON" -eq 0 ]; then
 
     start_frontend
     start_agent_layer
+    start_enforcer || exit 1
     print_ready
     echo "Press Ctrl+C to stop"
 
@@ -429,6 +477,7 @@ else
     echo $! > logs/llm_worker.pid
 
     start_agent_layer
+    start_enforcer || exit 1
 
     if [ "$SKIP_FRONTEND" -eq 0 ] && [ -d "clients/web/node_modules" ]; then
         # Absolute log dir: the `cd clients/web` only applies inside the
@@ -445,6 +494,6 @@ else
 
     print_ready
     echo ""
-    echo "Logs: tail -f logs/{backend,daemon,llm_worker,frontend,agent-worker,agent-serve}.log"
+    echo "Logs: tail -f logs/{backend,daemon,llm_worker,frontend,agent-worker,agent-serve,enforcer}.log"
     echo "Stop: ./shutdown_all.sh"
 fi

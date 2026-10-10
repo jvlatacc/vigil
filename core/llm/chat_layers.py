@@ -31,6 +31,10 @@ _DESTRUCTIVE_VERBS = frozenset(
         "isolate",
         "unisolate",
         "contain",
+        # Kernel enforcement (ebpf-xdp): interdicting a process and steering
+        # its flows are direct kernel-state actions, same class as isolate.
+        "interdict",
+        "redirect",
         "quarantine",
         "block",
         "unblock",

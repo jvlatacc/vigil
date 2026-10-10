@@ -106,6 +106,8 @@ Enable and configure integrations under **Settings → Integrations**, or genera
 
 **Detection rules.** The detection-engineering integration ([security-detections-mcp](https://www.npmjs.com/package/security-detections-mcp)) indexes community rule sets (Sigma, Splunk ESCU, Elastic, KQL) for search, coverage analysis, and gap identification. Vigil does not ship the rules; fetch them with `./scripts/setup_detection_repos.sh` (or `SETUP_DETECTION_REPOS=1 ./setup_dev.sh`).
 
+**Kernel enforcement (eBPF/XDP).** On Linux hosts running the `services/enforcement` daemon, Vigil can contain threats in the kernel itself: an approved `xdp_block_ip` drops a source IP in the NIC driver (XDP), `xdp_redirect_socket` steers matching flows to a capture sink, and `xdp_interdict_process` denies connect/exec for a misbehaving process. Every action is approval-gated, self-expires via a TTL that lives in the BPF map (containment ages out even if Vigil disappears), and returns kernel evidence — attach point, map slot, drop counters — stored with the action. Point Vigil at the daemon with `VIGIL_ENFORCEMENT_URL` and `VIGIL_ENFORCEMENT_TOKEN` (Settings → Integrations → ebpf-xdp); without them the integration stays dormant.
+
 ---
 
 ## Quick Start

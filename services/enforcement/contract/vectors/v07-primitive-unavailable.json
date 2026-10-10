@@ -1,0 +1,22 @@
+{
+  "id": "v07-primitive-unavailable",
+  "description": "When the capability probe marks a kind unsupported (e.g. no LSM BPF for process interdiction), requests for it are refused with 503 primitive_unavailable — the executor retries or reports the degraded mode, never a faked success.",
+  "kernel": { "unsupported_kinds": ["process_interdict"] },
+  "steps": [
+    {
+      "name": "unsupported primitive",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4422",
+          "kind": "process_interdict",
+          "target": { "pid": 4242 },
+          "ttl_seconds": 3600,
+          "reason": "ransomware staging process",
+          "idempotency_key": "interdict_process:4242"
+        }
+      },
+      "expect": { "status": 503, "error": "primitive_unavailable" }
+    }
+  ]
+}
