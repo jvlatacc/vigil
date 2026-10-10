@@ -20,22 +20,19 @@ import signal
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
+from core.edge.executors import LocalExecutor, build_default_registry
 from core.edge.policy import PolicyPack
 from core.edge.target_guard import TargetGuard
 from core.edge.verify import load_root
 from services.warden.check import check_health, probe_host
 from services.warden.config import WardenConfig
-from services.warden.engine import (
-    DecisionLoop,
-    DryRunExecutor,
-    ExecutorRegistry,
-    LoopDeps,
-)
+from services.warden.engine import DecisionLoop, LoopDeps
 from services.warden.journal import Journal
 from services.warden.metrics import WardenMetrics, WardenMetricsServer
 from services.warden.modes import ModeMachine
+from services.warden.reconciler import Reconciler
 from services.warden.sentinel import Sentinel
 from services.warden.storage import PolicyStore
 from services.warden.sync import PolicySync
@@ -76,7 +73,8 @@ class Warden:
         self._mode_transitions: list[dict[str, str]] = []
         self._loop: DecisionLoop | None = None
         self._journal: Journal | None = None
-        self._registry: ExecutorRegistry | None = None
+        self._registry: Mapping[str, LocalExecutor] | None = None
+        self._reconciler: Reconciler | None = None
         self._process_start = clock()
         self.metrics_server = WardenMetricsServer(
             bind_host=config.bind_host,
@@ -118,12 +116,16 @@ class Warden:
         loop: DecisionLoop,
         *,
         journal: Journal,
-        registry: ExecutorRegistry,
+        registry: Mapping[str, LocalExecutor],
     ) -> None:
         """Give the status payload its read path into loop state."""
         self._loop = loop
         self._journal = journal
         self._registry = registry
+
+    def attach_reconciler(self, reconciler: Reconciler) -> None:
+        """Give the status payload its read path into reconcile state."""
+        self._reconciler = reconciler
 
     # ------------------------------------------------------------------
     # Health and status payloads (rendered through the metrics server)
@@ -182,10 +184,9 @@ class Warden:
                 else {"last_seq": 0, "head": None, "poisoned": None}
             ),
             "live_actions": loop_status["live_actions"] if loop_status else 0,
-            "executors": (
-                list(self._registry.registered_types())
-                if self._registry is not None
-                else []
+            "executors": (sorted(self._registry) if self._registry is not None else []),
+            "reconciled_through": (
+                self._reconciler.acked_seq if self._reconciler is not None else 0
             ),
         }
 
@@ -261,7 +262,10 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
 
     Every component shares one metrics registry and one clock. The
     decision loop publishes mode changes back into the process status;
-    the journal and executor registry are attached for the same reason.
+    the journal, executor registry, and reconciler watermark are attached
+    for the same reason. The loop and reconciler share one mode machine:
+    the loop moves the node into RECONCILING when a partition ends, and
+    only the reconciler's drained-journal signal closes it back to SYNCED.
     """
     warden = Warden(config, trust_root=trust_root)
     store = PolicyStore(config.data_dir)
@@ -285,8 +289,9 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
         max_body_bytes=config.max_alert_bytes,
         metrics=warden.metrics,
     )
-    registry = ExecutorRegistry()
-    registry.register(DryRunExecutor())
+    # The core registry picks nftables where privileged and DryRun where
+    # not; every decision journals either way, so the mode is never a lie.
+    registry = build_default_registry()
     # The SLM channel exists only when an operator staged a model file:
     # unconfigured reads as absent in the status payload, not as a
     # degraded-something. Its authority is still the pack's, not this.
@@ -303,6 +308,10 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
             dns_resolvers=config.dns_resolvers,
         )
 
+    machine = ModeMachine(
+        grace_window_seconds=config.grace_window_seconds,
+        missed_syncs_threshold=config.missed_syncs_threshold,
+    )
     loop = DecisionLoop(
         deps=LoopDeps(
             sync=policy_sync,
@@ -317,15 +326,27 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
         interval_seconds=config.sync_interval_seconds,
         max_alert_batch=config.max_alert_batch,
         grace_window_seconds=config.grace_window_seconds,
-        machine=ModeMachine(
-            grace_window_seconds=config.grace_window_seconds,
-            missed_syncs_threshold=config.missed_syncs_threshold,
-        ),
+        machine=machine,
         mode_observer=warden.set_mode,
     )
+    reconciler = Reconciler(
+        journal=journal,
+        store=store,
+        base_url=config.control_plane_url,
+        machine=machine,
+        policy_version=loop.current_policy_version,
+        batch_size=config.reconcile_batch_size,
+        interval_seconds=config.reconcile_interval_seconds,
+        clock=warden._clock,
+        metrics=warden.metrics,
+        mode_observer=warden.set_mode,
+        timeout=config.sync_timeout_seconds,
+    )
     warden.attach_decision_loop(loop, journal=journal, registry=registry)
+    warden.attach_reconciler(reconciler)
     warden.register_component("loop", loop)
     warden.register_component("sentinel", sentinel)
+    warden.register_component("reconciler", reconciler)
     return warden
 
 
