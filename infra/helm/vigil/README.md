@@ -11,6 +11,8 @@ from the upstream digests, and commit the new tgz files.
 Full install, values, and troubleshooting:
 [docs/deploy/helm-chart.md](../../../docs/deploy/helm-chart.md)
 
+Cloud profiles (EKS, AKS, GKE) and the research/decision trail: [thunking/](../../../thunking/).
+
 ## OIDC federation (optional)
 
 The chart ships no broker. Deploy Keycloak (or any OIDC issuer that federates
