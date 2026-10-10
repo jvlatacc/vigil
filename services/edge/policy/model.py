@@ -1,6 +1,6 @@
 """The policy bundle: what the operator signed, as the daemon reads it.
 
-Wire form is the DSSE payload (``application/vnd.deeptempo.vigil.edge.bundle
+Wire form is the DSSE payload (``application/vnd.deeptempo.vigil.edge-bundle
 .v1+json``). Parsing is strict: unknown fields, wrong types, or out-of-range
 values refuse the bundle — a signer's typo must not silently widen or narrow
 what a node may do. Signing the bundle IS the human promotion of edge
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
     from services.edge.observations.base import Observation
 
-BUNDLE_PAYLOAD_TYPE = "application/vnd.deeptempo.vigil.edge.bundle.v1+json"
+BUNDLE_PAYLOAD_TYPE = "application/vnd.deeptempo.vigil.edge-bundle.v1+json"
 SCHEMA_VERSION = 1
 
 SEVERITIES = ("low", "medium", "high", "critical")
@@ -160,7 +160,7 @@ class Bundle:
     parent_version: int | None
     not_before: datetime
     expires_at: datetime
-    min_edge_version: str
+    min_edge_version: str | None  # contract-optional: None = no daemon floor
     autonomy_tier: AutonomyTier
     decision: DecisionPolicy
     allowed_actions: tuple[AllowedAction, ...]
@@ -239,7 +239,9 @@ def parse_bundle(payload: Mapping[str, Any]) -> Bundle:
         raise BundleError("B-BOUNDS", "expires_at must be after not_before")
 
     min_edge_version = payload.get("min_edge_version")
-    if not isinstance(min_edge_version, str) or _semver(min_edge_version) is None:
+    if min_edge_version is not None and (
+        not isinstance(min_edge_version, str) or _semver(min_edge_version) is None
+    ):
         raise BundleError(
             "B-SCHEMA", f"min_edge_version not semver: {min_edge_version!r}"
         )

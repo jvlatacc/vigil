@@ -18,6 +18,7 @@ from services.edge.policy.envelope import (
     parse_trust_root,
     verify_bundle,
 )
+from services.edge.policy.model import BUNDLE_PAYLOAD_TYPE
 from services.edge.tests._fixtures import (
     EdgeSigner,
     bundle_payload,
@@ -78,7 +79,7 @@ def test_signature_transplant_between_payload_types_refused(
     the envelope claims the vigil payload type but the signature was computed
     over a foreign type's PAE — a transplant, not a type refusal."""
     envelope = sign_envelope(bundle_payload(), signer, payload_type="application/other")
-    envelope["payloadType"] = "application/vnd.deeptempo.vigil.edge.bundle.v1+json"
+    envelope["payloadType"] = BUNDLE_PAYLOAD_TYPE
     result = _verify(envelope, trust)
     assert not result.accepted
     assert result.code == "E-BAD-SIGNATURE"
@@ -113,7 +114,7 @@ def test_empty_signatures_refused(signer: EdgeSigner, trust) -> None:
 
 
 def test_non_json_payload_refused(signer: EdgeSigner, trust) -> None:
-    payload_type = "application/vnd.deeptempo.vigil.edge.bundle.v1+json"
+    payload_type = BUNDLE_PAYLOAD_TYPE
     envelope = {
         "payloadType": payload_type,
         "payload": base64.b64encode(b"not json at all").decode(),
@@ -222,3 +223,52 @@ def test_trust_root_expiry_roundtrip(signer: EdgeSigner) -> None:
     parsed = parse_trust_root(json.loads(raw))
     assert parsed.expires_at == datetime(2026, 12, 1, tzinfo=UTC)
     assert not parsed.expired(NOW)
+
+
+def test_revoked_root_key_cannot_sign(signer: EdgeSigner) -> None:
+    root = trust_root_for(signer)
+    root["revoked_keyids"] = [signer.keyid]
+    result = _verify(sign_envelope(bundle_payload(), signer), parse_trust_root(root))
+    assert not result.accepted
+    assert result.code == "E-UNKNOWN-SIGNER"
+
+
+def test_expired_signing_key_refused(signer: EdgeSigner) -> None:
+    root = trust_root_for(signer)
+    root["keys"][signer.keyid]["not_after"] = "2026-10-01T00:00:00Z"
+    result = _verify(sign_envelope(bundle_payload(), signer), parse_trust_root(root))
+    assert not result.accepted
+    assert result.code == "E-KEY-EXPIRED"
+
+
+def test_key_outside_bundle_role_cannot_sign(signer: EdgeSigner) -> None:
+    other = EdgeSigner(keyid="other-key")
+    root = trust_root_for(signer, other)
+    root["roles"]["bundles"]["keyids"] = [other.keyid]
+    result = _verify(sign_envelope(bundle_payload(), signer), parse_trust_root(root))
+    assert not result.accepted
+    assert result.code == "E-UNKNOWN-SIGNER"
+
+
+def test_payload_type_not_in_root_role_refused(signer: EdgeSigner) -> None:
+    root = trust_root_for(signer)
+    root["roles"]["bundles"]["payload_types"] = ["application/json"]
+    result = _verify(sign_envelope(bundle_payload(), signer), parse_trust_root(root))
+    assert not result.accepted
+    assert result.code == "E-PAYLOAD-TYPE"
+
+
+def test_wrong_trust_root_format_raises(signer: EdgeSigner) -> None:
+    root = trust_root_for(signer)
+    root["format"] = "vigil.edge.trust-root/v2"
+    with pytest.raises(TrustError) as excinfo:
+        parse_trust_root(root)
+    assert excinfo.value.code == "E-TRUST"
+
+
+def test_threshold_unmet_refused(signer: EdgeSigner) -> None:
+    root = trust_root_for(signer)
+    root["roles"]["bundles"]["threshold"] = 2
+    result = _verify(sign_envelope(bundle_payload(), signer), parse_trust_root(root))
+    assert not result.accepted
+    assert result.code == "E-BAD-SIGNATURE"

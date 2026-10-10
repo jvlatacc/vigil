@@ -7,13 +7,14 @@ from __future__ import annotations
 import base64
 import copy
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from services.edge.observations.base import Observation
-from services.edge.policy.envelope import pae
+from services.edge.policy.envelope import TRUST_ROOT_FORMAT, pae
 from services.edge.policy.model import BUNDLE_PAYLOAD_TYPE, Bundle, parse_bundle
 
 NODE_ID = "gw-vpc-west-01"
@@ -141,10 +142,32 @@ class EdgeSigner:
 def trust_root_for(
     *signers: EdgeSigner, expires_at: str | None = None
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {"keys": {s.keyid: s.public_hex for s in signers}}
-    if expires_at is not None:
-        payload["expires_at"] = expires_at
-    return payload
+    """TUF-shaped v1 trust root — hand-built to match
+    core/edge/signing.build_trust_root's output exactly (edge tests never
+    import core)."""
+    now = datetime.now(UTC)
+    far = (now + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "format": TRUST_ROOT_FORMAT,
+        "version": 1,
+        "issued_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expires_at": expires_at or far,
+        "keys": {
+            s.keyid: {
+                "public": base64.b64encode(bytes.fromhex(s.public_hex)).decode(),
+                "not_after": far,
+            }
+            for s in signers
+        },
+        "roles": {
+            "bundles": {
+                "keyids": [s.keyid for s in signers],
+                "threshold": 1,
+                "payload_types": [BUNDLE_PAYLOAD_TYPE],
+            }
+        },
+        "revoked_keyids": [],
+    }
 
 
 def sign_envelope(
