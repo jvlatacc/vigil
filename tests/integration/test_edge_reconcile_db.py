@@ -156,6 +156,9 @@ def _seed_node(session, allowed=("block_ip", "unblock_ip"), policy_version: int 
             payload_hash=hashlib.sha256(payload).hexdigest(),
             signing_key_ids=["test-key"],
             status="active",
+            # ck_edge_policies_activation: an active policy must carry its
+            # activation time; window start keeps the fixture deterministic.
+            activated_at=datetime(2026, 10, 9, 0, 0, tzinfo=UTC),
             not_before=datetime(2026, 10, 9, 0, 0, tzinfo=UTC),
             not_after=datetime(2026, 10, 10, 0, 0, tzinfo=UTC),
             created_by="test",
@@ -170,12 +173,14 @@ def _edge_node(session):
     return session.get(EdgeNode, NODE)
 
 
-def _chained_records(*seqs: int, action_type: str = "block_ip"):
-    """A valid chained batch from genesis; returns (records, head)."""
+def _chained_records(
+    *seqs: int, action_type: str = "block_ip", prev: str | None = None
+):
+    """A valid chained batch from genesis (or ``prev``); returns (records, head)."""
     from core.edge.journal import record_hash
 
     records: list[dict] = []
-    head = "0" * 64
+    head = prev if prev is not None else "0" * 64
     for seq in seqs:
         record = {
             "seq": seq,
@@ -309,8 +314,15 @@ def test_chain_gap_merges_nothing_and_reports_the_resend_position(
 
     _seed_node(db_session)
     node = _edge_node(db_session)
-    # Server has accepted seq 1; the node skips ahead to seq 3.
-    _, held_head = _chained_records(1)
+    # First, the server accepts seq 1: a receipt is written and the
+    # watermark advances to 1.
+    accepted, held_head = _chained_records(1)
+    first = _reconcile(db_session, node=node, push=_push(accepted, held_head))
+    db_session.commit()
+    assert first.merged_count == 1
+
+    # The node skips ahead to seq 3, chaining its first record onto the
+    # head the server already holds.
     gapped, _ = _chained_records(3, prev=held_head)
 
     response = _reconcile(db_session, node=node, push=_push(gapped, "f" * 64))
@@ -320,12 +332,12 @@ def test_chain_gap_merges_nothing_and_reports_the_resend_position(
     assert response.server_last_seq == 1
     assert response.server_head == held_head
     assert response.resend_from == 2
-    assert _approval_count(reconcile_db) == 0
+    assert _approval_count(reconcile_db) == 1  # only the accepted batch's row
     with reconcile_db.connect() as conn:
         receipts = conn.execute(
             text("SELECT count(*) FROM edge_journal_receipts")
         ).scalar_one()
-    assert receipts == 0
+    assert receipts == 1
 
 
 # ---------------------------------------------------------------------------
