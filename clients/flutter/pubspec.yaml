@@ -15,6 +15,8 @@ dependencies:
   # SVG path-data parser for the VigilIcons stroke set (pure Dart, the same
   # parser flutter_svg uses).
   path_parsing: ^1.1.0
+  # AnyOf evidence/parameters fields from the generated v1 client.
+  one_of: ^1.5.0
   # Generated dart-dio client for the frozen /api/v1 contract
   # (tool/generate_api_client.py). Pure Dart; shares the app's Dio instance.
   vigil_api_v1:

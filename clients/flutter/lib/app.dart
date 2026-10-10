@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api/config_api.dart';
 import 'api/vigil_client.dart';
+import 'approvals/approvals_controller.dart';
 import 'auth/session.dart';
 import 'auth/token_store.dart';
 import 'auth/user_agent.dart';
@@ -54,6 +55,7 @@ class _VigilAppState extends State<VigilApp> {
   VigilClient? _client;
   UserProfile? _user;
   SchemeController? _scheme;
+  ApprovalsController? _approvals;
   VigilScreen? _deepLink;
   _Phase _phase = _Phase.booting;
 
@@ -70,6 +72,7 @@ class _VigilAppState extends State<VigilApp> {
   @override
   void dispose() {
     _scheme?.dispose();
+    _approvals?.dispose();
     super.dispose();
   }
 
@@ -125,6 +128,16 @@ class _VigilAppState extends State<VigilApp> {
       // Console parity: pull the persisted scheme once a session exists;
       // failures keep the dark default.
       ..load();
+    // One approvals controller per session — Home and Decisions share it;
+    // polling starts immediately and pauses with app lifecycle.
+    _approvals?.dispose();
+    final client = _client;
+    if (client == null) {
+      _approvals = null;
+    } else {
+      _approvals = ApprovalsController(client: client, approver: user.username)
+        ..startPolling();
+    }
     setState(() {
       _user = user;
       _phase = _Phase.ready;
@@ -142,6 +155,8 @@ class _VigilAppState extends State<VigilApp> {
         // 7 d) and must not trap the user in the shell.
       }
     }
+    _approvals?.dispose();
+    _approvals = null;
     if (!mounted) return;
     setState(() {
       _user = null;
@@ -205,6 +220,7 @@ class _VigilAppState extends State<VigilApp> {
       user: user,
       initialScreen: target ?? _landing(user),
       scheme: _scheme,
+      approvals: _approvals,
       onSignOut: _signOut,
     );
   }
