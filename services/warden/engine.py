@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 
-from core.edge.decision import LocalTriage, decide_local_action
+from core.edge.decision import decide_local_action
 from core.edge.envelope import budget_for
 from core.edge.policy import AutonomyEnvelope, EdgeAction, EdgeRule, PolicyPack
 from core.edge.target_guard import TargetGuard
@@ -41,6 +41,12 @@ from services.warden.metrics import WardenMetrics
 from services.warden.modes import ModeMachine, OperatingMode
 from services.warden.sentinel import Sentinel
 from services.warden.sync import PolicySync, SyncOutcome
+from services.warden.triage import (
+    FoldedTriage,
+    LocalSlm,
+    fold_triage,
+    render_decision_rule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +57,7 @@ __all__ = [
     "ExecutorRegistry",
     "LocalExecutor",
     "LoopDeps",
+    "MatchedCandidate",
     "match_alerts",
 ]
 
@@ -181,16 +188,34 @@ def _alert_confidence(alert: dict[str, Any]) -> float:
         return 0.0
 
 
+@dataclass(frozen=True)
+class MatchedCandidate:
+    """One (rule, target) match with the triage the ladder will see.
+
+    ``folded`` is the fold's verdict — sensor or SLM confidence — plus
+    the advisory opinion that rides along for the journal and metrics.
+    """
+
+    rule: EdgeRule
+    target: str
+    folded: FoldedTriage
+
+
 def match_alerts(
-    pack: PolicyPack, alert: dict[str, Any]
-) -> list[tuple[EdgeRule, str, LocalTriage]]:
-    """The (rule, target, triage) candidates one alert matches.
+    pack: PolicyPack,
+    alert: dict[str, Any],
+    slm: LocalSlm | None = None,
+) -> list[MatchedCandidate]:
+    """The candidates one alert matches, each folded through the SLM channel.
 
     A rule matches when the alert's indicator kind equals the rule's
     (``"ip"``), the alert carries a non-empty value for it, and — when
     the rule names MITRE techniques — the alert carries at least one of
     them. Matching is the runtime's job because alerts are runtime
-    input; the ladder stays a pure function of the candidates.
+    input; the ladder stays a pure function of the candidates. The fold
+    applies the envelope's SLM authority: advisory ranking rides along,
+    and the sensor confidence decides unless the signed pack says
+    otherwise.
     """
     indicator = alert.get("indicator")
     value = alert.get("value")
@@ -199,15 +224,15 @@ def match_alerts(
     mitre_raw = alert.get("mitre") or ()
     mitre_tags = {tag for tag in mitre_raw if isinstance(tag, str)}
     confidence = _alert_confidence(alert)
-    candidates: list[tuple[EdgeRule, str, LocalTriage]] = []
+    candidates: list[MatchedCandidate] = []
     for rule in pack.rules:
         if rule.indicator != indicator:
             continue
         if rule.mitre and not (set(rule.mitre) & mitre_tags):
             continue
-        candidates.append(
-            (rule, value, LocalTriage(confidence=confidence, source="sensor"))
-        )
+        opinion = slm.rank(alert, rule) if slm is not None else None
+        folded = fold_triage(confidence, opinion, pack.autonomy_envelope)
+        candidates.append(MatchedCandidate(rule=rule, target=value, folded=folded))
     return candidates
 
 
@@ -227,6 +252,9 @@ class LoopDeps:
     guard_provider: Callable[[PolicyPack], TargetGuard]
     clock: Callable[[], datetime]
     metrics: WardenMetrics
+    # The optional SLM triage channel; None means not configured, which
+    # is itself honest — the status payload reports it as absent.
+    slm: LocalSlm | None = None
 
 
 #: A no-authority envelope for the pre-first-pack budget: a zero cap and
@@ -338,25 +366,51 @@ class DecisionLoop:
         assert pack is not None  # tick gates on a pack in force
         alerts = self._deps.sentinel.drain(self._max_batch)
         for alert in alerts:
-            candidates = match_alerts(pack, alert)
+            candidates = match_alerts(pack, alert, self._deps.slm)
             if not candidates:
                 self._deps.metrics.decisions.labels(result="unmatched").inc()
                 continue
-            for rule, target, triage in candidates:
+            for candidate in candidates:
+                self._count_slm_outcome(candidate)
                 decision = decide_local_action(
                     pack,
-                    rule,
-                    triage,
-                    target,
+                    candidate.rule,
+                    candidate.folded.triage,
+                    candidate.target,
                     self._deps.guard_provider(pack),
                     self._budget,
                     now=now,
                 )
-                self._record_decision(decision, now=now)
+                self._record_decision(decision, now=now, folded=candidate.folded)
 
-    def _record_decision(self, decision: Any, *, now: datetime) -> None:
-        """Journal one ladder outcome — allows and refusals alike."""
+    def _count_slm_outcome(self, candidate: MatchedCandidate) -> None:
+        """How the SLM channel contributed to this candidate — when configured.
+
+        ``deciding`` is a signed opt-in; ``advisory`` ranked without
+        deciding; ``unavailable`` is a disabled or failed channel. Not
+        counted when no SLM is configured: the counter is about the
+        channel, not about its absence.
+        """
+        if self._deps.slm is None:
+            return
+        folded = candidate.folded
+        if folded.opinion is None:
+            outcome = "unavailable"
+        else:
+            outcome = "deciding" if folded.deciding else "advisory"
+        self._deps.metrics.slm_opinions.labels(outcome=outcome).inc()
+
+    def _record_decision(
+        self, decision: Any, *, now: datetime, folded: FoldedTriage | None = None
+    ) -> None:
+        """Journal one ladder outcome — allows and refusals alike.
+
+        The decision_rule the journal records is the ladder's render plus
+        the fold's advisory annotation: an operator reading the record
+        sees both channels and which one decided.
+        """
         metrics = self._deps.metrics
+        decision_rule = render_decision_rule(decision.decision_rule, folded)
         if not decision.allowed:
             metrics.decisions.labels(result="refused").inc()
             self._journal(
@@ -364,7 +418,7 @@ class DecisionLoop:
                 idempotency_key="none",
                 action_type="none",
                 target="",
-                decision_rule=decision.decision_rule,
+                decision_rule=decision_rule,
                 execution={
                     "status": "refused",
                     "reason": decision.code,
@@ -389,7 +443,7 @@ class DecisionLoop:
             idempotency_key=key,
             action_type=decision.action.type,
             target=decision.target,
-            decision_rule=decision.decision_rule,
+            decision_rule=decision_rule,
             execution={
                 "status": result.status,
                 "executor": result.executor,
@@ -434,6 +488,11 @@ class DecisionLoop:
         # The budget is derived from the envelope — the only sanctioned
         # construction (budget_for), so the cap cannot drift from the pack.
         self._budget = budget_for(pack.autonomy_envelope)
+        # The SLM channel is re-derived from the pack too: its model bytes
+        # and authority both come from the signed manifest and envelope.
+        # Idempotent on a same-manifest re-presentation; never raises.
+        if self._deps.slm is not None:
+            self._deps.slm.reload_for_pack(pack)
 
     def _journal(self, **fields: Any) -> None:
         try:
@@ -466,4 +525,22 @@ class DecisionLoop:
             "policy_version": self._pack.policy_version if self._pack else None,
             "live_actions": len(self._live),
             "halted": self._halted,
+            "slm": self._slm_status(),
         }
+
+    def _slm_status(self) -> dict[str, Any] | None:
+        """The SLM channel's state, plus whether it may decide right now.
+
+        ``deciding`` is derived from the pack in force — a signed grant,
+        not a local knob — and is only true when a verified model is
+        actually loaded under that pack.
+        """
+        slm = self._deps.slm
+        if slm is None:
+            return None
+        deciding = (
+            slm.ready
+            and self._pack is not None
+            and self._pack.autonomy_envelope.allow_slm_decisions
+        )
+        return {**slm.status(), "deciding": deciding}

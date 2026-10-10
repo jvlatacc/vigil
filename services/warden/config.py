@@ -32,6 +32,10 @@ Every variable Warden reads:
 ``WARDEN_GATEWAY_ADDRESSES``    Comma-separated gateway IPs/networks.
 ``WARDEN_CONTROL_PLANE_ADDRESSES``  Comma-separated control-plane IPs/networks.
 ``WARDEN_DNS_RESOLVERS``        Comma-separated resolver IPs.
+``WARDEN_SLM_MODEL_PATH``       Optional GGUF model file for local SLM triage;
+                                verified by sha256 against the signed pack's
+                                model_manifest before load. Never shipped in
+                                the repo or the image.
 ``WARDEN_LOG_LEVEL``            ``DEBUG|INFO|WARNING|ERROR`` (default ``INFO``).
 ==============================  =====================================================
 
@@ -84,6 +88,7 @@ class WardenConfig:
     gateway_addresses: tuple[str, ...] = ()
     control_plane_addresses: tuple[str, ...] = ()
     dns_resolvers: tuple[str, ...] = ()
+    slm_model_path: Path | None = None
     log_level: str = "INFO"
 
     @classmethod
@@ -124,6 +129,7 @@ class WardenConfig:
 
         data_dir = get("WARDEN_DATA_DIR")
         trust_root_path = get("WARDEN_TRUST_ROOT_PATH")
+        slm_model_path = get("WARDEN_SLM_MODEL_PATH")
         return cls(
             control_plane_url=get("WARDEN_CONTROL_PLANE_URL")
             or DEFAULT_CONTROL_PLANE_URL,
@@ -132,6 +138,7 @@ class WardenConfig:
             enrollment_token=get("WARDEN_ENROLLMENT_TOKEN"),
             segment_labels=get_labels(),
             trust_root_path=Path(trust_root_path) if trust_root_path else None,
+            slm_model_path=Path(slm_model_path) if slm_model_path else None,
             sync_interval_seconds=get_float("WARDEN_SYNC_INTERVAL_SECONDS", 60.0),
             sync_timeout_seconds=get_float("WARDEN_SYNC_TIMEOUT_SECONDS", 10.0),
             missed_syncs_threshold=get_int("WARDEN_MISSED_SYNCS_THRESHOLD", 3),

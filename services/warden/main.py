@@ -38,6 +38,7 @@ from services.warden.modes import ModeMachine
 from services.warden.sentinel import Sentinel
 from services.warden.storage import PolicyStore
 from services.warden.sync import PolicySync
+from services.warden.triage import LocalSlm
 
 logger = logging.getLogger("services.warden")
 
@@ -285,6 +286,10 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
     )
     registry = ExecutorRegistry()
     registry.register(DryRunExecutor())
+    # The SLM channel exists only when an operator staged a model file:
+    # unconfigured reads as absent in the status payload, not as a
+    # degraded-something. Its authority is still the pack's, not this.
+    slm = LocalSlm(config.slm_model_path) if config.slm_model_path else None
 
     def guard_for(pack: PolicyPack) -> TargetGuard:
         # The guard's categories come from the verified pack; the node
@@ -306,6 +311,7 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
             guard_provider=guard_for,
             clock=warden._clock,
             metrics=warden.metrics,
+            slm=slm,
         ),
         interval_seconds=config.sync_interval_seconds,
         max_alert_batch=config.max_alert_batch,

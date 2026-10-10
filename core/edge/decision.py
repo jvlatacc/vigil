@@ -142,11 +142,14 @@ def _effective_floor(envelope_floor: float, rule_floor: float | None) -> float:
     return max(envelope_floor, rule_floor)
 
 
-def _at_least(field: str, value: float, observed: float) -> str:
-    """Render ``field=value met/not met (observed)`` — the response-config
-    comparison shape, so edge rules read like response rules."""
+def _at_least(field: str, value: float, observed: float, source: str) -> str:
+    """Render ``field=value met/not met (source observed)`` — the response-config
+    comparison shape, so edge rules read like response rules. The source names
+    the triage channel that supplied ``observed`` (sensor or slm): once a
+    second channel exists, a record that omits who measured the number is
+    ambiguous exactly when an operator is auditing a refusal."""
     verdict = "met" if observed >= value else "not met"
-    return f"{field}={value:.2f} {verdict} ({observed:.2f})"
+    return f"{field}={value:.2f} {verdict} ({source} {observed:.2f})"
 
 
 def _ts(moment: datetime) -> str:
@@ -195,7 +198,7 @@ def decide_local_action(
     if triage.confidence < floor:
         return EdgeDecision.refuse(
             BELOW_CONFIDENCE_FLOOR,
-            _at_least("edge.confidence_floor", floor, triage.confidence),
+            _at_least("edge.confidence_floor", floor, triage.confidence, triage.source),
         )
 
     # 3. SLM authority: advisory ranking is always fine; deciding is a signed
