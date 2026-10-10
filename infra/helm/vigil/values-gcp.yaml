@@ -1,0 +1,105 @@
+# Vigil SOC — Google GKE profile
+#
+# helm install vigil ./infra/helm/vigil \
+#   -f ./infra/helm/vigil/values-gcp.yaml \
+#   --namespace vigil --create-namespace \
+#   --set secrets.anthropicApiKey="$ANTHROPIC_API_KEY" \
+#   --set secrets.postgresPassword="$(openssl rand -hex 24)" \
+#   --set secrets.jwtSecretKey="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
+#
+# Cluster prerequisites:
+# * GKE 1.24+ (the chart itself requires kubeVersion >=1.25.0-0), Standard
+#   mode. On 1.24+ clusters the PD CSI driver is enabled by default and
+#   `standard-rw` (pd-balanced) ships pre-created — no addon install or
+#   default-class change is needed; this profile pins it anyway so storage is
+#   explicit rather than inherited. Legacy clusters (pre-1.24) instead default
+#   `standard` (pd-standard) — see thunking/gcp-gke.md before reusing this
+#   profile there.
+# * Autopilot rejects privileged/hostPath workloads outright: the opt-in
+#   enforcer DaemonSet (enforcer.enabled) cannot run there, and self-managed
+#   Cilium (the honey-router's MTD plane) is not installable. Use Standard
+#   mode for those features. COS node images have a read-only rootfs and no
+#   package manager.
+# * Exposure, Workload Identity, image pull-through, and node scheduling
+#   below are documented hooks, not wired defaults — enable deliberately.
+#
+# --- Storage: pin all four PVC sites to standard-rw (pd-balanced) ---
+
+postgresql:
+  persistence:
+    storageClassName: standard-rw
+
+redis:
+  persistence:
+    storageClassName: standard-rw
+
+daemon:
+  persistence:
+    storageClassName: standard-rw
+
+splunk:
+  # dev utility; inert while disabled
+  persistence:
+    storageClassName: standard-rw
+
+# Redis is the latency-sensitive case; premium-rw (Hyperdisk Balanced) is the
+# deliberate upgrade — commented, never a silent default:
+# redis:
+#   persistence:
+#     storageClassName: premium-rw
+
+# Bitnami subchart variant (if postgresql.bitnami.enabled / redis.bitnami.enabled).
+# These are the subchart-native value paths — render-probe verified as the ones
+# that actually reach the vendored subcharts. The chart's own
+# postgresql.bitnami.* / redis.bitnami.* nesting does NOT pass through to the
+# subcharts (probe evidence in thunking/gcp-gke.md):
+# postgresql:
+#   primary:
+#     persistence:
+#       storageClass: standard-rw
+# redis:
+#   master:
+#     persistence:
+#       storageClass: standard-rw
+
+# --- Exposure: chart default is Ingress-only, disabled ---
+# GKE Ingress (gce class) is created by GKE's managed ingress-gce controller;
+# Gateway API is the modern alternative, not used here:
+# ingress:
+#   enabled: true
+#   className: gce
+#   annotations:
+#     cloud.google.com/load-balancer-type: "Internal"   # or "External"
+#   hosts:
+#     - host: vigil.example.com
+#       paths: [{ path: /, pathType: Prefix }]
+# The gce class has no controller namespace; if you also enable
+# networkPolicies, align the selector with where your controller runs:
+# networkPolicies:
+#   ingressControllerNamespaceSelector:
+#     kubernetes.io/metadata.name: kube-system
+
+# --- Identity: documented hook, not wired (see thunking/gcp-gke.md) ---
+# Workload Identity Federation for GKE needs the annotated service account
+# plus the GKE metadata server enabled on the node pools. The chart default
+# automountServiceAccountToken: false blocks projected-token injection —
+# flipping it is a security decision for the operator:
+# serviceAccount:
+#   annotations:
+#     iam.gke.io/gcp-service-account: vigil-<cluster>@<PROJECT_ID>.iam.gserviceaccount.com
+# Node pools must run the GKE metadata server — node label:
+#   iam.gke.io/gke-metadata-server-enabled: "true"
+
+# --- Images: Artifact Registry pull-through hook (optional) ---
+# Vigil's own images pull anonymously from ghcr.io and work as-is; pointing
+# the chart at an Artifact Registry repository is optional rate-limit hygiene.
+# The image helper concats <registry>/<namespace>-<component>:
+# global:
+#   imageRegistry: <REGION>-docker.pkg.dev
+#   imageNamespace: <PROJECT_ID>/<REPO>/vigil
+#   imagePullSecrets: [{ name: ar-pull-secret }]   # key-based auth only; none needed via node/WI access
+
+# --- Node scheduling: optional pin to a dedicated pool ---
+# backend:
+#   nodeSelector:
+#     cloud.google.com/gke-nodepool: vigil-pool
