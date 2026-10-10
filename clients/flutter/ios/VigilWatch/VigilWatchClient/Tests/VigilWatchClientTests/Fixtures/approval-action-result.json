@@ -1,0 +1,23 @@
+{
+  "action": {
+    "action_id": "act_iso_host",
+    "action_type": "isolate_host",
+    "approved_at": "2026-10-10T14:20:11Z",
+    "approved_by": "jvl",
+    "confidence": 0.88,
+    "created_at": "2026-10-10T13:58:02Z",
+    "created_by": "daemon",
+    "description": "Isolate host web-prod-3 from the network",
+    "evidence": { "finding_ids": ["f_8842", "f_8843"], "source": "daemon" },
+    "executed_at": null,
+    "execution_result": null,
+    "idempotency_key": "iso-web-prod-3-8842",
+    "parameters": { "host": "web-prod-3", "duration_seconds": 3600 },
+    "reversibility": "reversible",
+    "status": "approved",
+    "target": { "kind": "host", "name": "web-prod-3" },
+    "title": "Isolate host web-prod-3",
+    "workflow_run_id": "run_5521"
+  },
+  "resume_result": { "resumed": true, "workflow_run_id": "run_5521" }
+}
