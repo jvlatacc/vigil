@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../auth/session.dart';
 import '../api/config_api.dart';
+import '../chat/ask_vigil_pane.dart';
+import '../chat/chat_session.dart';
 import '../settings/scheme_controller.dart';
 import '../theme/extensions.dart';
 import '../theme/vigil_colors.dart';
@@ -18,12 +20,17 @@ class VigilShell extends StatefulWidget {
   const VigilShell({
     super.key,
     required this.user,
+    required this.chatSession,
     required this.initialScreen,
     required this.onSignOut,
     this.scheme,
   });
 
   final UserProfile user;
+
+  /// The Ask Vigil state — owned above the shell so the dock and the
+  /// phone's sheet share one live transcript across opens.
+  final ChatSession chatSession;
 
   /// Where the shell opens — the landing destination, or the deep-linked
   /// screen (already permission-checked by the app root).
@@ -43,10 +50,17 @@ class _VigilShellState extends State<VigilShell> {
   /// layouts; phones navigate by bar, tablets/desktop by rail.
   static const double _railBreakpoint = 600;
 
+  /// The console's fixed chat dock width (`CHAT_WIDTH` in SocConsole.tsx).
+  static const double _chatDockWidth = 400;
+
   List<VigilScreen> get _visible =>
       visibleDestinations(widget.user.permissions);
 
   late VigilScreen _screen = _initialScreen();
+
+  /// Whether the Ask Vigil dock is open on wide layouts (phones use the
+  /// modal sheet instead — the console's narrow-screen overlay rule).
+  bool _askOpen = false;
 
   VigilScreen _initialScreen() {
     if (canSeeScreen(widget.initialScreen, widget.user.permissions)) {
@@ -57,7 +71,44 @@ class _VigilShellState extends State<VigilShell> {
     return _visible.first;
   }
 
-  void _select(VigilScreen screen) => setState(() => _screen = screen);
+  /// Ask Vigil is a dock, not a screen: selecting it opens (or toggles) the
+  /// 400 px dock beside the current pane on wide layouts, and opens the
+  /// modal sheet on phones. A deep link to `/ask` still lands on an
+  /// inline, full-height pane via [_screen].
+  void _select(VigilScreen screen) {
+    if (screen == VigilScreen.ask) {
+      if (_screen == VigilScreen.ask) return;
+      final wide = MediaQuery.sizeOf(context).width >= _railBreakpoint;
+      if (wide) {
+        setState(() => _askOpen = !_askOpen);
+      } else {
+        _openAskSheet();
+      }
+      return;
+    }
+    setState(() => _screen = screen);
+  }
+
+  Future<void> _openAskSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        // Keep the composer above the keyboard.
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(sheetContext).bottom),
+        child: SizedBox(
+          height: MediaQuery.sizeOf(sheetContext).height * 0.92,
+          child: AskVigilPane(session: widget.chatSession),
+        ),
+      ),
+    );
+  }
+
+  /// The nav selection: the open dock highlights the Ask entry.
+  int get _selectedIndex => (_askOpen || _screen == VigilScreen.ask)
+      ? _visible.indexOf(VigilScreen.ask)
+      : _visible.indexOf(_screen);
 
   @override
   Widget build(BuildContext context) {
@@ -177,7 +228,7 @@ class _VigilShellState extends State<VigilShell> {
 
   Widget _bottomBar(VigilColors colors) {
     return NavigationBar(
-      selectedIndex: _visible.indexOf(_screen),
+      selectedIndex: _selectedIndex,
       onDestinationSelected: (i) => _select(_visible[i]),
       destinations: [
         for (final screen in _visible)
@@ -193,28 +244,49 @@ class _VigilShellState extends State<VigilShell> {
   }
 
   Widget _withRail(VigilColors colors) {
+    // NavigationRail asserts at least two destinations; a viewer whose
+    // permissions leave a single ungated surface gets the pane full-width
+    // instead of a rail that cannot be built.
+    final showRail = _visible.length >= 2;
     return Row(
       children: [
-        NavigationRail(
-          selectedIndex: _visible.indexOf(_screen),
-          onDestinationSelected: (i) => _select(_visible[i]),
-          labelType: NavigationRailLabelType.all,
-          destinations: [
-            for (final screen in _visible)
-              NavigationRailDestination(
-                icon: VigilIcon(screen.icon),
-                selectedIcon: VigilIcon(screen.icon, color: colors.ac),
-                label: Text(screen.navLabel),
-              ),
-          ],
-        ),
-        const VerticalDivider(width: 1, thickness: 1),
+        if (showRail) ...[
+          NavigationRail(
+            selectedIndex: _selectedIndex,
+            onDestinationSelected: (i) => _select(_visible[i]),
+            labelType: NavigationRailLabelType.all,
+            destinations: [
+              for (final screen in _visible)
+                NavigationRailDestination(
+                  icon: VigilIcon(screen.icon),
+                  selectedIcon: VigilIcon(screen.icon, color: colors.ac),
+                  label: Text(screen.navLabel),
+                ),
+            ],
+          ),
+          const VerticalDivider(width: 1, thickness: 1),
+        ],
         Expanded(child: _pane(colors)),
+        if (_askOpen && _screen != VigilScreen.ask) ...[
+          VerticalDivider(width: 1, thickness: 1, color: colors.ln0),
+          SizedBox(
+            width: _chatDockWidth,
+            child: AskVigilPane(
+              session: widget.chatSession,
+              onClose: () => setState(() => _askOpen = false),
+            ),
+          ),
+        ],
       ],
     );
   }
 
   Widget _pane(VigilColors colors) {
+    // Deep-linked /ask renders as a full-height pane; nav never selects it
+    // (the dock and sheet own that path).
+    if (_screen == VigilScreen.ask) {
+      return AskVigilPane(session: widget.chatSession);
+    }
     if (_screen == VigilScreen.home) return _homePane(colors);
     return _placeholderPane(colors, _screen);
   }

@@ -207,7 +207,8 @@ class _SignInPaneState extends State<SignInPane> {
                 controller: _username,
                 autofillHints: const [AutofillHints.username],
                 textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Username or email'),
+                decoration:
+                    const InputDecoration(labelText: 'Username or email'),
                 onChanged: (_) => _clearError(),
               ),
               const SizedBox(height: 12),
@@ -217,8 +218,7 @@ class _SignInPaneState extends State<SignInPane> {
                 obscureText: true,
                 autofillHints: const [AutofillHints.password],
                 onSubmitted: (_) => _submit(),
-                decoration:
-                    const InputDecoration(labelText: 'Password'),
+                decoration: const InputDecoration(labelText: 'Password'),
               ),
               if (_mfaRequired) ...[
                 const SizedBox(height: 12),
