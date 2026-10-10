@@ -2,7 +2,7 @@
 
 Skipped by default. Runs only when BIFROST_URL is set and points at a
 live Bifrost instance. Use this as the end-to-end gate for the
-verification steps in the [Bifrost docs](https://vigilsoc.org/docs/bifrost/).
+verification steps in the [Bifrost docs](../../docs/deploy/bifrost.md).
 
 Invoke with::
 

@@ -14,7 +14,7 @@ Vigil rests on three parts — **agents** you can read, fork, and rewire; **work
 
 ## Agents
 
-Vigil ships a set of built-in specialist agents covering the core SOC roles — triage, investigation, threat hunting, correlation, response, reporting, ATT&CK mapping, forensics, threat intel, compliance, malware and network analysis — and you can add your own from the console. The set grows and changes with the project; the built-in definitions live in [`core/agents/builtins.py`](core/agents/builtins.py) and are described at [vigilsoc.org/docs/agents](https://vigilsoc.org/docs/agents/).
+Vigil ships a set of built-in specialist agents covering the core SOC roles — triage, investigation, threat hunting, correlation, response, reporting, ATT&CK mapping, forensics, threat intel, compliance, malware and network analysis — and you can add your own from the console. The set grows and changes with the project; the built-in definitions live in [`core/agents/builtins.py`](core/agents/builtins.py) and are described in [docs/product/agents.md](docs/product/agents.md).
 
 Every agent can call Vigil's backend tools (findings, cases, approvals, detections, ATT&CK, threat intel, memory, skills) and the tools of whichever MCP integrations you have connected. Each agent's tool list, prompt, model, and extended-thinking budget are visible in its definition.
 
@@ -91,12 +91,12 @@ python scripts/create_workflow.py phishing-triage --agents triage,investigator,r
 
 ## Integrations
 
-Vigil connects agents to your existing tools through [MCP](https://modelcontextprotocol.io/). Integrations span SIEM and log search, EDR/XDR, cloud security (AWS, Azure, GCP), identity, threat intel, sandboxes, detection engineering, ticketing, chat and paging, network security, and data pipelines. The catalogue changes as vendors ship official MCP servers and contributors add new ones; [`mcp-config.json`](mcp-config.json) is the current list, and [vigilsoc.org/docs/integrations](https://vigilsoc.org/docs/integrations/) describes each one.
+Vigil connects agents to your existing tools through [MCP](https://modelcontextprotocol.io/). Integrations span SIEM and log search, EDR/XDR, cloud security (AWS, Azure, GCP), identity, threat intel, sandboxes, detection engineering, ticketing, chat and paging, network security, and data pipelines. The catalogue changes as vendors ship official MCP servers and contributors add new ones; [`mcp-config.json`](mcp-config.json) is the current list, and [docs/product/integrations.md](docs/product/integrations.md) describes each one.
 
 An integration is one of two things:
 
 - **An upstream MCP server**: a vendor's or community's own server, pinned to a version in `mcp-config.json` (npx, uvx, Docker, or a remote endpoint).
-- **A vendor slice**: a server Vigil maintains at `core/integrations/<vendor>/tool.py`, used where no suitable upstream server exists. See [vendor slices](https://vigilsoc.org/docs/vendor-slices/).
+- **A vendor slice**: a server Vigil maintains at `core/integrations/<vendor>/tool.py`, used where no suitable upstream server exists. See [vendor slices](docs/develop/vendor-slices.md).
 
 What an integration can do depends on its server: some are read-only lookups, others can act (for example, Microsoft Defender isolation or Carbon Black quarantine). The integrations docs list each one's tools.
 
@@ -105,6 +105,8 @@ Enable and configure integrations under **Settings → Integrations**, or genera
 **Vigil's own MCP server.** Vigil serves its SOC operations (findings, cases, approvals, hunts) at `/mcp`, the same tools its agents use. The finding, case, and approval tools that mirror frozen `/api/v1` operations are frozen: their names and input schemas are pinned in [`tools/mcp/frozen_tools.snapshot.json`](tools/mcp/frozen_tools.snapshot.json). The rest are served under the `0.x` terms in [`SECURITY.md`](SECURITY.md#supported-versions).
 
 **Detection rules.** The detection-engineering integration ([security-detections-mcp](https://www.npmjs.com/package/security-detections-mcp)) indexes community rule sets (Sigma, Splunk ESCU, Elastic, KQL) for search, coverage analysis, and gap identification. Vigil does not ship the rules; fetch them with `./scripts/setup_detection_repos.sh` (or `SETUP_DETECTION_REPOS=1 ./setup_dev.sh`).
+
+**Kernel enforcement (eBPF/XDP).** On Linux hosts running the `services/enforcement` daemon, Vigil can contain threats in the kernel itself: an approved `xdp_block_ip` drops a source IP in the NIC driver (XDP), `xdp_redirect_socket` steers matching flows to a capture sink, and `xdp_interdict_process` denies connect/exec for a misbehaving process. Every action is approval-gated, self-expires via a TTL that lives in the BPF map (containment ages out even if Vigil disappears), and returns kernel evidence — attach point, map slot, drop counters — stored with the action. Point Vigil at the daemon with `VIGIL_ENFORCEMENT_URL` and `VIGIL_ENFORCEMENT_TOKEN` (Settings → Integrations → ebpf-xdp); without them the integration stays dormant.
 
 ---
 
@@ -118,6 +120,8 @@ cp env.example .env   # set AGENT_INTERNAL_TOKEN (see below)
 ```
 
 Then open http://localhost:6988 and create the admin account on the bootstrap screen.
+
+No browser on this host — a server, a CI job, an MCP client? Boot `./start.sh --headless` and follow [Headless deployment](docs/headless.md): the same stack with no console, taken to an MCP credential by one script.
 
 `start.sh` provisions the pinned Python with [uv](https://docs.astral.sh/uv/), installs dependencies, starts PostgreSQL, Redis, and the Bifrost LLM gateway in Docker, starts a host Ollama if one is installed (optional), initializes the schema and reference data, and launches the API, the agent layer, and the frontend. No LogLM or cloud API key is needed to reach a running UI.
 
@@ -141,7 +145,7 @@ Then open http://localhost:6988 and create the admin account on the bootstrap sc
 - **Node.js 20+**: runs the agent layer and the frontend. Without Node, neither starts and workflows cannot run.
 - **Git**.
 - **No system Python needed**: `start.sh` provisions the version pinned in `.python-version` with uv, independent of any Python you already have.
-- **An LLM provider** (optional to reach the UI): Anthropic (default), OpenAI, Google Vertex, or Ollama (local, no key). Configure it under **Settings → AI models → Providers & Keys**; see the [Bifrost notes](https://vigilsoc.org/docs/bifrost/). With no provider key, `scripts/local_model.sh` serves a small local model Bifrost can reach and prints the model id to use.
+- **An LLM provider** (optional to reach the UI): Anthropic (default), OpenAI, Google Vertex, or Ollama (local, no key). Configure it under **Settings → AI models → Providers & Keys**; see the [Bifrost notes](docs/deploy/bifrost.md). With no provider key, `scripts/local_model.sh` serves a small local model Bifrost can reach and prints the model id to use.
 
 ### Run
 
@@ -228,7 +232,7 @@ helm install vigil ./infra/helm/vigil \
   --set secrets.jwtSecretKey="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
 ```
 
-See the [Helm guide](https://vigilsoc.org/docs/helm/) for values, external Postgres/Redis, ingress, and troubleshooting.
+See the [Helm guide](docs/deploy/helm.md) for values, external Postgres/Redis, ingress, and troubleshooting.
 
 ### Desktop app
 
@@ -323,18 +327,18 @@ vigil/
 
 ## Documentation
 
-Guides live at **[vigilsoc.org/docs](https://vigilsoc.org/docs/)**:
+Guides live in the repository under **[docs/](docs/README.md)** (the pages there are reconciled against the code on `main`); an online mirror of older revisions is served at [vigilsoc.org/docs](https://vigilsoc.org/docs/):
 
 | Doc | Contents |
 |-----|----------|
-| [Agents](https://vigilsoc.org/docs/agents/) | Built-in agents and how to customize them |
-| [Integrations](https://vigilsoc.org/docs/integrations/) | MCP integrations and setup |
-| [Detection engineering](https://vigilsoc.org/docs/detection-engineering/) | Rule search, coverage, and gaps |
-| [Chat-driven case management](https://vigilsoc.org/docs/chat-case-management/) | Building cases in natural language |
-| [Configuration](https://vigilsoc.org/docs/configuration/) | Environment variables, secrets, deployment |
-| [Helm](https://vigilsoc.org/docs/helm/) | Chart values, secrets, install |
-| [Splunk testing](https://vigilsoc.org/docs/splunk-testing/) · [Postgres → Splunk](https://vigilsoc.org/docs/postgres-to-splunk/) | Test data and export scripts |
-| [Contributing](https://vigilsoc.org/docs/contributing/) | How to contribute, DCO |
+| [Agents](docs/product/agents.md) | Built-in agents and how to customize them |
+| [Integrations](docs/product/integrations.md) | MCP integrations and setup |
+| [Detection engineering](docs/product/detection-engineering.md) | Rule search, coverage, and gaps |
+| [Chat-driven case management](docs/product/chat-case-management.md) | Building cases in natural language |
+| [Configuration](docs/deploy/configuration.md) | Environment variables, secrets, deployment |
+| [Helm](docs/deploy/helm.md) | Chart values, secrets, install |
+| [Splunk testing](docs/develop/splunk-testing.md) · [Postgres → Splunk](docs/develop/postgres-to-splunk.md) | Test data and export scripts |
+| [Contributing](docs/develop/contributing.md) | How to contribute, DCO |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting, supported versions, disclosure |
 | [VERSIONING.md](VERSIONING.md) | What is frozen, what is not, and how the contract changes |
 
@@ -346,7 +350,7 @@ Contributions are welcome: bug fixes, integrations, agent prompts, workflows, or
 2. Make your changes and test them.
 3. Open a pull request with a clear description.
 
-See the [contributing guide](https://vigilsoc.org/docs/contributing/) for the full process.
+See the [contributing guide](docs/develop/contributing.md) for the full process.
 
 ## License
 

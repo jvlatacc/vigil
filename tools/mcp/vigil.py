@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import json
 import logging
 from contextlib import contextmanager
@@ -33,6 +35,7 @@ FROZEN_TOOLS = frozenset(
     {
         "list_findings",
         "get_finding",
+        "update_finding",
         "list_cases",
         "get_case",
         "create_case",
@@ -44,10 +47,18 @@ FROZEN_TOOLS = frozenset(
         "add_case_ioc",
         "bulk_add_iocs",
         "get_case_iocs",
+        "search_cases",
+        "merge_cases",
+        "export_case_iocs",
         "list_approval_actions",
         "get_approval_action",
         "approve_action",
         "reject_action",
+        "start_agent_run",
+        "get_agent_run",
+        "queue_agent_directive",
+        "list_workflows",
+        "get_workflow",
     }
 )
 
@@ -86,6 +97,25 @@ def jdump(obj, indent=2):
     return json.dumps(obj, cls=_JsonEncoder, indent=indent)
 
 
+def _requires_cases_write(fn):
+    """A case-writing tool answers to the caller's grant, as the cases API does.
+
+    The check reads the bound principal -- the person this surface
+    authenticated -- so a credential whose owner lost ``cases.write`` cannot
+    write cases through MCP either. The four tools that funnel into the
+    registry's case writers are decorated too: one rule, checked at the door.
+    """
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        refusal = tool_registry.case_write_refusal()
+        if refusal is not None:
+            return jdump(refusal)
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _call(fn, **kwargs) -> str:
     try:
         return jdump(fn(**kwargs))
@@ -100,6 +130,14 @@ async def _acall(fn, **kwargs) -> str:
     except Exception as e:
         logger.error("%s failed: %s", getattr(fn, "__name__", fn), e)
         return jdump({"error": str(e)})
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    """An ISO-8601 parameter, or None. Raises ValueError on a bad timestamp;
+    like every tool failure, that surfaces as a JSON error, not a raise."""
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def get_data_service():
@@ -149,6 +187,55 @@ def get_finding(finding_id: str) -> str:
 
 
 @mcp.tool()
+def update_finding(
+    finding_id: str,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    anomaly_score: Optional[float] = None,
+    cluster_id: Optional[str] = None,
+    mitre_predictions: Optional[dict] = None,
+    predicted_techniques: Optional[list] = None,
+    entity_context: Optional[dict] = None,
+    evidence_links: Optional[list] = None,
+) -> str:
+    """Update/enrich an existing finding.
+
+    Mirrors the frozen PATCH /api/v1/findings/{finding_id}: the same fields,
+    the same not-found / no-updates refusals, the same updated read-back.
+    """
+    data_service = get_data_service()
+
+    def _update():
+        if not data_service.get_finding(finding_id):
+            return {"error": "Finding not found"}
+        updates = {
+            key: value
+            for key, value in {
+                "severity": severity,
+                "status": status,
+                "anomaly_score": anomaly_score,
+                "cluster_id": cluster_id,
+                "mitre_predictions": mitre_predictions,
+                "predicted_techniques": predicted_techniques,
+                "entity_context": entity_context,
+                "evidence_links": evidence_links,
+            }.items()
+            if value is not None
+        }
+        if not updates:
+            return {"error": "No updates provided"}
+        if not data_service.update_finding(finding_id, **updates):
+            return {"error": "Failed to update finding"}
+        return {
+            "success": True,
+            "finding": data_service.get_finding(finding_id),
+            "updated_fields": list(updates.keys()),
+        }
+
+    return _call(_update)
+
+
+@mcp.tool()
 async def list_completed_hunts(
     start: str,
     end: str,
@@ -180,6 +267,27 @@ def get_technique_rollup(min_confidence: float = 0.0, time_range: str = "all") -
 
 
 @mcp.tool()
+def query_decoy_sessions(
+    session_id: Optional[str] = None,
+    decoy_service: Optional[str] = None,
+    limit: int = 20,
+) -> str:
+    """Read decoy sessions captured by the MTD capture plane, newest first.
+
+    One row per session: the decoy, the attacker's entity key, the window,
+    the routing action, what the attacker did, and the ATT&CK techniques.
+    Read-only, and principal-scoped — a call with no one bound is refused,
+    because the transcripts are evidence.
+    """
+    return _call(
+        tool_registry.query_decoy_sessions,
+        session_id=session_id,
+        decoy_service=decoy_service,
+        limit=limit,
+    )
+
+
+@mcp.tool()
 def list_cases(
     status: Optional[str] = None,
     severity: Optional[str] = None,
@@ -203,6 +311,7 @@ def get_case(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def create_case(
     title: str,
     description: str = "",
@@ -239,6 +348,7 @@ def _service_session() -> Iterator["Session"]:
 
 
 @mcp.tool()
+@_requires_cases_write
 def update_case(
     case_id: str,
     title: Optional[str] = None,
@@ -262,6 +372,7 @@ def update_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_finding_to_case(case_id: str, finding_id: str) -> str:
     """Attach a finding to a case."""
     return _call(
@@ -270,6 +381,7 @@ def add_finding_to_case(case_id: str, finding_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def remove_finding_from_case(case_id: str, finding_id: str) -> str:
     try:
         from core.cases import case_journal_service
@@ -294,6 +406,7 @@ def remove_finding_from_case(case_id: str, finding_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_activity(
     case_id: str,
     activity_type: str,
@@ -339,6 +452,7 @@ def add_case_activity(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_timeline_entry(
     case_id: str,
     event_description: str,
@@ -386,6 +500,7 @@ def add_case_timeline_entry(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_mitre_techniques(case_id: str, technique_ids: list) -> str:
     """
     Add MITRE ATT&CK technique IDs to a case to document the kill chain.
@@ -418,6 +533,7 @@ def add_case_mitre_techniques(case_id: str, technique_ids: list) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_resolution_step(
     case_id: str,
     description: str,
@@ -435,6 +551,7 @@ def add_resolution_step(
 
 
 @mcp.tool()
+@_requires_cases_write
 def bulk_add_findings_to_case(
     case_id: str, finding_ids: list, note: Optional[str] = None
 ) -> str:
@@ -494,6 +611,7 @@ def bulk_add_findings_to_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def create_case_from_killchain(
     title: str,
     finding_ids: list,
@@ -589,6 +707,7 @@ def create_case_from_killchain(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_comment(
     case_id: str,
     content: str,
@@ -660,6 +779,7 @@ def get_case_comments(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_evidence(
     case_id: str,
     evidence_type: str,
@@ -720,6 +840,7 @@ def add_case_evidence(
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_ioc(
     case_id: str,
     ioc_type: str,
@@ -784,6 +905,7 @@ def add_case_ioc(
 
 
 @mcp.tool()
+@_requires_cases_write
 def bulk_add_iocs(case_id: str, iocs: list) -> str:
     """
     Bulk add multiple IOCs to a case at once.
@@ -872,6 +994,7 @@ def get_case_iocs(case_id: str, ioc_type: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def add_case_task(
     case_id: str,
     title: str,
@@ -931,6 +1054,7 @@ def add_case_task(
 
 
 @mcp.tool()
+@_requires_cases_write
 def update_case_task(
     task_id: int,
     status: Optional[str] = None,
@@ -1011,6 +1135,7 @@ def get_case_tasks(case_id: str) -> str:
 
 
 @mcp.tool()
+@_requires_cases_write
 def link_related_cases(
     case_id: str,
     related_case_id: str,
@@ -1070,6 +1195,7 @@ def link_related_cases(
 
 
 @mcp.tool()
+@_requires_cases_write
 def escalate_case(
     case_id: str,
     escalated_to: str,
@@ -1135,6 +1261,7 @@ def escalate_case(
 
 
 @mcp.tool()
+@_requires_cases_write
 def close_case(
     case_id: str,
     closure_category: str,
@@ -1351,19 +1478,479 @@ def get_approval_action(action_id: str) -> str:
     return _call(tool_registry.get_approval_action, action_id=action_id)
 
 
+# A decision on a run-bound action does what the /api/v1 approvals router does
+# (core/api/v1/approvals_router.py): record and commit it, then ask the agent
+# layer to pick the parked run back up (core.workflows.run_resume.resume_run)
+# instead of leaving it for the parked-run sweeper. Best-effort by contract --
+# the decision is already recorded and stands whatever the wakeup does, so a
+# failed or unavailable enqueue is reported as "skipped: <reason>", never
+# raised, and the sweeper stays as the fallback.
+async def _decide_and_resume(decide, verb, action_id):
+    from core.workflows.run_resume import resume_run
+
+    result = decide()
+    if not isinstance(result, dict) or "error" in result:
+        # Nothing was decided (unknown action, no principal, no right); the
+        # registry's error shape already says which.
+        return result
+    run_id = result.get("workflow_run_id")
+    if not run_id:
+        result["run_resume"] = "skipped: action is not bound to a workflow run"
+        return result
+    try:
+        resume = await resume_run(
+            run_id, action_id, result.get("approved_by") or caller()
+        )
+    except Exception as exc:  # noqa: BLE001 -- the decision must not fail on the wakeup
+        logger.error("resume after %s of %s failed: %s", verb, action_id, exc)
+        resume = {"success": False, "error": str(exc)}
+    if resume.get("success"):
+        result["run_resume"] = "enqueued"
+    else:
+        result["run_resume"] = f"skipped: {resume.get('error') or 'resume failed'}"
+    return result  # serialized by _acall, like every other tool body
+
+
 @mcp.tool()
-def approve_action(action_id: str) -> str:
+async def approve_action(action_id: str) -> str:
     """Approve a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.approve_action, action_id=action_id)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.approve_action(action_id=action_id),
+        verb="approve",
+        action_id=action_id,
+    )
 
 
 @mcp.tool()
-def reject_action(
+async def reject_action(
     action_id: str,
     reason: str,
 ) -> str:
     """Reject a pending action. The actor is the caller, not an argument."""
-    return _call(tool_registry.reject_action, action_id=action_id, reason=reason)
+    return await _acall(
+        _decide_and_resume,
+        decide=lambda: tool_registry.reject_action(action_id=action_id, reason=reason),
+        verb="reject",
+        action_id=action_id,
+    )
+
+
+# --- Agent runs --------------------------------------------------------------
+# The run lifecycle over MCP: start, report, steer, cancel, resume. Each tool
+# delegates to the module its HTTP twin uses (core.agents.run_start / run_status
+# / directives, core.workflows.run_control), so a run driven over either surface
+# behaves the same. The actor is always the bound caller, never an argument.
+
+
+@mcp.tool()
+async def start_agent_run(
+    playbook: str,
+    config: str,
+    run_kind: str = "hunt",
+    arch: str = "",
+    prompt: str = "",
+    overrides: Optional[dict] = None,
+    tenant_id: Optional[str] = None,
+) -> str:
+    """Start an agent run. Mirrors the frozen POST /api/v1/agent-runs."""
+    from core.agents import run_start
+
+    async def _start():
+        return await run_start.start_run(
+            run_kind=run_kind,
+            playbook=playbook,
+            config=config,
+            arch=arch,
+            prompt=prompt,
+            overrides=overrides,
+            tenant_id=tenant_id,
+            enqueued_by=caller(),
+        )
+
+    return await _acall(_start)
+
+
+@mcp.tool()
+def get_agent_run(run_id: str) -> str:
+    """Report an agent run's status. Mirrors the frozen GET /api/v1/agent-runs/{run_id}."""
+    from core.agents.run_status import run_status
+
+    def _get():
+        with _service_session() as session:
+            return run_status(session, run_id) or {"error": f"no such run: {run_id}"}
+
+    return _call(_get)
+
+
+@mcp.tool()
+def queue_agent_directive(
+    run_id: str,
+    kind: str,
+    text: str = "",
+    fields: Optional[dict] = None,
+) -> str:
+    """Queue a directive for a running agent.
+
+    Mirrors the frozen POST /api/v1/agent-runs/{run_id}/directives. ``kind``
+    is one of note, redirect, cancel.
+    """
+    from core.agents.directives import enqueue_directive
+
+    def _queue():
+        with _service_session() as session:
+            return enqueue_directive(
+                session,
+                run_id=run_id,
+                kind=kind,
+                body=text,
+                actor=caller(),
+                fields=fields,
+            )
+
+    return _call(_queue)
+
+
+@mcp.tool()
+async def cancel_agent_run(run_id: str, reason: str) -> str:
+    """Cancel a paused or running workflow run.
+
+    Rejects any pending approval action on the run and finalises it as
+    ``cancelled`` with the supplied reason.
+    """
+    from core.response.approval_service import ApprovalService
+    from core.workflows.run_control import cancel_run
+    from core.workflows.workflow_run_service import WorkflowRunService
+
+    async def _cancel():
+        return await cancel_run(
+            run_id,
+            reason=reason,
+            actor=caller(),
+            run_service=WorkflowRunService(),
+            approval_service=ApprovalService(),
+        )
+
+    return await _acall(_cancel)
+
+
+@mcp.tool()
+async def resume_agent_run(run_id: str) -> str:
+    """Resume a paused workflow run by deciding its pending approval."""
+    from core.response.approval_service import ApprovalService
+    from core.workflows.run_control import resume_paused_run
+    from core.workflows.workflow_run_service import WorkflowRunService
+
+    async def _resume():
+        return await resume_paused_run(
+            run_id,
+            decided_by=caller(),
+            run_service=WorkflowRunService(),
+            approval_service=ApprovalService(),
+        )
+
+    return await _acall(_resume)
+
+
+# --- Workflow catalog --------------------------------------------------------
+@mcp.tool()
+def list_workflows() -> str:
+    """List available workflows. Mirrors the frozen GET /api/v1/workflows."""
+    from core.workflows import catalog
+    from core.workflows.workflows_service import WorkflowsService
+
+    return _call(catalog.listing, service=WorkflowsService())
+
+
+@mcp.tool()
+def get_workflow(workflow_id: str) -> str:
+    """Get full details for a workflow.
+
+    Mirrors the frozen GET /api/v1/workflows/{workflow_id}.
+    """
+    from core.workflows import catalog
+    from core.workflows.workflows_service import WorkflowsService
+
+    def _get():
+        workflow = catalog.detail(WorkflowsService(), workflow_id)
+        if workflow is None:
+            return {"error": f"Workflow not found: {workflow_id}"}
+        return workflow
+
+    return _call(_get)
+
+
+# --- Case operations ---------------------------------------------------------
+@mcp.tool()
+def search_cases(
+    query_text: Optional[str] = None,
+    status: Optional[list] = None,
+    priority: Optional[list] = None,
+    assignee: Optional[list] = None,
+    tags: Optional[list] = None,
+    mitre_techniques: Optional[list] = None,
+    created_after: Optional[str] = None,
+    created_before: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> str:
+    """Advanced case search. Mirrors the frozen POST /api/v1/cases/search."""
+    from core.cases.case_search_service import CaseSearchService
+
+    def _search():
+        return CaseSearchService().search_cases(
+            query_text=query_text,
+            status=status,
+            priority=priority,
+            assignee=assignee,
+            tags=tags,
+            mitre_techniques=mitre_techniques,
+            created_after=_parse_iso(created_after),
+            created_before=_parse_iso(created_before),
+            limit=limit,
+            offset=offset,
+        )
+
+    return _call(_search)
+
+
+@mcp.tool()
+def merge_cases(case_id: str, source_case_id: str) -> str:
+    """Merge a source case into a target case.
+
+    Mirrors the frozen POST /api/v1/cases/{case_id}/merge: findings, timeline,
+    activities, IOCs, evidence, tasks and comments move; the source case is
+    closed and linked with a merged_into relationship.
+    """
+    from core.cases.case_workflow_service import CaseWorkflowService
+
+    def _merge():
+        if case_id == source_case_id:
+            return {"error": "Cannot merge a case into itself"}
+        moved_findings = CaseWorkflowService().merge_cases(
+            case_id, source_case_id, caller()
+        )
+        result_case = get_data_service().get_case(case_id)
+        return {
+            "success": True,
+            "target_case": result_case,
+            "findings_moved": moved_findings,
+            "source_case_status": "closed",
+            "message": f"Case {source_case_id} merged into {case_id}",
+        }
+
+    return _call(_merge)
+
+
+@mcp.tool()
+def export_case_iocs(case_id: str, format: str = "json") -> str:
+    """Export a case's IOCs (json, csv, or stix).
+
+    Mirrors the frozen GET /api/v1/cases/{case_id}/iocs/export.
+    """
+    from core.cases.case_ioc_service import CaseIOCService
+
+    def _export():
+        ioc_service = CaseIOCService()
+        if format == "csv":
+            return {"format": "csv", "content": ioc_service.export_iocs_csv(case_id)}
+        if format == "stix":
+            return {"format": "stix", "content": ioc_service.export_iocs_stix(case_id)}
+        return {"format": "json", "content": ioc_service.export_iocs_json(case_id)}
+
+    return _call(_export)
+
+
+# --- Case metrics ------------------------------------------------------------
+# One 0.x wrapper over the six frozen metric reads. The reads themselves are
+# the frozen surface; the wrapper adds only metric selection -- each branch is
+# the exact call its HTTP twin makes, on the shared query module.
+_METRIC_READS = ("summary", "by-priority", "by-status", "breached", "mttr", "mttd")
+
+
+@mcp.tool()
+def get_case_metrics(
+    metric: str = "summary",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    priority: Optional[str] = None,
+) -> str:
+    """Case metrics: summary, by-priority, by-status, breached, mttr, or mttd.
+
+    Dates are ISO timestamps. ``priority`` applies to mttr and mttd.
+    """
+    from core.cases import case_metrics_queries
+    from core.cases.case_sla_service import CaseSLAService
+
+    if metric not in _METRIC_READS:
+        return jdump({"error": f"metric must be one of {', '.join(_METRIC_READS)}"})
+
+    def _metrics():
+        start = _parse_iso(start_date)
+        end = _parse_iso(end_date)
+        if metric == "summary":
+            return case_metrics_queries.summary(start, end)
+        if metric == "breached":
+            return {"breached_cases": CaseSLAService().get_breached_cases()}
+        with _service_session() as session:
+            if metric == "by-priority":
+                return case_metrics_queries.by_priority(session, start, end)
+            if metric == "by-status":
+                return case_metrics_queries.by_status(session, start, end)
+            if metric == "mttr":
+                return case_metrics_queries.mttr(session, start, end, priority)
+            return case_metrics_queries.mttd(session, start, end, priority)
+
+    return _call(_metrics)
+
+
+# ---------------------------------------------------------------------------
+# Speculative-containment leases (core.response.fastpath)
+#
+# Two verbs only, and both are demotions: READ (lease_list) and UNDO
+# (propose_rollback — the executor's idempotent undo, then the ledger's
+# compare-and-swap close). There is deliberately no tool here that commits,
+# promotes, extends into durability, or strengthens a lease: the system can
+# only demote its own autonomy — promoting is a person's call through the
+# approvals queue (create_approval_action above). The negative test in
+# tests/unit/response/fastpath/test_adjudication.py holds that line.
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def lease_list(
+    status: str = "active",
+    entity_type: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    limit: int = 50,
+) -> str:
+    """List speculative-containment leases (read-only).
+
+    ``status`` is ``active`` (pending_apply or applied, the default) or
+    ``all`` (every row, newest first — the recent view, terminal states
+    included: rolled_back, escalated, failed).
+
+    Undo payloads are not returned: undo tokens are daemon-internal
+    capability, and a visibility surface does not hand them out.
+    """
+    try:
+        from core.response.fastpath.adjudication import read_leases
+
+        leases = read_leases(
+            status=status,
+            limit=max(1, min(int(limit), 200)),
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+    except ValueError as e:
+        return jdump({"error": str(e)})
+    except Exception as e:
+        return jdump({"error": f"Lease read failed: {e}"})
+
+    return jdump(
+        {
+            "success": True,
+            "count": len(leases),
+            "leases": [
+                {
+                    "lease_id": lease.id,
+                    "action_type": lease.action_type,
+                    "entity_type": lease.entity_type,
+                    "entity_id": lease.entity_id,
+                    "status": lease.status,
+                    "decision_rule": lease.decision_rule,
+                    "observed": lease.observed,
+                    "is_shadow": lease.is_shadow,
+                    "finding_id": lease.finding_id,
+                    "created_at": lease.created_at,
+                    "expires_at": lease.expires_at,
+                }
+                for lease in leases
+            ],
+        }
+    )
+
+
+@mcp.tool()
+async def propose_rollback(lease_id: str, reason: str = "") -> str:
+    """Undo a speculative-containment lease now (an autonomy DEMOTION).
+
+    The containment effect is removed first — the executor's idempotent
+    undo — then the ledger row is closed by compare-and-swap, so a race
+    with the TTL sweeper is refused and harmless. ``reason`` is recorded on
+    the row (default: false_positive).
+
+    Rollback is the one fate an agent may execute directly because it
+    demotes the system's own autonomy. There is deliberately no counterpart
+    that commits or promotes: that door opens only through the human-gated
+    approvals queue.
+    """
+    try:
+        from core.response.fastpath.executors import default_registry
+        from core.response.fastpath.ledger import (
+            FALSE_POSITIVE,
+            ContainmentLedger,
+            rollback_lease,
+        )
+
+        lease_key = lease_id.strip()
+        if not lease_key:
+            return jdump({"error": "lease_id is required"})
+
+        ledger = ContainmentLedger()
+        registry = default_registry()
+        # The driver resolves the lease row itself; undo must ride the
+        # executor registered for THIS lease's action type.
+        lease = await asyncio.to_thread(ledger.get, lease_key)
+        if lease is None or lease.status != "applied":
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No live lease {lease_key} — unknown, or already"
+                        " resolved (rolled back, expired, or escalated)"
+                    ),
+                }
+            )
+        executor = registry.get(lease.action_type)
+        if executor is None:
+            return jdump(
+                {
+                    "success": False,
+                    "error": (
+                        f"No executor registered for action type"
+                        f" {lease.action_type} — the sweeper will reconcile it"
+                    ),
+                }
+            )
+        transition = await rollback_lease(
+            ledger,
+            executor,
+            lease_key,
+            reason.strip() or FALSE_POSITIVE,
+            actor=caller(),
+        )
+        if transition is None:
+            # A concurrent adjudication or TTL sweep closed it first; its
+            # undo was idempotent, so the containment is down either way.
+            return jdump(
+                {
+                    "success": False,
+                    "error": f"Lease {lease_key} was resolved concurrently",
+                }
+            )
+        return jdump(
+            {
+                "success": True,
+                "lease_id": transition.lease_id,
+                "from_status": transition.from_status,
+                "to_status": transition.to_status,
+                "actor": caller(),
+                "message": "Containment undone; the lease row is closed.",
+            }
+        )
+    except Exception as e:
+        return jdump({"error": f"Rollback failed: {e}"})
 
 
 if __name__ == "__main__":

@@ -61,6 +61,10 @@ Per-component names and labels.
 {{- printf "%s-daemon" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "vigil.enforcer.fullname" -}}
+{{- printf "%s-enforcer" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
 {{- define "vigil.llmWorker.fullname" -}}
 {{- printf "%s-llm-worker" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -75,6 +79,14 @@ Per-component names and labels.
 
 {{- define "vigil.edgeDaemon.fullname" -}}
 {{- printf "%s-edge" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "vigil.sshDecoy.fullname" -}}
+{{- printf "%s-ssh-decoy" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "vigil.httpDecoy.fullname" -}}
+{{- printf "%s-http-decoy" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "vigil.postgres.fullname" -}}
@@ -172,6 +184,8 @@ The "llmWorker" component always reuses the backend image.
   {{- if eq $comp "agentWorker" -}}{{- $suffix = "agent" -}}{{- end -}}
   {{- if eq $comp "agentServe" -}}{{- $suffix = "agent" -}}{{- end -}}
   {{- if eq $comp "edgeDaemon" -}}{{- $suffix = "edge" -}}{{- end -}}
+  {{- /* The enforcer is the Go eBPF/XDP daemon (Dockerfile.enforcer). */ -}}
+  {{- if eq $comp "enforcer" -}}{{- $suffix = "enforcer" -}}{{- end -}}
   {{- $repo = printf "%s/%s-%s" $registry $ns $suffix -}}
 {{- end -}}
 {{- if eq $tag "" -}}

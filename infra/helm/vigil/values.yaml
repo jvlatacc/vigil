@@ -1,6 +1,6 @@
 # Default values for the Vigil SOC Helm chart.
 # This is a YAML-formatted file.
-# See https://vigilsoc.org/docs/helm/ for a full reference of all values.
+# See docs/deploy/helm.md for a full reference of all values.
 
 # -----------------------------------------------------------------------------
 # Global
@@ -199,6 +199,74 @@ edgeDaemon:
   affinity: {}
   podAnnotations: {}
   podLabels: {}
+  extraEnv: []
+
+# -----------------------------------------------------------------------------
+# Kernel Enforcer (eBPF/XDP enforcement daemon — DaemonSet, one per node)
+# -----------------------------------------------------------------------------
+# The chart's most policy-divergent workload BY DESIGN: enforcement needs
+# kernel capabilities, the node's network namespace (XDP attaches to the
+# node's NIC), and the host kernel filesystems. None of that is folded into
+# the shared podSecurityContext/containerSecurityContext defaults — every
+# override lives in templates/enforcer-daemonset.yaml and is scoped to this
+# component's DaemonSet only. The daemon validates every request against the
+# shared-secret token (secrets.enforcementToken) and binds the API to
+# loopback by default; kernel state self-expires via TTLs carried in the BPF
+# maps, so a pod that disappears does not leave stale containment behind.
+# Prerequisites per enforcement node (see services/enforcement/runbook.md):
+#   • bpffs mounted at /sys/fs/bpf        (mount -t bpf bpf /sys/fs/bpf)
+#   • cgroup2 mounted at enforcer.cgroup  (modern distros do this by default)
+#   • kernel BTF at /sys/kernel/btf       (CO-RE relocation; kernels ≥ 5.8
+#     are the supported range)
+enforcer:
+  # Off by default: enabling kernel enforcement is a deliberate operator act.
+  # When disabled the DaemonSet is not rendered at all.
+  enabled: false
+  image:
+    repository: ""   # empty → auto-derive from global.imageNamespace + "-enforcer"
+    tag: ""
+    pullPolicy: ""
+  # API bind address. The default keeps the strongest guarantee from the
+  # spec's risk table (loopback-only API): reachable only on the node itself
+  # (kubectl exec, a local Vigil, an SSH tunnel). A Vigil backend running in
+  # the cluster cannot reach a node-loopback API — if you need that topology,
+  # set a non-loopback bind (e.g. "0.0.0.0:6986") and pair it with a
+  # NetworkPolicy; note that enforcement of NetworkPolicy against
+  # hostNetwork pods depends on the CNI plugin.
+  bind: "127.0.0.1:6986"
+  # API + healthz/metrics port (the enforcer binds enforcer.bind on it).
+  port: 6986
+  # XDP attaches to the node's interface (resolved inside the pod, which
+  # shares the node's network namespace).
+  interface: eth0
+  # Cgroup root for BPF LSM process interdiction (hostPath-mounted).
+  cgroup: /sys/fs/cgroup
+  # Default TTL (seconds) for enforcement entries whose action carries none.
+  defaultTtlSeconds: 3600
+  # TCP sink for socket redirects (host:port). Empty = redirect capability
+  # stays disabled on this deployment (XDP drop and interdiction unaffected).
+  sink: ""
+  # Kernel capabilities granted to the enforcer container ONLY. CAP_BPF +
+  # CAP_NET_ADMIN cover XDP drop and sockmap redirect on modern kernels;
+  # CAP_PERFMON covers perf/tracepoint-adjacent attach; CAP_SYS_ADMIN is the
+  # legacy fallback for pre-5.8 kernels and BPF LSM attach. Trim per site
+  # once GET /healthz has confirmed the per-primitive status you rely on.
+  capabilities:
+    add: [BPF, NET_ADMIN, PERFMON, SYS_ADMIN]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  podAnnotations: {}
+  podLabels: {}
+  # Default: schedule on every node. Restrict to enforcement nodes with a
+  # selector, e.g. enforcer.nodeSelector: {vigil.so/enforcer: "true"}.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
   extraEnv: []
 
 # -----------------------------------------------------------------------------
@@ -509,6 +577,7 @@ dbInit:
     - 15_federation.sql
     - 16_llm_budgets.sql
     - 17_loglm_setup.sql
+
     - 18_agent_decision_ids.sql
     - 19_agent_ledger.sql
     - 20_agent_directives.sql
@@ -534,7 +603,11 @@ dbInit:
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
     - 40_edge_nodes.sql
+    - 40_mtd_decoy_registry.sql
+    - 40_protected_assets.sql
     - 41_edge_bundles.sql
+    - 41_finding_origin_stamps.sql
+    - 42_digital_twin.sql
     - 42_edge_node_watermark.sql
   resources:
     requests:
@@ -654,6 +727,13 @@ containerSecurityContext:
 secrets:
   existingSecret: ""
 
+  # Decoy plane (MTD spec 03): the daemon webhook bearer, aliased to the
+  # decoy channel, and the canary credential the decoys accept. Empty by
+  # default — decoys generate an ephemeral marked canary when none is set
+  # (services/decoy/canary.py) and send no bearer when the token is unset.
+  decoyIngestToken: ""
+  decoyCanaryPassword: ""
+
   # ExternalSecrets Operator (issue #113) — declares an ExternalSecret that
   # materializes the K8s Secret from an external store (AWS SM, Vault, etc).
   # When enabled, the plain secret.yaml template is skipped.
@@ -698,6 +778,13 @@ secrets:
   # must be given the same value. Generate with:
   #   python -c "import secrets; print(secrets.token_urlsafe(48))"
   agentInternalToken: ""
+
+  # Shared secret between Vigil's approved-action executor and the kernel
+  # enforcer's API (VIGIL_ENFORCEMENT_TOKEN). Required when enforcer.enabled:
+  # the enforcer refuses to start without it. Use the same value in the
+  # executor's environment (VIGIL_ENFORCEMENT_TOKEN). Generate with:
+  #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+  enforcementToken: ""
 
   # Optional data-source integrations.
   splunkPassword: ""
@@ -837,7 +924,14 @@ config:
   DAEMON_CRITICAL_ACTION_FLOOR: "0.70"
   DAEMON_HIGH_ACTION_FLOOR: "0.80"
   DAEMON_FORCE_APPROVAL: "false"
+  DAEMON_ENFORCEMENT_FORCE_APPROVAL: "true"
   DAEMON_DRY_RUN: "false"
+  # Honey-routing (the deceive band): default off — enabling it is a human
+  # configuration act, and the floor is its own band, not the response one.
+  DAEMON_MTD_ENABLED: "false"
+  DAEMON_MTD_CONFIDENCE_FLOOR: "0.60"
+  DAEMON_MTD_SESSION_TTL_SECONDS: "3600"
+  DAEMON_MTD_INTERNAL_ONLY: "true"
   DAEMON_ESCALATION_ENABLED: "true"
   DAEMON_ESCALATE_SEVERITIES: "critical,high"
   DAEMON_SLACK_ENABLED: "true"
@@ -971,6 +1065,62 @@ observability:
 # -----------------------------------------------------------------------------
 # Off by default — flipping to true on an existing cluster may break traffic
 # that was previously implicitly allowed. Plan the rollout.
+# -----------------------------------------------------------------------------
+# Decoys (MTD plane 03) — canary workloads for honey-routed attacker sessions
+# -----------------------------------------------------------------------------
+# Disabled by default: enabling decoys is a human configuration act (spec,
+# Locked). Both decoys share the backend image — command is overridden per
+# Deployment — and reach exactly one egress target each: the daemon's
+# webhook ingest (see their NetworkPolicies in networkpolicy.yaml).
+sshDecoy:
+  enabled: false
+  image:
+    repository: ""   # inherits backend.image.repository when empty
+    tag: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+httpDecoy:
+  enabled: false
+  image:
+    repository: ""   # inherits backend.image.repository when empty
+    tag: ""
+    pullPolicy: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+decoys:
+  # Shared decoy knobs (read by services/decoy/config.py through core.config).
+  sessionTtlSeconds: 3600
+  # Service/container ports; fixed values, part of the compose and Cilium
+  # wiring — changing them is a coordinated change across surfaces.
+  ports:
+    ssh: 2222
+    http: 8080
+
 networkPolicies:
   enabled: false
   # Namespace selector used to allow ingress traffic from the ingress

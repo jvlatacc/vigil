@@ -115,6 +115,7 @@ forbidden_modules =
     services.api
     services.daemon
     services.worker
+    services.decoy
     services.edge
 
 [importlinter:contract:edge]
@@ -130,5 +131,6 @@ forbidden_modules =
     tools
     services.api
     services.daemon
-    services.worker
+    services.decoy
     services.medic
+    services.worker

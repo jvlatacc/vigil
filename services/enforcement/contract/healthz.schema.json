@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/vigil/enforcement/contracts/healthz/v1",
+  "title": "Enforcement health v1",
+  "description": "GET /healthz payload. Carries a capability field per primitive so degradation is observable before the first enforcement (spec: degrade per primitive, not whole).",
+  "type": "object",
+  "required": ["status", "uptime_seconds", "kernel_faked", "primitives"],
+  "additionalProperties": false,
+  "properties": {
+    "status": { "enum": ["ok", "degraded"] },
+    "uptime_seconds": { "type": "integer", "minimum": 0 },
+    "kernel_faked": {
+      "description": "Present (non-empty) while the daemon runs on the faked kernel — CI and dev. An empty string means a real kernel loader. Exists so a faked kernel can never be mistaken for enforcement.",
+      "type": "string"
+    },
+    "primitives": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["supported"],
+        "additionalProperties": false,
+        "properties": {
+          "supported": { "type": "boolean" },
+          "reason": {
+            "description": "Why the primitive is unavailable — or, with mode \"signal\", why it degraded to the fallback mechanism.",
+            "type": "string"
+          },
+          "mode": {
+            "description": "The enforcement mechanism in use: \"bpf\" for the primary mechanism, \"signal\" for the process-interdict fallback (SIGSTOP/SIGCONT) on LSM-less kernels. Omitted when the kernel does not distinguish mechanisms. A degraded mode also marks overall status \"degraded\".",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "actions_enforced": { "type": "integer", "minimum": 0 },
+    "actions_released": { "type": "integer", "minimum": 0 }
+  }
+}

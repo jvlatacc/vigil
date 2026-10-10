@@ -38,6 +38,11 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "SPLUNK_URL",
     "SPLUNK_VERIFY_SSL",
     "STORY_PATHS",
+    # Kernel enforcement (ebpf-xdp): consumed inside the MCP child and the
+    # approved-action executor via resolve(), and read by the enforcement
+    # daemon process itself — never a Settings.model_fields name.
+    "VIGIL_ENFORCEMENT_URL",
+    "VIGIL_ENFORCEMENT_TOKEN",
     "VSTRIKE_BASE_URL",
     "VSTRIKE_VERIFY_SSL",
     # Per-integration CA paths, resolved like the fields above.
@@ -68,6 +73,7 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "BIFROST_IMAGE_TAG",
     "BIND_HOST",
     "GRAFANA_PASSWORD",
+    "SKIP_FRONTEND",
     "VITE_EXTENSION_ORIGIN_ALLOWLIST",
     # Read by the TypeScript agent processes themselves, not by Settings.
     "AGENT_HEALTH_PORT",
@@ -87,6 +93,11 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # Bootstrap for the secrets manager itself, which cannot depend on Settings.
     "ENABLE_KEYRING",
     "SECRETS_BACKEND",
+    # Decoy credentials, read through get_secret (services/decoy/canary.py,
+    # emitter.py) — never Settings fields, so they cannot leak into logs or
+    # config dumps.
+    "DECOY_INGEST_TOKEN",
+    "DECOY_CANARY_PASSWORD",
     # Edge daemon (services/edge): an isolated node-side daemon with its own
     # pyproject/uv.lock and env protocol (services/edge/app/config.py). It is
     # not part of the central Settings and deliberately shares no env contract
@@ -119,14 +130,15 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # core/edge/signing.py reads the bundle-signing key path through the
     # secrets manager (get_secret), not through Settings.
     "VIGIL_EDGE_SIGNING_KEY_FILE",
-    # start.sh reads SKIP_FRONTEND at bootstrap to skip the web console; the
-    # variable is shell-only and never part of Settings (carried over from the
-    # PR #49 merge, which documented it in env.example).
-    "SKIP_FRONTEND",
+    # SKIP_FRONTEND is already listed above under "Consumed outside the Python
+    # backend"; the edge merge's copy of that entry is folded there.
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
     "VIGIL_DIR",
+    # Boot-time override read by start.sh for headless mode (f959365): the shell
+    # value outranks the .env default, so Settings never sees it.
+    "SKIP_FRONTEND",
 }
 
 

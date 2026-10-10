@@ -16,6 +16,9 @@ MICROSOFT_DEFENDER = register_descriptor(
             IntegrationField("client_id"),
             IntegrationField("client_secret", secret=True),
         ),
+        # The EDR kill switch. tool.py answers exactly three tools; two read,
+        # one pulls the machine off the network (IsolationType: Full).
+        mutating_tools=("mde_isolate",),
         # Portal alert page: the ``alertWebUrl`` in the example response at
         # https://learn.microsoft.com/graph/api/security-alert-get
         # (https://security.microsoft.com/alerts/<id>?tid=<tenant>). The id is

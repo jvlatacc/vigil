@@ -46,6 +46,11 @@ from core.storage.models.config import (
     UserPreference,
 )
 from core.storage.models.containment import ContainmentAction
+from core.storage.models.digital_twin import (
+    TwinConnection,
+    TwinDevice,
+    TwinProcess,
+)
 from core.storage.models.edge import EdgeBundle, EdgeNode
 from core.storage.models.episodic import (
     EpisodicDistilFailure,
@@ -58,6 +63,8 @@ from core.storage.models.episodic import (
 )
 from core.storage.models.exclusion import IpExclusion
 from core.storage.models.finding import Finding, FindingMitrePrediction
+from core.storage.models.mtd import MtdDecoyRegistry, MtdIpExclusion
+from core.storage.models.protected_asset import ProtectedAsset
 from core.storage.models.workflow import (
     IN_FLIGHT_INVESTIGATION_STATUSES,
     LIVE_CASE_STATES,
@@ -124,12 +131,18 @@ __all__ = [
     "LLMInteractionLog",
     "LLMProviderConfig",
     "McpCredential",
+    "MtdDecoyRegistry",
+    "MtdIpExclusion",
+    "ProtectedAsset",
     "Role",
     "SLAPolicy",
     "SharedIOC",
     "SketchMapping",
     "SystemConfig",
     "ThreatIndicator",
+    "TwinConnection",
+    "TwinDevice",
+    "TwinProcess",
     "User",
     "UserPreference",
     "WorkflowRun",

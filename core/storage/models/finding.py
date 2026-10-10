@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -69,6 +70,15 @@ class Finding(Base):
     # and does not change status or scoring.
     noise_marked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     noise_marked_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Origin attestation (#944): whether the ingest webhook verified a
+    # DSSE/Ed25519 attestation covering this finding's content, and which
+    # trusted origin signed it. The guard chain holds unverified evidence for
+    # a person instead of auto-containing it.
+    origin_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    origin_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # AI-generated enrichment (cached analysis)
     ai_enrichment: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)

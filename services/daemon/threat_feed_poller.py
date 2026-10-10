@@ -1,16 +1,24 @@
-"""Periodic poller for STIX/TAXII threat feeds (Cloudforce One et al).
+"""Periodic pollers for threat-indicator freshness.
 
-Registered as a scheduled task by `daemon/scheduler.py` when the
-`cloudforce_one` integration is enabled. No-op when disabled.
+Two sources share this module. The TAXII poller (`ThreatFeedPoller`) pulls
+STIX 2.1 indicators from configured feeds (Cloudforce One et al); registered
+as a scheduled task by `daemon/scheduler.py` when the `cloudforce_one`
+integration is enabled, no-op when disabled. After the upsert loop it offers
+the poll's uncovered indicators to the Intake as one case-less
+`kind="schedule"` row carrying every key (#1009). It does not open the hunt;
+the drain tick launches it.
 
-After the upsert loop it offers the poll's uncovered indicators to the Intake
-as one case-less `kind="schedule"` row carrying every key (#1009). It does not
-open the hunt; the drain tick launches it.
+The CISA KEV refresher (`run_kev_refresh_once`) keeps the bundled t=0 seed
+(`core/threat_intel/kev_seed.py`) current against the official catalog:
+daily, env-gated, no key required. It runs the seed's own mapper, so bundled
+and refreshed rows cannot drift apart.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import urllib.request
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, NamedTuple, Optional, Set
 
@@ -347,3 +355,111 @@ def _intel_intake_state() -> _IntelIntake:
             if isinstance(subjects, list):
                 keys.update(key for key in subjects if isinstance(key, str) and key)
     return _IntelIntake(queued, keys)
+
+
+# ---------------------------------------------------------------------------
+# CISA KEV refresher. The catalog bundled at data/threat_intel/cisa-kev/ and
+# seeded at database init (core/threat_intel/kev_seed.py) ages against the
+# live one; this keeps it current. Same mapper, same upsert path: bundled and
+# refreshed rows cannot drift apart.
+# ---------------------------------------------------------------------------
+
+# The official feed, as published on CISA's Known Exploited Vulnerabilities
+# Catalog page (https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
+# -- verified still the documented download URL on 2026-10-09. No key, no
+# terms beyond the catalog's community-benefit notice;
+# scripts/update_kev_catalog.py bundles from the same URL, so a refreshed
+# store and the released snapshot describe the same source.
+KEV_URL = (
+    "https://www.cisa.gov/sites/default/files/" "known_exploited_vulnerabilities.json"
+)
+
+# CISA revises the catalog about daily. The scheduler ticks hourly and the
+# watermark below decides, so a failed fetch retries within the hour instead
+# of waiting out a full day.
+KEV_REFRESH_INTERVAL = timedelta(days=1)
+KEV_TICK_INTERVAL_SECONDS = 3600
+
+# Last successful refresh, in-process -- same reasoning as `_last_polled`:
+# a daemon restart re-fetches once, and the upserts are idempotent.
+_kev_last_refresh: Optional[datetime] = None
+
+
+def kev_refresh_enabled() -> bool:
+    """The ``VIGIL_THREAT_FEED_KEV_ENABLED`` gate, default on."""
+    return bool(get_settings().vigil_threat_feed_kev_enabled)
+
+
+def reset_kev_refresh_check() -> None:
+    """Forget the refresh watermark. For tests."""
+    global _kev_last_refresh
+    _kev_last_refresh = None
+
+
+def _fetch_kev_entries() -> List[Dict[str, Any]]:
+    """Fetch the official catalog and return its validated entries. Raises.
+
+    The same shape checks ``scripts/update_kev_catalog.py`` applies before
+    bundling: a truncated or reshaped response must never reach the store, and
+    the caller writes nothing on a raise.
+    """
+    request = urllib.request.Request(
+        KEV_URL, headers={"User-Agent": "vigil-kev-refresher/1.0"}
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+        body = response.read()
+    catalog = json.loads(body)
+    entries = catalog.get("vulnerabilities")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("KEV catalog carries no vulnerabilities list")
+    if not all(isinstance(e, dict) and e.get("cveID") for e in entries):
+        raise ValueError("KEV catalog has an entry without a cveID")
+    return entries
+
+
+async def run_kev_refresh_once() -> Dict[str, Any]:
+    """One refresh pass: fetch, upsert through the seed's mapper, expire removals.
+
+    The watermark advances only on success, so a failed fetch is retried on
+    the next tick with the store untouched -- the degraded-mode posture the
+    TAXII poller runs by.
+    """
+    global _kev_last_refresh
+
+    if not kev_refresh_enabled():
+        logger.debug("VIGIL_THREAT_FEED_KEV_ENABLED is off; skipping KEV refresh")
+        return {"skipped": "disabled"}
+    if (
+        _kev_last_refresh is not None
+        and utcnow() - _kev_last_refresh < KEV_REFRESH_INTERVAL
+    ):
+        return {"skipped": "not_due"}
+
+    from core.threat_intel import kev_seed
+    from core.threat_intel import threat_feed_service as feed
+
+    try:
+        entries = _fetch_kev_entries()
+    except Exception as e:  # noqa: BLE001
+        logger.error("KEV refresh failed; store left untouched: %s", e)
+        return {"error": str(e)}
+
+    indicators = [kev_seed.kev_entry_to_indicator(e) for e in entries]
+    counts = feed.upsert_indicators(indicators)
+    # Removals expire after the upsert commits: a crash in between leaves the
+    # new rows in and stale rows live, which the next refresh corrects.
+    expired = feed.expire_indicators_not_in(
+        source=kev_seed.SOURCE,
+        indicator_type="cve",
+        live_values={ind.indicator_value for ind in indicators},
+    )
+    _kev_last_refresh = utcnow()
+
+    summary = {
+        "source": kev_seed.SOURCE,
+        "seen": len(indicators),
+        **counts,
+        "expired": expired,
+    }
+    logger.info("KEV refresh: %s", summary)
+    return summary

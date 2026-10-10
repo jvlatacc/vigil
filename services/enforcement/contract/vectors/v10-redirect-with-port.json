@@ -1,0 +1,36 @@
+{
+  "id": "v10-redirect-with-port",
+  "description": "socket_redirect carries an IP+port target and enforces; the same port on an xdp_drop (driver-level, no L4 context) is a kind/target mismatch and is refused.",
+  "steps": [
+    {
+      "name": "redirect flow to sink",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4425",
+          "kind": "socket_redirect",
+          "target": { "ip": "203.0.113.7", "port": 4444 },
+          "ttl_seconds": 3600,
+          "reason": "preserve C2 traffic for forensics",
+          "idempotency_key": "xdp_redirect_socket:203.0.113.7:4444"
+        }
+      },
+      "expect": { "status": 201, "state": "enforced" }
+    },
+    {
+      "name": "xdp_drop with port",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4426",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7", "port": 4444 },
+          "ttl_seconds": 3600,
+          "reason": "driver drop has no port context",
+          "idempotency_key": "xdp_block_ip:203.0.113.7:4444"
+        }
+      },
+      "expect": { "status": 422, "error": "invalid_target", "error_reason": "port_not_allowed" }
+    }
+  ]
+}

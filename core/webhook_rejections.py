@@ -25,6 +25,13 @@ BAD_TOKEN = "bad_token"
 DISABLED = "disabled"
 NO_SECRET = "no_secret"
 SECRET_LOOKUP_FAILED = "secret_lookup_failed"
+# Signed-payload timestamp outside the accepted skew window (the signature
+# itself verified).
+STALE_TIMESTAMP = "stale_timestamp"
+# Signed payload carries no parseable timestamp where the contract requires one.
+BAD_TIMESTAMP = "bad_timestamp"
+# Signature verified but this exact signed body was already accepted — a replay.
+REPLAY = "replay"
 
 LOG_WINDOW_SECONDS = 60.0
 

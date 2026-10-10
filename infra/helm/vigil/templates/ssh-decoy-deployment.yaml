@@ -1,0 +1,70 @@
+{{- if .Values.sshDecoy.enabled }}
+{{- /* SSH decoy (MTD plane 03): a plausible canary target for honey-routed
+       attacker sessions. Serves an in-cluster SSH surface only — no host
+       ports, no NodePort; reachability is the Service plus whatever the
+       enforcement plane routes to it. Its one outbound call is the daemon
+       webhook ingest; egress is default-deny beyond that
+       (networkpolicy.yaml). No probes: the process either runs or the
+       container exits, and there is no HTTP surface to curl. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vigil.sshDecoy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "ssh-decoy") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "ssh-decoy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.componentLabels" (dict "context" . "component" "ssh-decoy") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.sshDecoy.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vigil.serviceAccountName" . }}
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ssh-decoy
+          image: {{ include "vigil.image" (dict "context" . "component" "sshDecoy") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "sshDecoy") }}
+          command:
+            - python
+            - -m
+            - services.decoy.ssh_decoy
+          ports:
+            - name: ssh
+              containerPort: {{ .Values.decoys.ports.ssh }}
+          envFrom:
+            {{- include "vigil.envFrom" . | nindent 12 }}
+          env:
+            {{- include "vigil.env" . | nindent 12 }}
+            {{- with .Values.sshDecoy.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.sshDecoy.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      {{- with .Values.sshDecoy.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sshDecoy.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sshDecoy.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
