@@ -1,0 +1,107 @@
+# Vigil SOC — AWS EKS profile
+#
+# Pins EKS-correct storage for all four PVC sites; every other cloud-specific
+# choice below is a commented hook the operator opts into. Decisions and
+# render evidence: thunking/aws-eks.md.
+#
+#   helm install vigil ./infra/helm/vigil \
+#     -f ./infra/helm/vigil/values-aws.yaml \
+#     --namespace vigil --create-namespace \
+#     --set secrets.anthropicApiKey="$ANTHROPIC_API_KEY" \
+#     --set secrets.postgresPassword="$(openssl rand -hex 24)" \
+#     --set secrets.jwtSecretKey="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
+#
+# Cluster prerequisites (operator-side; the chart installs none of these):
+#   * EBS CSI driver add-on with its IAM role (IRSA) installed. The add-on
+#     creates the gp3 StorageClass but does NOT mark it as the cluster
+#     default on current EKS releases, so this profile pins gp3 explicitly
+#     instead of relying on the cluster default. (Verified against AWS docs
+#     2026-10-10; see thunking/aws-eks.md for sources.)
+#   * EKS Auto Mode clusters provision volumes through the auto-ebs-sc
+#     StorageClass and must adjust this profile's pins accordingly.
+#   * AWS Load Balancer Controller, only if the commented ingress hook below
+#     is enabled.
+#
+# --- Storage: pin all four PVC sites to EBS gp3 ------------------------------
+postgresql:
+  persistence:
+    storageClassName: gp3
+redis:
+  persistence:
+    storageClassName: gp3
+daemon:
+  persistence:
+    storageClassName: gp3
+splunk:
+  # Dev utility; inert while splunk.enabled is false (chart default).
+  persistence:
+    storageClassName: gp3
+
+# Bitnami subchart variants — uncomment when the matching .bitnami.enabled is
+# true. Bitnami subcharts take `storageClass` (no "Name"):
+# postgresql:
+#   bitnami:
+#     primary:
+#       persistence:
+#         storageClass: gp3
+# redis:
+#   bitnami:
+#     master:
+#       persistence:
+#         storageClass: gp3
+#
+# Latency-sensitive Redis on io2 is an operator upgrade, not a default —
+# a profile default that silently bills premium storage is not a default:
+# redis:
+#   persistence:
+#     storageClassName: io2
+
+# --- Exposure: chart default is ClusterIP + disabled Ingress ----------------
+# ALB via the AWS Load Balancer Controller (ingress.annotations passes
+# through to the rendered Ingress):
+# ingress:
+#   enabled: true
+#   className: alb
+#   annotations:
+#     alb.ingress.kubernetes.io/group.name: vigil
+#     alb.ingress.kubernetes.io/scheme: internet-facing
+#   hosts:
+#     - host: vigil.example.com
+#       paths:
+#         - path: /
+#           pathType: Prefix
+# If networkPolicies are enabled, allow traffic from the controller's
+# namespace (the default selector only matches ingress-nginx):
+# networkPolicies:
+#   ingressControllerNamespaceSelector:
+#     kubernetes.io/metadata.name: kube-system
+#
+# An NLB Service is NOT reachable from values alone: the chart's Service
+# templates render .service.type but have no Service-annotation passthrough,
+# and the aws-load-balancer-* annotations ride on Service annotations. The
+# annotation strings are documented in thunking/aws-eks.md; wiring needs a
+# small template change (same shape as the workload-identity follow-up).
+#
+# --- Identity: IRSA hook, not wired (see thunking/aws-eks.md) ---------------
+# IRSA needs the pod-identity webhook to inject a projected token, which
+# automountServiceAccountToken: false (chart default) blocks. Flipping the
+# automount is a security decision for the operator, so both keys ship as
+# one commented pair:
+# serviceAccount:
+#   automountServiceAccountToken: true
+#   annotations:
+#     eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT>:role/vigil-<cluster>
+#
+# --- Images: ECR pull-through cache hook (optional) --------------------------
+# CI has already hit Docker Hub 429 rate limits on support images
+# (thunking/chart-anatomy.md); a pull-through cache is the fix:
+# global:
+#   imagePullSecrets:
+#     - name: ecr-pullthrough
+#
+# --- Scheduling: node-pool hook (optional) -----------------------------------
+# Example: pin the daemon (queue consumer, most stateful non-DB component)
+# to a dedicated managed node group — merge under the daemon block above:
+# daemon:
+#   nodeSelector:
+#     <node-group-label-key>: <node-group-name>
