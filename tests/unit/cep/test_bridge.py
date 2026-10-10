@@ -211,3 +211,15 @@ def test_origin_stamp_rides_the_row() -> None:
     assert params["sequence_started_at"] == "1970-01-01T00:16:40+00:00"
     assert params["sequence_completed_at"] == "1970-01-01T00:17:40+00:00"
     assert params["graph_path"] == ["finding:cs-1", "host:WKS-1"]
+
+
+def test_proposed_action_counter_counts_gate_proposals_only() -> None:
+    """Spec AC 8: every proposal that reaches the gate counts once; a
+    dedupe-swallowed re-emission is not a proposal and does not count."""
+    bridge = CepResponseBridge(RecordingApprovals())
+    assert bridge.stats["cep_actions_proposed"] == 0
+
+    assert bridge.fire(_match()) is not None
+    assert bridge.fire(_match()) is None  # same match id, inside the TTL
+
+    assert bridge.stats["cep_actions_proposed"] == 1

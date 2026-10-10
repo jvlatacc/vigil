@@ -42,9 +42,7 @@ class _RecordingApprovals:
     def create_action(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
         # Attribute-shaped like the row object the real service hands back.
-        return SimpleNamespace(
-            action_id=f"action-{len(self.calls)}", status="pending"
-        )
+        return SimpleNamespace(action_id=f"action-{len(self.calls)}", status="pending")
 
 
 class _FakeStore:
@@ -124,9 +122,7 @@ async def test_partial_sequence_re_arms_after_restart() -> None:
 
     # Boot 1: the EDR finding opens the sequence — no match yet.
     boot1_pipeline, boot1_manager, boot1_engine = _boot(store, approvals)
-    boot1_pipeline.process_item(
-        _item(_finding("cs-1", "crowdstrike", "WKS-1", 10))
-    )
+    boot1_pipeline.process_item(_item(_finding("cs-1", "crowdstrike", "WKS-1", 10)))
     assert approvals.calls == []
 
     boot1_manager.snapshot_once()
@@ -170,12 +166,8 @@ async def test_completed_sequence_does_not_refire_after_restart() -> None:
 
     # Boot 1: the full sequence fires exactly once, then snapshots.
     boot1_pipeline, boot1_manager, _ = _boot(store, approvals)
-    boot1_pipeline.process_item(
-        _item(_finding("cs-1", "crowdstrike", "WKS-1", 10))
-    )
-    boot1_pipeline.process_item(
-        _item(_finding("spl-1", "splunk", "WKS-1", 50))
-    )
+    boot1_pipeline.process_item(_item(_finding("cs-1", "crowdstrike", "WKS-1", 10)))
+    boot1_pipeline.process_item(_item(_finding("spl-1", "splunk", "WKS-1", 50)))
     assert len(approvals.calls) == 1
 
     boot1_manager.snapshot_once()
@@ -184,11 +176,7 @@ async def test_completed_sequence_does_not_refire_after_restart() -> None:
     # stored acks, so replay is bounded but real) — no duplicate action.
     boot2_pipeline, boot2_manager, _ = _boot(store, approvals)
     assert boot2_manager.restore() is not None
-    boot2_pipeline.process_item(
-        _item(_finding("cs-1", "crowdstrike", "WKS-1", 10))
-    )
-    boot2_pipeline.process_item(
-        _item(_finding("spl-1", "splunk", "WKS-1", 50))
-    )
+    boot2_pipeline.process_item(_item(_finding("cs-1", "crowdstrike", "WKS-1", 10)))
+    boot2_pipeline.process_item(_item(_finding("spl-1", "splunk", "WKS-1", 50)))
 
     assert len(approvals.calls) == 1

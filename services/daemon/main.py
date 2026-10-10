@@ -66,6 +66,8 @@ class SOCDaemon:
         self._cep_snapshots = None
         # The engine loop (tap queue -> engine -> bridge) — same condition.
         self._cep_pipeline = None
+        self._cep_engine = None
+        self._cep_bridge = None
 
         logger.info("SOC Daemon initialized")
 
@@ -200,6 +202,7 @@ class SOCDaemon:
             # matches propose, the gate decides, nothing here executes.
             cep_rules = load_rules(cep_config.rules_path)
             cep_engine = CepEngine(cep_rules)
+            self._cep_engine = cep_engine
             cep_state = EngineSnapshotState(cep_engine)
             self._cep_snapshots = SnapshotManager(
                 graph=self._cep_graph,
@@ -228,11 +231,12 @@ class SOCDaemon:
             # The drain loop, as its own component task: tap queue ->
             # normalize -> graph -> engine -> bridge. It never touches the
             # spine's acks; its faults are its own.
+            self._cep_bridge = CepResponseBridge(approvals)
             self._cep_pipeline = CepPipeline(
                 engine=cep_engine,
                 rules=cep_rules,
                 graph=self._cep_graph,
-                bridge=CepResponseBridge(approvals),
+                bridge=self._cep_bridge,
                 tap_queue=self._cep_tap.queue,
             )
             logger.info(
@@ -256,6 +260,13 @@ class SOCDaemon:
             self._metrics_server.scheduler = self._scheduler
             self._metrics_server.orchestrator = self._orchestrator
             self._metrics_server.cep = self._cep_tap
+            # The CEP loop's parts — all None when CEP is disabled; their
+            # stats merge into the /status "cep" section (spec AC 8).
+            self._metrics_server.cep_engine = self._cep_engine
+            self._metrics_server.cep_graph = self._cep_graph
+            self._metrics_server.cep_snapshots = self._cep_snapshots
+            self._metrics_server.cep_pipeline = self._cep_pipeline
+            self._metrics_server.cep_bridge = self._cep_bridge
 
         logger.info("All components initialized")
 
