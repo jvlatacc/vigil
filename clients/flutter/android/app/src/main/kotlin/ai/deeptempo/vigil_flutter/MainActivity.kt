@@ -1,0 +1,5 @@
+package ai.deeptempo.vigil_flutter
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity: FlutterActivity()
