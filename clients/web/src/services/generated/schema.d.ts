@@ -8652,6 +8652,26 @@ export interface components {
              * @default 1
              */
             local_ollama_recovery_retry_limit: number;
+            /**
+             * Policy Compiler Drift Limit
+             * @default 3
+             */
+            policy_compiler_drift_limit: number;
+            /**
+             * Policy Compiler Min Consistency
+             * @default 0.9
+             */
+            policy_compiler_min_consistency: number;
+            /**
+             * Policy Compiler Min Runs
+             * @default 10
+             */
+            policy_compiler_min_runs: number;
+            /**
+             * Policy Compiler Window Days
+             * @default 30
+             */
+            policy_compiler_window_days: number;
         };
         /**
          * ActivityAdd
