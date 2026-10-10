@@ -59,6 +59,7 @@ class TaskScheduler:
             "probes_scored": 0,
             "reports_generated": 0,
             "cleanups_run": 0,
+            "speculative_released": 0,
             "errors": 0,
         }
 
@@ -151,6 +152,20 @@ class TaskScheduler:
                 )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Threat feed poller unavailable: {e}")
+
+        # Speculative containment's fail-safe (locked decision 5): whatever
+        # adjudication is doing, a restriction past its expiry is released.
+        # A no-op query while the fast path has never fired, so it registers
+        # unconditionally; 60s is the cadence the spec pins.
+        self._tasks.append(
+            ScheduledTask(
+                name="speculative_ttl_sweep",
+                func=self._run_speculative_ttl_sweep,
+                interval=60,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
 
     def set_processor_queue(self, queue: asyncio.Queue):
         """Set the processor's input queue that probe sweeps inject onto."""
@@ -418,6 +433,28 @@ class TaskScheduler:
         injected = await inject_probes(self._processor_queue, self._data_service)
         self.stats["probes_injected"] += injected
         return injected
+
+    async def _run_speculative_ttl_sweep(self):
+        """Release speculative actions past their expiry — the fail-safe.
+
+        Off-thread like the approval expiry above: each release is its own
+        adapter call and row write, and this runs on the daemon's event
+        loop. A no-op while nothing is speculative.
+        """
+        from core.response.fastpath.rollback import expire_speculative_actions
+
+        outcome = await asyncio.to_thread(expire_speculative_actions)
+        if outcome.examined:
+            logger.info(
+                "Speculative TTL sweep released %d of %d expired rows",
+                outcome.released,
+                outcome.examined,
+            )
+        self.stats["speculative_released"] += outcome.released
+        return {
+            "speculative_examined": outcome.examined,
+            "speculative_released": outcome.released,
+        }
 
     async def _run_sandbox_poll(self):
         """Advance pending sandbox submissions to completed reports."""
