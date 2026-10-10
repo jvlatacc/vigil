@@ -12,6 +12,10 @@ dependencies:
     sdk: flutter
   # Tokens at rest — iOS Keychain / Android Keystore / desktop keyrings.
   flutter_secure_storage: ^9.2.2
+  # Streaming markdown rendering for "Ask Vigil" answers: the `markdown`
+  # package (pure Dart, from the Dart team) parses chat markdown to an AST;
+  # lib/chat/markdown_text.dart renders it with the Vigil theme.
+  markdown: ^7.3.0
   # SVG path-data parser for the VigilIcons stroke set (pure Dart, the same
   # parser flutter_svg uses).
   path_parsing: ^1.1.0
