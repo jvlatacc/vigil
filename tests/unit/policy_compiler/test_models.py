@@ -243,6 +243,16 @@ def test_an_action_outside_the_vocabulary_is_refused():
         validate_ir(ir)
 
 
+@pytest.mark.parametrize("action", RECOMMENDED_ACTIONS)
+def test_every_action_in_the_vocabulary_validates(action):
+    # The vocabulary is exactly the set validation accepts: a member the
+    # daemon executes (e.g. probes.py's MTD verb "deceive") must compile a
+    # policy, not fall out at the validation gate.
+    ir = sample_ir_dict()
+    ir["decision"]["recommended_action"] = action
+    assert validate_ir(ir)["decision"]["recommended_action"] == action
+
+
 def test_the_vocabularies_match_the_daemons():
     # Mirrored from services/daemon/probes.py (core cannot import services):
     # this test fails loudly if the two spellings drift apart. Read from the

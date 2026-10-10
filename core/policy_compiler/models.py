@@ -98,8 +98,17 @@ HASH_EXCLUDED_KEYS = frozenset(
 SEVERITIES = ("critical", "high", "medium", "low")
 
 # Recommended-action vocabulary the responder consumes
-# (services/daemon/probes.py ACTIONS).
-RECOMMENDED_ACTIONS = ("isolate", "block", "investigate", "monitor", "dismiss")
+# (services/daemon/probes.py ACTIONS). ``deceive`` is the daemon's MTD verb:
+# divert the source into a decoy instead of containing it — additive to the
+# containment vocabulary, never a replacement.
+RECOMMENDED_ACTIONS = (
+    "isolate",
+    "block",
+    "investigate",
+    "monitor",
+    "dismiss",
+    "deceive",
+)
 
 # Longest ``reasoning`` a policy stores. The cap follows the episodic-prose
 # convention (core/memory/recall_contract.py EPISODIC_PROSE_CAP): the text is

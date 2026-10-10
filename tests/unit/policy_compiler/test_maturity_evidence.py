@@ -212,6 +212,16 @@ def test_the_decision_is_the_modal_triage_of_the_resolved_runs():
     assert evidence.observed_recommended_action == "investigate"
 
 
+def test_the_enrichment_normalizer_accepts_the_daemons_deceive_action():
+    # _replayable_action is the vocabulary filter on the enrichment values the
+    # daemon's triage write path persists; an unaccepted verb returns None and
+    # silently stops voting in the modal decision. The daemon added ``deceive``
+    # (probes.py ACTIONS, the MTD verb) — the filter must keep accepting it.
+    from core.policy_compiler.maturity import _replayable_action
+
+    assert _replayable_action("deceive") == "deceive"
+
+
 def test_modal_ties_break_alphabetically():
     evidence = build_evidence(
         WORKFLOW, SOURCE, [run(severity="high"), run(severity="medium")], window_days=30
