@@ -3,7 +3,8 @@
 Every relative markdown link under docs/ must resolve to a file in this
 repository, and ``file.md#anchor`` links must point at a real heading in the
 target page (GitHub-style heading slugs). Root-level docs (README, CONTEXT,
-SECURITY, VERSIONING) get the same check for their relative links.
+SECURITY, VERSIONING) and the Helm chart README get the same check for their
+relative links.
 
 No network, no database: external web links are out of scope by design --
 they rot for reasons this repo cannot see. This guard is only about internal
@@ -17,7 +18,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DOCS_ROOT = REPO_ROOT / "docs"
-ROOT_DOCS = ("README.md", "CONTEXT.md", "SECURITY.md", "VERSIONING.md")
+# Root-level docs plus the Helm chart README -- the only markdown outside
+# docs/ and the repo root that carries relative links into the tree.
+ROOT_DOCS = (
+    "README.md",
+    "CONTEXT.md",
+    "SECURITY.md",
+    "VERSIONING.md",
+    "infra/helm/vigil/README.md",
+)
 
 # [text](target) or [text](target "title"); angle-bracket targets allowed.
 INLINE_LINK_RE = re.compile(r"\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")

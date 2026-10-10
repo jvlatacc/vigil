@@ -81,7 +81,25 @@ class ActionType(Enum):
     # from production. Reversible (unroute restores the path); enforced through
     # a backend integration, so execution without one is an honest failure.
     HONEY_ROUTE = "honey_route"
+    XDP_BLOCK_IP = "xdp_block_ip"  # Kernel XDP drop of a source IP (enforcement daemon)
+    SOCKET_REDIRECT = "socket_redirect"  # Kernel sockmap redirect to the capture sink
+    INTERDICT_PROCESS = (
+        "interdict_process"  # Kernel BPF-LSM (or signal) process interdict
+    )
     CUSTOM = "custom"
+
+
+# Kernel enforcement actions run on the privileged per-host enforcement daemon
+# (services/enforcement) through the ebpf_xdp integration helpers, not an
+# external vendor API. They ship human-only while the INTENT.md enforcement
+# posture stands (enforcement.force_manual_approval).
+KERNEL_ACTION_TYPES: frozenset[str] = frozenset(
+    {
+        ActionType.XDP_BLOCK_IP.value,
+        ActionType.SOCKET_REDIRECT.value,
+        ActionType.INTERDICT_PROCESS.value,
+    }
+)
 
 
 class ActionStatus(Enum):
@@ -299,16 +317,25 @@ class ApprovalService:
 
         # The branch that set requires_approval is appended to the caller's
         # narrative so the row records the rule it was decided by (#917).
+        kernel_hold = (
+            action_type.value in KERNEL_ACTION_TYPES
+            and self.config.enforcement_force_manual_approval
+        )
         forced = (
             human_only
             or self.force_manual_approval
             or self._stored_force_manual_approval()
+            or kernel_hold
         )
         requires_approval, rule = approval_requirement(
             forced, reversibility, confidence, self.config
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)
+        elif kernel_hold:
+            # The row names the posture that held it: the enforcement block's
+            # knob, not the response-wide force_manual_approval flag.
+            rule = decision_rule("enforcement.force_manual_approval", True)
         if gate_rule is not None:
             # A guard invariant outranks any confidence comparison (#944):
             # the row waits for a person and records the gate's rule, not the

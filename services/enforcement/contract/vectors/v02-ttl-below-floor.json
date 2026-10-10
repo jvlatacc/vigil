@@ -1,0 +1,21 @@
+{
+  "id": "v02-ttl-below-floor",
+  "description": "A TTL under the 60 s floor is refused with ttl_below_floor — an enforcement that outlives its reason is a new finding, and a sub-floor TTL is a no-op wearing an enforced badge.",
+  "steps": [
+    {
+      "name": "sub-floor ttl",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4418",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 59,
+          "reason": "short containment",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 422, "error": "ttl_below_floor" }
+    }
+  ]
+}

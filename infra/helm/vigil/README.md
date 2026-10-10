@@ -9,7 +9,7 @@ bump one, run `helm dependency update infra/helm/vigil`, refresh `SHA256SUMS`
 from the upstream digests, and commit the new tgz files.
 
 Full install, values, and troubleshooting:
-<https://vigilsoc.org/docs/helm-chart/>
+[docs/deploy/helm-chart.md](../../../docs/deploy/helm-chart.md)
 
 ## OIDC federation (optional)
 

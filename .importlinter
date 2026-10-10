@@ -128,3 +128,4 @@ forbidden_modules =
     services.api
     services.daemon
     services.worker
+    services.decoy
