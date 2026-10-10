@@ -1,10 +1,9 @@
 """Wire schemas for the digital-twin ingest and graph API.
 
 Served by ``core.api.v1.digital_twin_router``; the upsert and read logic
-lives in ``core.twin.ingest``. Distinct from ``core.storage.schemas.twin``,
-which serializes the findings-derived console graph — this module is the
-observation surface: feeds POST device/process/connection observations and
-the graph endpoint reads back the layered map.
+lives in ``core.twin.ingest``. These are the only twin wire schemas — this
+module is the observation surface: feeds POST device/process/connection
+observations and the graph endpoint reads back the layered map.
 
 Input schemas are strict where the columns are typed enums (``connection_type``,
 ``direction``) and bounded where a column is a fixed ``String`` — a value that
