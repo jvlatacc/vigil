@@ -15,6 +15,7 @@ import SourceCollection from './SourceCollection'
 const CATALOG_TO_SERVER: Record<string, string> = {
   'aws-security-hub': 'aws-security',
   'elastic-siem': 'elastic',
+  'honey_router': 'honey-router',
   'splunk': 'splunk-selfhosted',
 }
 const serverFor = (catalogId: string) => CATALOG_TO_SERVER[catalogId] ?? catalogId

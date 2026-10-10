@@ -1116,6 +1116,33 @@ export const INTEGRATIONS: IntegrationMetadata[] = [
   },
 
   {
+    id: 'honey_router',
+    name: 'Honey Router',
+    category: 'Network Security',
+    description:
+      "Routes suspected attackers away from production workloads and into decoy environments. Vigil asks the Cilium backend to steer traffic for flagged sources, so probes and scans land on honey workloads instead of real ones.",
+    functionality_type: 'Network Protection',
+    fields: [
+      {
+        name: 'backend',
+        label: 'Routing backend',
+        type: 'text',
+        required: false,
+        placeholder: 'cilium',
+        helpText: 'Which enforcement backend applies routes. Only "cilium" exists; anything else fails honestly at route time, not as a silent no-op.',
+      },
+      {
+        name: 'namespace',
+        label: 'Decoy namespace',
+        type: 'text',
+        required: false,
+        placeholder: 'default',
+        helpText: 'Kubernetes namespace where the decoy workloads and their redirect policies live. The policy object is namespaced, so this must be where the decoy pods actually run.',
+      },
+    ],
+  },
+
+  {
     id: 'vstrike',
     name: 'CloudCurrent VStrike',
     category: 'Network Security',

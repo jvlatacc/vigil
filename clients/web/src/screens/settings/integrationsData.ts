@@ -4,6 +4,7 @@ import type { IntegrationMetadata } from '../../config/integrationSchema'
 export const SERVER_TO_INTEGRATION = new Map(Object.entries({
   'aws-security': 'aws-security-hub',
   'elastic': 'elastic-siem',
+  'honey-router': 'honey_router',
   'splunk-selfhosted': 'splunk',
 }))
 
