@@ -132,9 +132,12 @@ Future<void> _pumpCases(
   _Wired w,
   CasesScreen screen, {
   required Size size,
+  double dpr = 1.0,
 }) async {
-  tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1.0;
+  // `size` is the LOGICAL viewport; the view wants physical pixels. At 3x
+  // this is a real phone's render resolution (390×844 → 1170×2532).
+  tester.view.physicalSize = size * dpr;
+  tester.view.devicePixelRatio = dpr;
   addTearDown(tester.view.reset);
   // The app's own theme: screens style themselves explicitly, but Material
   // chrome (buttons, sheets) reads it — and goldens must render the brand
@@ -251,6 +254,23 @@ void main() {
     expect(find.textContaining('vigil-daemon'), findsOneWidget);
 
     // Visual evidence for QA: the pushed detail sheet over the list.
+    // Re-pumped at the phone's real pixel ratio (3x, like an iPhone) so the
+    // capture matches device output instead of a low-DPR test surface. The
+    // fresh tree re-runs its first poll and the detail load, so the scripted
+    // responses are queued again — the list before the pump (the poll fires
+    // in initState), the detail trio before the tap.
+    w.api.enqueueJson(200, casesListJson());
+    await _pumpCases(
+      tester,
+      w,
+      CasesScreen(client: w.client, fuse: w.fuse),
+      size: const Size(390, 844),
+      dpr: 3.0,
+    );
+    w.enqueueCaseDetail();
+    await tester.tap(find.byKey(const Key('case-row-case-2')));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pump(const Duration(milliseconds: 300));
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('../goldens/cases-phone-detail-sheet.png'),
