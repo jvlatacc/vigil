@@ -9,6 +9,8 @@ import 'package:vigil_flutter/shell/vigil_shell.dart';
 import 'package:vigil_flutter/theme/vigil_colors.dart';
 import 'package:vigil_flutter/theme/vigil_theme.dart';
 
+import 'helpers/chat_stub.dart';
+
 /// Golden captures of the design-system galleries — every color token in
 /// both schemes, the whole 82-icon set, the full type ramp — plus the shell
 /// chrome with the Home empty state. Regenerate with:
@@ -87,6 +89,7 @@ void main() {
         home: Scaffold(
           body: VigilShell(
             user: approver,
+            chatSession: stubChatSession(),
             initialScreen: VigilScreen.home,
             onSignOut: () {},
           ),

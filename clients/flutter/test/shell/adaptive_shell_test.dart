@@ -5,6 +5,8 @@ import 'package:vigil_flutter/shell/screens.dart';
 import 'package:vigil_flutter/shell/vigil_shell.dart';
 import 'package:vigil_flutter/theme/vigil_theme.dart';
 
+import '../helpers/chat_stub.dart';
+
 /// A user every gated destination is visible to.
 const approver = UserProfile(
   username: 'jane',
@@ -54,6 +56,7 @@ VigilShell shell({
 }) =>
     VigilShell(
       user: user,
+      chatSession: stubChatSession(),
       initialScreen: initial,
       onSignOut: onSignOut ?? () {},
     );
@@ -158,6 +161,32 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(signOuts, 1);
+    });
+  });
+
+  group('ask vigil placement', () {
+    testWidgets('rail opens and closes the docked pane', (tester) async {
+      await pumpShell(tester, const Size(1280, 800), shell: shell());
+
+      await tester.tap(find.text('Ask Vigil'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('ask-dock-close')), findsOneWidget,
+          reason: 'wide layouts dock the pane beside the content');
+
+      await tester.tap(find.byKey(const Key('ask-dock-close')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('ask-dock-close')), findsNothing);
+    });
+
+    testWidgets('phone opens the ask surface as a modal sheet', (tester) async {
+      await pumpShell(tester, const Size(400, 800), shell: shell());
+
+      await tester.tap(find.text('Ask Vigil'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('ask-composer')), findsOneWidget);
+      expect(find.byKey(const Key('ask-dock-close')), findsNothing,
+          reason: 'phones present the pane as a sheet, not a dock');
     });
   });
 }
