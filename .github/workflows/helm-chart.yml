@@ -52,11 +52,21 @@ jobs:
             tar -xzf "$tgz" -C charts/
           done
 
-      - name: helm lint (default values)
-        run: helm lint infra/helm/vigil
-
-      - name: helm lint (dev values)
-        run: helm lint infra/helm/vigil -f infra/helm/vigil/values-dev.yaml
+      - name: helm lint (discovered values profiles)
+        # Every values*.yaml in the chart directory is linted automatically:
+        # values.yaml is the default variant (no -f), any other file is
+        # layered with -f. Adding a cloud profile is a file addition — this
+        # workflow needs no edit to cover it.
+        run: |
+          for values_file in infra/helm/vigil/values*.yaml; do
+            name="$(basename "${values_file%.yaml}")"
+            echo "== helm lint (${name}) =="
+            if [ "$name" = "values" ]; then
+              helm lint infra/helm/vigil
+            else
+              helm lint infra/helm/vigil -f "$values_file"
+            fi
+          done
 
       - name: helm lint (Bitnami subcharts enabled)
         run: |
@@ -64,20 +74,29 @@ jobs:
             --set postgresql.enabled=false --set postgresql.bitnami.enabled=true \
             --set redis.enabled=false --set redis.bitnami.enabled=true
 
-      - name: helm template (default values)
+      - name: helm template (discovered values profiles)
+        # Mirror of the lint loop: every values*.yaml renders to its own
+        # manifest for the kubeconform step. The default variant keeps the
+        # explicit postgresPassword; profile files layer on top of the base
+        # defaults and only need the required Anthropic key.
         run: |
-          helm template release-check infra/helm/vigil \
-            --set secrets.anthropicApiKey=test-key \
-            --set secrets.postgresPassword=test-password \
-            > /tmp/manifest-default.yaml
-          echo "Rendered $(grep -c '^kind:' /tmp/manifest-default.yaml) resources."
-
-      - name: helm template (dev values)
-        run: |
-          helm template release-check infra/helm/vigil \
-            -f infra/helm/vigil/values-dev.yaml \
-            --set secrets.anthropicApiKey=test-key \
-            > /tmp/manifest-dev.yaml
+          for values_file in infra/helm/vigil/values*.yaml; do
+            name="$(basename "${values_file%.yaml}")"
+            manifest="/tmp/manifest-${name}.yaml"
+            echo "== helm template (${name}) =="
+            if [ "$name" = "values" ]; then
+              helm template release-check infra/helm/vigil \
+                --set secrets.anthropicApiKey=test-key \
+                --set secrets.postgresPassword=test-password \
+                > "$manifest"
+            else
+              helm template release-check infra/helm/vigil \
+                -f "$values_file" \
+                --set secrets.anthropicApiKey=test-key \
+                > "$manifest"
+            fi
+            echo "Rendered $(grep -c '^kind:' "$manifest") resources."
+          done
 
       - name: helm template (Bitnami subcharts)
         run: |
@@ -93,9 +112,10 @@ jobs:
           curl -sSLo kubeconform.tar.gz \
             https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
           tar xzf kubeconform.tar.gz
-          ./kubeconform -strict -ignore-missing-schemas -summary /tmp/manifest-default.yaml
-          ./kubeconform -strict -ignore-missing-schemas -summary /tmp/manifest-dev.yaml
-          ./kubeconform -strict -ignore-missing-schemas -summary /tmp/manifest-bitnami.yaml
+          for manifest in /tmp/manifest-*.yaml; do
+            echo "== kubeconform ($(basename "$manifest")) =="
+            ./kubeconform -strict -ignore-missing-schemas -summary "$manifest"
+          done
 
   chart-testing:
     name: chart-testing
