@@ -31,6 +31,7 @@ import MetricsScreen from '../screens/metrics/MetricsScreen'
 import AnalyticsScreen from '../screens/analytics/AnalyticsScreen'
 import DecisionsScreen from '../screens/decisions/DecisionsScreen'
 import WorkflowsScreen from '../screens/workflows/WorkflowsScreen'
+import DigitalTwinScreen from '../screens/twin/DigitalTwinScreen'
 import AutoOpsScreen from '../screens/autoops/AutoOpsScreen'
 import HealthScreen from '../screens/health/HealthScreen'
 import HomeScreen from '../screens/home/HomeScreen'
@@ -48,7 +49,7 @@ import {
   type StatusFold,
 } from './statusLine'
 
-const PRIMARY_KEYS = ['home', 'overview', 'triage', 'cases', 'workflows', 'settings']
+const PRIMARY_KEYS = ['home', 'overview', 'triage', 'cases', 'workflows', 'twin', 'settings']
 const MORE_KEYS = ['dashboard', 'metrics', 'analytics', 'decisions', 'autoops', 'health']
 
 const AUTONOMY_ACT = 'Autonomy · Act · reversible changes on its own'
@@ -64,6 +65,7 @@ const SCREENS: Record<ConsoleScreenKey, (props: ConsoleScreenProps) => JSX.Eleme
   analytics: AnalyticsScreen,
   decisions: DecisionsScreen,
   workflows: WorkflowsScreen,
+  twin: DigitalTwinScreen,
   autoops: AutoOpsScreen,
   health: HealthScreen,
   settings: SettingsScreen,

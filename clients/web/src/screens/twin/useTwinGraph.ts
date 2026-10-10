@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
-import type { TwinConnection, TwinDevice, TwinGraphPayload, TwinProcess } from './types'
-import { DEMO_TWIN_PAYLOAD } from './fixtures'
+import { twinApi } from '../../services/api'
+import type { Schema } from '../../services/apiTypes'
+import type {
+  TwinConnection,
+  TwinDevice,
+  TwinDeviceType,
+  TwinDirection,
+  TwinGraphPayload,
+  TwinProcess,
+} from './types'
 
 /**
  * Pure mappers from the spec's graph payload to React Flow nodes and edges,
- * plus the Phase hook the screen will consume. No state, no fetching — the
- * wiring PR only swaps the loader.
+ * plus the Phase hook the screen consumes: the loader normalizes the wire
+ * DTO, the mappers stay framework-pure, and the hook owns fetching, the
+ * 30 s poll, and the refresh semantics.
  */
 
 /** Layer toggle: physical shows devices, logical shows processes + connections. */
@@ -162,47 +171,171 @@ export function connectionTupleLabel(c: TwinConnection): string {
   return c.direction === 'outbound' ? `${proto}${local} → ${remote}` : `${proto}${remote} → ${local}`
 }
 
-export type TwinPhase = 'loading' | 'ready' | 'error'
+/** The generated OpenAPI wire shape (optional lists, untyped uuid ids). */
+type TwinGraphWire = Schema<'TwinGraphPayload'>
+
+const DEVICE_TYPES: TwinDeviceType[] = ['server', 'workstation', 'appliance', 'iot', 'container_host']
+
+const asDeviceType = (value: string): TwinDeviceType =>
+  (DEVICE_TYPES as string[]).includes(value) ? (value as TwinDeviceType) : 'unknown'
+
+const asDirection = (value: string | null | undefined): TwinDirection | null =>
+  value === 'inbound' || value === 'outbound' ? value : null
 
 /**
- * Stand-in data source until the twin API lands: the wiring PR swaps this one
- * function for the real `GET /graph` call without touching the mappers.
+ * Wire DTO → the screen's payload: ids arrive as untyped uuids
+ * (openapi-typescript can't see the format), the three lists are optional
+ * server-side, and free-form enum fields fall back to `unknown`/`null`
+ * instead of lying about their type.
  */
-export function loadTwinPayload(): Promise<TwinGraphPayload> {
-  return Promise.resolve(DEMO_TWIN_PAYLOAD)
+export function normalizeTwinPayload(raw: TwinGraphWire): TwinGraphPayload {
+  return {
+    generated_at: raw.generated_at,
+    devices: (raw.devices ?? []).map((d) => ({
+      id: String(d.id),
+      hostname: d.hostname ?? null,
+      mac_address: d.mac_address ?? null,
+      serial_number: d.serial_number ?? null,
+      device_type: asDeviceType(d.device_type),
+      ip_address: d.ip_address ?? null,
+      source: d.source,
+      first_seen: d.first_seen,
+      last_seen: d.last_seen,
+    })),
+    processes: (raw.processes ?? []).map((p) => ({
+      id: String(p.id),
+      device_id: String(p.device_id),
+      pid: p.pid,
+      name: p.name,
+      user: p.user ?? null,
+      command: p.command ?? null,
+      source: p.source,
+      first_seen: p.first_seen,
+      last_seen: p.last_seen,
+    })),
+    connections: (raw.connections ?? []).map((c) => ({
+      id: String(c.id),
+      device_id: String(c.device_id),
+      process_id: c.process_id == null ? null : String(c.process_id),
+      connection_type: c.connection_type,
+      protocol: c.protocol ?? null,
+      local_ip: c.local_ip ?? null,
+      local_port: c.local_port ?? null,
+      remote_ip: c.remote_ip ?? null,
+      remote_port: c.remote_port ?? null,
+      state: c.state ?? null,
+      direction: asDirection(c.direction),
+      source: c.source,
+      first_seen: c.first_seen,
+      last_seen: c.last_seen,
+    })),
+  }
 }
 
+/** The detail panel's selection, re-resolved against a fresh payload: a
+ *  refresh that still carries the entity keeps the panel open with the
+ *  entity's fresher fields; one that no longer names it closes the panel
+ *  instead of showing a row the canvas no longer has. */
+export function resolveSelection(
+  payload: TwinGraphPayload | null,
+  selected: TwinNodeData | null,
+): TwinNodeData | null {
+  if (!selected || !payload) return null
+  switch (selected.kind) {
+    case 'device': {
+      const fresh = payload.devices.find((d) => d.id === selected.entity.id)
+      return fresh ? { kind: 'device', entity: fresh } : null
+    }
+    case 'process': {
+      const fresh = payload.processes.find((p) => p.id === selected.entity.id)
+      return fresh ? { kind: 'process', entity: fresh } : null
+    }
+    case 'connection': {
+      const fresh = payload.connections.find((c) => c.id === selected.entity.id)
+      return fresh ? { kind: 'connection', entity: fresh } : null
+    }
+  }
+}
+
+export type TwinPhase = 'loading' | 'ready' | 'error'
+
+/** The data source: GET /api/v1/digital-twin/graph, normalized for the mappers. */
+export function loadTwinPayload(): Promise<TwinGraphPayload> {
+  return twinApi.getTwinGraph().then((res) => normalizeTwinPayload(res.data))
+}
+
+const POLL_MS = 30_000
+
+/**
+ * Phase hook for the twin screen. Two refresh shapes, per the spec's state
+ * table: `reload` (first mount, retry, manual reload) drops back to the
+ * Loading skeleton, while the 30 s poll while Ready refreshes in place —
+ * the last valid graph stays up, and a failed refresh surfaces its error
+ * without ever blanking the canvas.
+ */
 export function useTwinGraph(): {
   payload: TwinGraphPayload | null
   phase: TwinPhase
+  /** a background refresh is in flight; the graph stays visible and live */
+  refreshing: boolean
   error: string | null
   reload: () => void
 } {
   const [payload, setPayload] = useState<TwinGraphPayload | null>(null)
   const [phase, setPhase] = useState<TwinPhase>('loading')
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [reloadKey, setReloadKey] = useState(0)
-  const reload = useCallback(() => setReloadKey((k) => k + 1), [])
+  const requestRef = useRef(0)
+  const liveRef = useRef(true)
+  useEffect(() => {
+    // StrictMode's simulated unmount disarms this guard; the second (real)
+    // mount must re-arm it or every response is discarded and the screen
+    // sits in Loading forever.
+    liveRef.current = true
+    return () => {
+      liveRef.current = false
+    }
+  }, [])
+
+  const run = useCallback(async (mode: 'full' | 'refresh') => {
+    const req = ++requestRef.current
+    if (mode === 'full') {
+      setPhase('loading')
+      setError(null)
+    } else {
+      setRefreshing(true)
+    }
+    try {
+      const next = await loadTwinPayload()
+      if (!liveRef.current || req !== requestRef.current) return
+      setPayload(next)
+      setPhase('ready')
+      setError(null)
+    } catch (e) {
+      if (!liveRef.current || req !== requestRef.current) return
+      setError((e as { message?: string })?.message || 'Failed to load the twin graph')
+      if (mode === 'full') setPhase('error')
+    } finally {
+      // a request that superseded an in-flight refresh clears its flag too
+      if (liveRef.current && req === requestRef.current) setRefreshing(false)
+    }
+  }, [])
+
+  const reload = useCallback(() => {
+    void run('full')
+  }, [run])
 
   useEffect(() => {
-    let cancelled = false
-    setPhase('loading')
-    setError(null)
-    loadTwinPayload()
-      .then((next) => {
-        if (cancelled) return
-        setPayload(next)
-        setPhase('ready')
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setError((e as { message?: string })?.message || 'Failed to load the twin graph')
-        setPhase('error')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [reloadKey])
+    void run('full')
+  }, [run])
 
-  return { payload, phase, error, reload }
+  useEffect(() => {
+    if (phase !== 'ready') return
+    const id = setInterval(() => {
+      void run('refresh')
+    }, POLL_MS)
+    return () => clearInterval(id)
+  }, [phase, run])
+
+  return { payload, phase, refreshing, error, reload }
 }
