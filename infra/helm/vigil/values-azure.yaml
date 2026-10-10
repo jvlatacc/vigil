@@ -1,0 +1,89 @@
+# Vigil SOC — Azure AKS profile
+#
+# helm install vigil ./infra/helm/vigil \
+#   -f ./infra/helm/vigil/values-azure.yaml \
+#   --namespace vigil --create-namespace \
+#   --set secrets.anthropicApiKey="$ANTHROPIC_API_KEY" \
+#   --set secrets.postgresPassword="$(openssl rand -hex 24)" \
+#   --set secrets.jwtSecretKey="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')"
+#
+# Cluster prerequisites:
+# * Managed CSI storage driver (default on every AKS cluster since v1.21):
+#   the `managed-csi` storage class is pre-created and is the cluster default.
+#   This profile still pins it explicitly — a pin that follows whatever the
+#   cluster names as default is not a pin (see thunking/azure-aks.md).
+# * Ingress (the commented example uses the Web App Routing add-on):
+#   `az aks approuting enable` provides the `webapprouting` class. A
+#   self-managed nginx (class `nginx`) is the alternative; neither is enabled
+#   by default on AKS.
+# * Workload identity (commented example): OIDC issuer + workload identity on
+#   the cluster (`az aks update --enable-oidc-issuer --enable-workload-identity`)
+#   and a federated credential on a user-assigned managed identity. Left
+#   unwired — see thunking/azure-aks.md for the pod-label and token-automount
+#   caveats that make this a deliberate operator decision.
+#
+# --- Storage: pin all four PVC sites to managed-csi (Standard SSD) ---
+postgresql:
+  persistence:
+    storageClassName: managed-csi
+redis:
+  persistence:
+    storageClassName: managed-csi
+    # Latency-sensitive queue: Premium SSD is an opt-in upgrade, never the
+    # default — uncomment to bill premium storage for redis only.
+    # storageClassName: managed-csi-premium
+daemon:
+  persistence:
+    storageClassName: managed-csi
+splunk:
+  # dev utility; inert while disabled
+  persistence:
+    storageClassName: managed-csi
+# Bitnami subchart variant (if postgresql.bitnami.enabled: true). NOTE the
+# path: the Bitnami subcharts are unaliased in Chart.yaml, so their values
+# root IS the postgresql/redis key — the base chart's
+# postgresql.bitnami.primary.* nesting does NOT reach them (verified by
+# render, see thunking/azure-aks.md):
+# postgresql:
+#   primary:
+#     persistence:
+#       storageClass: managed-csi
+# Bitnami subchart variant (if redis.bitnami.enabled: true); Premium SSD for
+# the queue mirrors the in-chart upgrade above:
+# redis:
+#   master:
+#     persistence:
+#       storageClass: managed-csi-premium
+# --- Exposure: chart default is Ingress-only, disabled ---
+# ingress:
+#   enabled: true
+#   className: webapprouting   # Web App Routing add-on; self-managed nginx: nginx
+#   annotations: {}
+#   hosts:
+#     - host: vigil.example.com
+#       paths:
+#         - path: /
+#           pathType: Prefix
+# --- Identity: documented hook, not wired (see thunking/azure-aks.md) ---
+# Azure Workload Identity needs the pod LABEL azure.workload.identity/use:
+# "true" on every Vigil pod, the SA client-id annotation below, and a
+# projected service-account token. The chart ships
+# automountServiceAccountToken: false and renders podLabels on only some
+# components, so turning identity on is a template change plus a security
+# decision for the operator:
+# serviceAccount:
+#   annotations:
+#     azure.workload.identity/client-id: <USER_ASSIGNED_CLIENT_ID>
+# --- Images: ACR pull-through cache hook (optional) ---
+# global:
+#   imagePullSecrets:
+#     - name: acr-pullthrough
+# --- Scheduling: pin to a node pool (optional) ---
+# backend:
+#   nodeSelector:
+#     kubernetes.azure.com/agentpool: <pool-name>
+#   tolerations:
+#     - key: kubernetes.azure.com/scalesetpriority
+#       operator: Equal
+#       value: spot
+#       effect: NoSchedule
