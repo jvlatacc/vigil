@@ -134,6 +134,14 @@ class _State:
     # drift report surfaces them every closure. Transient failures
     # ("import_failed") are NOT here — those stay unacked and retry.
     rejected: dict[str, str] = field(default_factory=dict)
+    # Sequences of decision records closed by a successful revert. Durability
+    # for the reaper's work queue: a successful revert record is itself
+    # uploadable, so it compacts away with its ack — after which a scan of
+    # live records can no longer see the closure. Without this set the next
+    # compaction would resurrect the decision as pending work forever (and
+    # worse, compaction would drop the pending decision before the reaper
+    # ever ran, leaking the block silently).
+    closed_reverts: list[int] = field(default_factory=list)
 
 
 def _parse_ts(value: str) -> datetime | None:
@@ -197,6 +205,15 @@ class HashJournal:
             handle.flush()
             os.fsync(handle.fileno())
         self._records.append(record)
+        # A successful revert closes its decision's pending-reaper status
+        # durably (the revert record itself compacts away with its ack).
+        if record.kind == KIND_REVERT and record.payload.get("success") is True:
+            revert_of = record.payload.get("revert_of")
+            if (
+                isinstance(revert_of, int)
+                and revert_of not in self._state.closed_reverts
+            ):
+                self._state.closed_reverts.append(revert_of)
         self._persist_state()
         if self.on_append is not None:
             # Observers run after durability: a snapshot taken for the
@@ -205,9 +222,19 @@ class HashJournal:
         return record
 
     def _next_sequence(self) -> int:
+        """One past the highest sequence ever issued. The ack watermark and
+        the evicted ranges count as issued even when no live record reaches
+        that high: compaction retains executed-but-unreverted decisions that
+        can sit BELOW the watermark, so the last live record alone would
+        re-issue a sequence the server has already acked — and a record
+        born behind the watermark is silently invisible to unacked(),
+        never uploaded, then compacted away as if acknowledged."""
+        highest = self._state.acked_upto
         if self._records:
-            return self._records[-1].local_sequence + 1
-        return self._state.acked_upto + 1
+            highest = max(highest, self._records[-1].local_sequence)
+        for _, end in self._state.evicted_ranges:
+            highest = max(highest, end)
+        return highest + 1
 
     def _build_record(
         self,
@@ -329,10 +356,30 @@ class HashJournal:
 
     def _compact(self) -> None:
         """Drop the acked prefix from memory and disk; the retained segment's
-        first record keeps its prev_hash as the persisted verification anchor."""
-        remaining = [
-            r for r in self._records if r.local_sequence > self._state.acked_upto
-        ]
+        first record keeps its prev_hash as the persisted verification anchor.
+
+        One retention rule outranks the ack: an executed-but-unreverted
+        decision is pending reaper work, not uploaded history. Sync acks in
+        seconds and TTLs run in minutes — dropping executed decisions at ack
+        time would erase the reaper's work queue in the normal connected
+        case and leak the block silently. The decision compacts once the
+        successful revert closes it (closed_reverts)."""
+        closed = self._successful_revert_seqs()
+
+        def _retained(record: JournalRecord) -> bool:
+            if record.local_sequence > self._state.acked_upto:
+                return True
+            if record.kind != KIND_DECISION:
+                return False
+            payload = record.payload
+            if payload.get("outcome") != "execute":
+                return False
+            execution = payload.get("execution") or {}
+            if execution.get("success") is not True:
+                return False
+            return record.local_sequence not in closed
+
+        remaining = [r for r in self._records if _retained(r)]
         if len(remaining) == len(self._records):
             return
         self._state.anchor = remaining[0].prev_hash if remaining else GENESIS_HASH
@@ -353,8 +400,11 @@ class HashJournal:
     def _successful_revert_seqs(self) -> set[int]:
         """Local sequences of decision records closed by a successful
         revert. Failed reverts deliberately do not appear: the work stays
-        pending until the revert is real."""
-        closed: set[int] = set()
+        pending until the revert is real. The persisted set outranks the
+        scan — a closed revert record compacts away with its ack, and the
+        scan of live records alone would then resurrect the decision as
+        pending forever."""
+        closed: set[int] = set(self._state.closed_reverts)
         for record in self._records:
             if record.kind != KIND_REVERT:
                 continue
@@ -499,6 +549,7 @@ class HashJournal:
                         str(seq): str(reason)
                         for seq, reason in raw.get("rejected", {}).items()
                     },
+                    closed_reverts=[int(seq) for seq in raw.get("closed_reverts", [])],
                 )
             except (OSError, ValueError) as exc:
                 logger.error(
@@ -541,6 +592,7 @@ class HashJournal:
                 "loss_counters": self._state.loss_counters,
                 "evicted_ranges": self._state.evicted_ranges,
                 "rejected": self._state.rejected,
+                "closed_reverts": self._state.closed_reverts,
             },
             sort_keys=True,
         )
