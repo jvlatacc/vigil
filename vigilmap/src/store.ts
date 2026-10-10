@@ -5,13 +5,16 @@
  * drives the detail panel — nothing mutates the document. The observable
  * wrapper is a store of last resort: state in, listeners out, nothing else.
  *
- * The scaffold carries the filters that the ready panel and (next PR) the
- * graph need: kind, entity type and outcome toggles plus entity search. The
- * time window and its predicate land with the filter UI.
+ * The scaffold carried the filters the ready panel needs: kind, entity type
+ * and outcome toggles plus entity search. The time window and the shared node
+ * predicate live in `filters.ts`; `selectVisibleNodes` delegates there so both
+ * entry points stay one implementation.
  */
 
 import type { EntityType, MemoryGraphDocument, MemoryNode, NodeKind, VerdictOutcome } from "./types";
 import { ENTITY_TYPES, NODE_KINDS, VERDICT_OUTCOMES } from "./types";
+import type { TimeWindow } from "./filters";
+import { passesFilters } from "./filters";
 
 export interface Filters {
   /** true = visible. All-on by default. */
@@ -22,6 +25,8 @@ export interface Filters {
   outcomes: Record<VerdictOutcome, boolean>;
   /** Case-insensitive substring match on entity keys. */
   search: string;
+  /** ISO-8601 bounds, either optional; null = no window. */
+  timeWindow: TimeWindow | null;
 }
 
 function allOn<T extends string>(values: readonly T[]): Record<T, boolean> {
@@ -34,6 +39,7 @@ export function noFilters(): Filters {
     entityTypes: allOn(ENTITY_TYPES),
     outcomes: allOn(VERDICT_OUTCOMES),
     search: "",
+    timeWindow: null,
   };
 }
 
@@ -76,25 +82,7 @@ export function selectVisibleNodes(
   document: MemoryGraphDocument,
   filters: Filters,
 ): MemoryNode[] {
-  const search = filters.search.trim().toLowerCase();
-  return document.nodes.filter((node) => {
-    if (!filters.kinds[node.kind]) return false;
-    switch (node.kind) {
-      case "entity":
-        if (!filters.entityTypes[node.entityType]) return false;
-        if (search && !node.entityKey.toLowerCase().includes(search)) return false;
-        break;
-      case "sighting":
-        if (search && !node.entityKey.toLowerCase().includes(search)) return false;
-        break;
-      case "verdict":
-        if (!filters.outcomes[node.outcome]) return false;
-        break;
-      default:
-        break;
-    }
-    return true;
-  });
+  return document.nodes.filter((node) => passesFilters(node, filters));
 }
 
 /** A selected node the user cannot see is a state lie — selection clears instead. */

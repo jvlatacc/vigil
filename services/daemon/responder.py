@@ -22,6 +22,7 @@ from core.response.config import (
     response_action_decision,
 )
 from core.response.fastpath.adjudication import FastPathAdjudicator
+from core.response.guards import origin_statuses_for
 from core.storage.connection import get_db_manager
 from core.storage.models import MtdDecoyRegistry, MtdIpExclusion
 from services.daemon.config import EscalationConfig, ResponseConfig
@@ -345,13 +346,25 @@ class AutonomousResponder:
 
         return severity in self.escalation_config.escalate_severities
 
-    async def _escalate_finding(self, finding: Dict[str, Any], action: str):
-        """Escalate finding via configured channels."""
+    async def _escalate_finding(
+        self,
+        finding: Dict[str, Any],
+        action: str,
+        guard_rule: Optional[str] = None,
+    ):
+        """Escalate finding via configured channels.
+
+        ``guard_rule`` carries a guard hold's rationale (#944): the page says
+        why auto-response did not act, so the reviewer starts from the gate
+        that stopped it.
+        """
         finding_id = finding.get("finding_id")
         severity = finding.get("severity", "unknown")
         title = finding.get("title", "Security Alert")
 
         message = self._build_escalation_message(finding, action)
+        if guard_rule:
+            message += f"\n\n**Held by guard:** {guard_rule}"
 
         # Slack escalation
         if self.escalation_config.slack_enabled:
@@ -497,13 +510,6 @@ class AutonomousResponder:
         rule: str,
     ):
         """Create a response action (pending or auto-approved)."""
-        if self.response_config.dry_run:
-            logger.info(
-                f"[DRY RUN] Would create {action_type} action for finding "
-                f"{finding.get('finding_id')}; {rule}"
-            )
-            return
-
         finding_id = finding.get("finding_id")
         confidence = finding.get("triage_confidence", 0.5)
 
@@ -512,6 +518,28 @@ class AutonomousResponder:
         target_ip = _first_actionable_ip(entity_context)
         if entity_context.get("hostnames"):
             hostname = entity_context["hostnames"][0]
+
+        if self.response_config.dry_run:
+            # Dry run creates nothing — but it still asks the guards what
+            # they would have said (#944, Verification row 8): the operator
+            # sees every gate verdict without a containment or a quota slot
+            # (spend_quota=False judges the windows, spends nothing).
+            verdict = self._response_service.evaluate_guards(
+                action_type,
+                target_ip,
+                hostname,
+                origin_statuses_for(finding),
+                spend_quota=False,
+            )
+            logger.info(
+                f"[DRY RUN] Guard evaluation for {action_type}: "
+                f"{verdict.state.value}; {verdict.rule}"
+            )
+            logger.info(
+                f"[DRY RUN] Would create {action_type} action for finding "
+                f"{finding.get('finding_id')}; {rule}"
+            )
+            return
 
         if not target_ip and not hostname:
             logger.warning(f"No target available for response action on {finding_id}")
@@ -530,6 +558,7 @@ class AutonomousResponder:
             reason=f"Automated response to {finding_id}; {rule}",
             evidence=[finding_id],
             correlation_data=correlation_data,
+            evidence_origins=origin_statuses_for(finding),
         )
 
         if result:
@@ -544,6 +573,18 @@ class AutonomousResponder:
             elif result.get("status") == "pending_approval":
                 self.stats["pending_approval"] += 1
                 logger.info(f"Created pending {action_type} action for {finding_id}")
+                # A held action escalates through the same Slack/PagerDuty
+                # path as any other finding (#944, D1): the hold itself is
+                # the signal — a spoofed finding held by the origin gate
+                # usually has no severity worth escalating, and silence
+                # would be the drop the guards exist to prevent. While the
+                # breaker is OPEN the service claims the escalation once
+                # per OPEN period, so a flood cannot page the queue flat.
+                guard = result.get("guard")
+                if guard and result.get("guard_escalate", False):
+                    await self._escalate_finding(
+                        finding, action_type, guard_rule=guard.get("rule")
+                    )
             else:
                 logger.warning(f"Action creation result: {result}")
 

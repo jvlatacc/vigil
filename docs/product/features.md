@@ -113,6 +113,13 @@ Automatic AI analysis cached on first view.
 
 Auto-Responder agent for automated containment.
 
+### Safety Bounds (Feature 7)
+
+The automated path is bounded by three fail-closed gates — protected-asset
+invariants, blast-radius quotas with a circuit breaker, and cryptographic
+origin validation of evidencing findings. Deployment and tuning:
+[Response Blast Bounds](../deploy/response-blast-bounds.md).
+
 ### Multi-Source Correlation
 
 1. Pull alerts from Tempo Flow (network)
