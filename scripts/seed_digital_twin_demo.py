@@ -791,6 +791,12 @@ def count_rows() -> Dict[str, int]:
 def main() -> int:
     logger.info("Initializing database schema (create_all)...")
     init_database(echo=False, create_tables=True)
+    # Bundled CISA KEV: idempotent through the upsert triple; seeded at the
+    # composition root because the storage tier must not import
+    # core.threat_intel.
+    from core.threat_intel.kev_seed import seed_kev_indicators
+
+    seed_kev_indicators()
 
     batch = build_demo_batch()
     counts = apply_batch(batch)
