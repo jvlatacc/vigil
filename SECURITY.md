@@ -210,11 +210,11 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 - **`DEV_MODE=true` bypassing authentication.** That is its documented purpose.
   It defaults to `false` in `core/config.py` and in `env.example`; a developer
   opts into it for a local instance, and the backend announces the bypass on
-  every startup. See [DEV_MODE](https://vigilsoc.org/docs/dev-mode/).
+  every startup. See [DEV_MODE](docs/develop/dev-mode.md).
 - **Default credentials in development material** — the default PostgreSQL
   password in `infra/docker/docker-compose.yml`, documented as
   must-change-before-production in
-  [production security](https://vigilsoc.org/docs/production-security/). No
+  [production security](docs/deploy/production-security.md). No
   default admin login ships; the first account is created through
   `/api/auth/bootstrap`.
 - **Placeholder values in `env.example`.** They are a template, not a
@@ -222,7 +222,7 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 - **Findings that require a misconfiguration we already document as unsafe** —
   for example exposing port 6987 to the internet with `DEV_MODE=true`, or
   running with the report-only CSRF switch turned on in production. If you find
-  a case [production security](https://vigilsoc.org/docs/production-security/) does *not*
+  a case [production security](docs/deploy/production-security.md) does *not*
   cover, that gap is worth reporting.
 - **Vulnerabilities in an upstream product Vigil integrates with** (Splunk,
   CrowdStrike, VirusTotal, and the rest). Report those to that vendor. If
@@ -244,17 +244,17 @@ Not vulnerabilities. Reports on these will be closed with a pointer back here:
 Most incidents we would expect to see are configuration, not code. Before you
 run Vigil anywhere real:
 
-- **[Production security](https://vigilsoc.org/docs/production-security/)** — the
+- **[Production security](docs/deploy/production-security.md)** — the
   auditable checklist of every security-relevant switch and its production
   value. Start here.
-- **[DEV_MODE](https://vigilsoc.org/docs/dev-mode/)** — what the auth bypass does and why it must
+- **[DEV_MODE](docs/develop/dev-mode.md)** — what the auth bypass does and why it must
   never be enabled in production.
-- **[State and secrets](https://vigilsoc.org/docs/state/)** — where secrets live, and why provider
+- **[State and secrets](docs/deploy/state.md)** — where secrets live, and why provider
   keys and integration credentials belong in the UI and the encrypted store
   rather than in `.env`.
-- **[Helm secrets](https://vigilsoc.org/docs/helm-secrets/)** — secret management for
+- **[Helm secrets](docs/deploy/helm-secrets.md)** — secret management for
   Kubernetes deployments.
-- **[Deployment guide](https://vigilsoc.org/docs/deployment/)** — network exposure,
+- **[Deployment guide](docs/deploy/deployment.md)** — network exposure,
   TLS termination, and reverse-proxy placement.
 
 Non-negotiables: set `DEV_MODE=false`, generate a real `JWT_SECRET_KEY`, change

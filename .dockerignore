@@ -124,3 +124,11 @@ services/medic/tests/
 services/medic/contracts/tests/
 services/medic/contracts/tools/
 services/medic/contracts/fixtures/
+
+# Enforcer. Dockerfile.enforcer's Go builder stage COPYs services/enforcement
+# wholesale; test files and the runbook helpers are not build inputs, and a
+# local build-bpf.sh output tree (bpf/build/) must never satisfy the builder
+# in place of a fresh compile — stale objects would look like image content.
+services/enforcement/**/*_test.go
+services/enforcement/tcpcat.py
+services/enforcement/bpf/build/

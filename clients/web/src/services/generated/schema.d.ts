@@ -3744,6 +3744,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/digital-twin/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Devices
+         * @description The flat device list — tables and debugging, ``device_key`` included.
+         */
+        get: operations["get_api_digital-twin_devices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Graph
+         * @description The whole twin in one payload: devices, processes, connections, edges.
+         *
+         *     Every node carries its entity attributes — MAC, serial, PID, the
+         *     connection 5-tuple, type. Edges: device ``runs`` process, process
+         *     ``binds`` connection, and the heuristic device ``talks-to`` device where
+         *     a connection's ``remote_ip`` matches another known device's last-known
+         *     ``ip_address`` (``heuristic=true`` — reused addresses can fabricate one).
+         */
+        get: operations["get_api_digital-twin_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Observations
+         * @description Idempotent upsert of device/process/connection observations.
+         *
+         *     The server derives each row's natural key from the observation, so
+         *     re-posting a batch updates ``last_seen`` and changes no row counts —
+         *     the "still here" signal a polling feed sends. References between rows
+         *     (a process's device, a connection's process) are natural keys the batch
+         *     or an earlier ingest created; an unknown one is a 422 naming the field.
+         */
+        post: operations["post_api_digital-twin_ingest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/exclusions": {
         parameters: {
             query?: never;
@@ -7634,6 +7706,78 @@ export interface paths {
          *     closed with a note and linked via a 'merged_into' relationship.
          */
         post: operations["post_api_v1_cases_case_id_merge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/digital-twin/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Devices
+         * @description The flat device list — tables and debugging, ``device_key`` included.
+         */
+        get: operations["get_api_v1_digital-twin_devices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/digital-twin/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Graph
+         * @description The whole twin in one payload: devices, processes, connections, edges.
+         *
+         *     Every node carries its entity attributes — MAC, serial, PID, the
+         *     connection 5-tuple, type. Edges: device ``runs`` process, process
+         *     ``binds`` connection, and the heuristic device ``talks-to`` device where
+         *     a connection's ``remote_ip`` matches another known device's last-known
+         *     ``ip_address`` (``heuristic=true`` — reused addresses can fabricate one).
+         */
+        get: operations["get_api_v1_digital-twin_graph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/digital-twin/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Observations
+         * @description Idempotent upsert of device/process/connection observations.
+         *
+         *     The server derives each row's natural key from the observation, so
+         *     re-posting a batch updates ``last_seen`` and changes no row counts —
+         *     the "still here" signal a polling feed sends. References between rows
+         *     (a process's device, a connection's process) are natural keys the batch
+         *     or an earlier ingest created; an unknown one is a 422 naming the field.
+         */
+        post: operations["post_api_v1_digital-twin_ingest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12708,6 +12852,188 @@ export interface components {
             total: number;
         };
         /**
+         * TwinConnectionIn
+         * @description One connection observation.
+         *
+         *     A connection belongs to its device — named directly by ``device`` or,
+         *     when the source could attribute it, implied by the owning ``process``
+         *     (whose ``device`` is the connection's device). Naming neither is the one
+         *     shape the twin cannot place, so it is refused here.
+         */
+        TwinConnectionIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "socket" | "stream" | "session";
+            /**
+             * Device
+             * @description device_key, or the hostname the device was observed under; implied by `process` when omitted, and when both are given they must resolve to the same device
+             */
+            device?: string | null;
+            /** Direction */
+            direction?: ("inbound" | "outbound") | null;
+            /** Local Ip */
+            local_ip?: string | null;
+            /** Local Port */
+            local_port?: number | null;
+            process?: components["schemas"]["TwinProcessRef"] | null;
+            /** Protocol */
+            protocol?: string | null;
+            /** Remote Ip */
+            remote_ip?: string | null;
+            /** Remote Port */
+            remote_port?: number | null;
+            /** Started At */
+            started_at?: string | null;
+            /** State */
+            state?: string | null;
+        };
+        /**
+         * TwinConnectionOut
+         * @description A connection as the API returns it — the identifying 5-tuple included.
+         */
+        TwinConnectionOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Connection Type
+             * @enum {string}
+             */
+            connection_type: "socket" | "stream" | "session";
+            /** Device Id */
+            device_id: unknown;
+            /** Direction */
+            direction?: string | null;
+            /** First Seen */
+            first_seen: string;
+            /** Id */
+            id: unknown;
+            /** Last Seen */
+            last_seen: string;
+            /** Local Ip */
+            local_ip?: string | null;
+            /** Local Port */
+            local_port?: number | null;
+            /** Process Id */
+            process_id?: unknown | null;
+            /** Protocol */
+            protocol?: string | null;
+            /** Remote Ip */
+            remote_ip?: string | null;
+            /** Remote Port */
+            remote_port?: number | null;
+            /** Source */
+            source: string;
+            /** Started At */
+            started_at?: string | null;
+            /** State */
+            state?: string | null;
+        };
+        /**
+         * TwinDeviceIn
+         * @description One device observation.
+         *
+         *     The identity fields (``hostname``, ``mac_address``, ``serial_number``) are
+         *     what the ingest derives the ``device_key`` from, so at least one is
+         *     required; everything else is the last-known state of the machine.
+         */
+        TwinDeviceIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Device Type */
+            device_type?: string | null;
+            /** Hostname */
+            hostname?: string | null;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Mac Address */
+            mac_address?: string | null;
+            /** Os Info */
+            os_info?: string | null;
+            /** Serial Number */
+            serial_number?: string | null;
+        };
+        /**
+         * TwinDeviceListResponse
+         * @description The flat device list tables and debugging read; ``device_key`` is here.
+         */
+        TwinDeviceListResponse: {
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceOut"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * TwinDeviceOut
+         * @description A device as the API returns it — physical identity plus last-known state.
+         */
+        TwinDeviceOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Device Key */
+            device_key: string;
+            /** Device Type */
+            device_type: string;
+            /** First Seen */
+            first_seen: string;
+            /** Hostname */
+            hostname?: string | null;
+            /** Id */
+            id: unknown;
+            /** Ip Address */
+            ip_address?: string | null;
+            /** Last Seen */
+            last_seen: string;
+            /** Mac Address */
+            mac_address?: string | null;
+            /** Os Info */
+            os_info?: string | null;
+            /** Serial Number */
+            serial_number?: string | null;
+            /** Source */
+            source: string;
+        };
+        /**
+         * TwinEdgeOut
+         * @description One derived relationship between two graph nodes.
+         *
+         *     ``source``/``target`` are the entity ids the payload's own lists use, so
+         *     a client can join edges to nodes without a second lookup. ``runs`` and
+         *     ``binds`` are structural facts; ``talks-to`` is the v1 heuristic (a
+         *     connection's ``remote_ip`` matching another device's last-known
+         *     ``ip_address``) and carries ``heuristic=True`` — reused or overlapping
+         *     addresses can fabricate one.
+         */
+        TwinEdgeOut: {
+            /**
+             * Heuristic
+             * @default false
+             */
+            heuristic: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "runs" | "binds" | "talks-to";
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+        };
+        /**
          * TwinEdgeSchema
          * @description One observed relationship between two nodes.
          */
@@ -12729,6 +13055,27 @@ export interface components {
             weight: number;
         };
         /**
+         * TwinGraphPayload
+         * @description The whole twin in one payload; every node carries its entity attributes.
+         *
+         *     The three entity lists are the wire shape the console screen consumes;
+         *     ``edges`` is the same derivation server-side (``runs`` device→process,
+         *     ``binds`` process→connection, heuristic ``talks-to`` device→device) for
+         *     callers that would rather not re-derive it.
+         */
+        TwinGraphPayload: {
+            /** Connections */
+            connections?: components["schemas"]["TwinConnectionOut"][];
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceOut"][];
+            /** Edges */
+            edges?: components["schemas"]["TwinEdgeOut"][];
+            /** Generated At */
+            generated_at: string;
+            /** Processes */
+            processes?: components["schemas"]["TwinProcessOut"][];
+        };
+        /**
          * TwinGraphSchema
          * @description The whole map in one payload.
          */
@@ -12741,6 +13088,42 @@ export interface components {
             nodes?: components["schemas"]["TwinNodeSchema"][];
             /** Unattributed Finding Ids */
             unattributed_finding_ids?: string[];
+        };
+        /**
+         * TwinIngestBatch
+         * @description One observation envelope from one feed: the source and what it saw.
+         *
+         *     Re-posting a batch is safe and meaningful — it is how a feed says "still
+         *     here": row counts stay stable and every re-observed row's ``last_seen``
+         *     moves forward. A feed aggregating several vendors posts one batch per
+         *     source.
+         */
+        TwinIngestBatch: {
+            /** Connections */
+            connections?: components["schemas"]["TwinConnectionIn"][];
+            /** Devices */
+            devices?: components["schemas"]["TwinDeviceIn"][];
+            /** Processes */
+            processes?: components["schemas"]["TwinProcessIn"][];
+            /** Source */
+            source: string;
+        };
+        /**
+         * TwinIngestResult
+         * @description Counts of observations the batch carried, per entity class.
+         *
+         *     These echo the batch, not the database: idempotency means a re-post
+         *     returns the same numbers while the row counts stay put.
+         */
+        TwinIngestResult: {
+            /** Connections */
+            connections: number;
+            /** Devices */
+            devices: number;
+            /** Processes */
+            processes: number;
+            /** Source */
+            source: string;
         };
         /**
          * TwinNodeSchema
@@ -12768,6 +13151,76 @@ export interface components {
             x?: number | null;
             /** Y */
             y?: number | null;
+        };
+        /**
+         * TwinProcessIn
+         * @description One process observation, on the device named by ``device``.
+         */
+        TwinProcessIn: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Command */
+            command?: string | null;
+            /**
+             * Device
+             * @description device_key of the device the process ran on, or the hostname the device was observed under
+             */
+            device: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
+            /** Started At */
+            started_at?: string | null;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * TwinProcessOut
+         * @description A process as the API returns it.
+         */
+        TwinProcessOut: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: unknown;
+            } | null;
+            /** Command */
+            command?: string | null;
+            /** Device Id */
+            device_id: unknown;
+            /** First Seen */
+            first_seen: string;
+            /** Id */
+            id: unknown;
+            /** Last Seen */
+            last_seen: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
+            /** Source */
+            source: string;
+            /** Started At */
+            started_at?: string | null;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * TwinProcessRef
+         * @description Names an already-observed process by its natural key.
+         */
+        TwinProcessRef: {
+            /**
+             * Device
+             * @description device_key of the device the process ran on, or the hostname the device was observed under
+             */
+            device: string;
+            /** Name */
+            name: string;
+            /** Pid */
+            pid: number;
         };
         /**
          * UpdateConversationRequest
@@ -19794,6 +20247,108 @@ export interface operations {
             };
         };
     };
+    "get_api_digital-twin_devices": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinDeviceListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_digital-twin_graph": {
+        parameters: {
+            query?: {
+                /** @description Keep only entities re-observed at or after this instant. */
+                since?: string | null;
+                /** @description Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names. */
+                device_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinGraphPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_digital-twin_ingest": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwinIngestBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinIngestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_api_exclusions: {
         parameters: {
             query?: {
@@ -26378,6 +26933,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CaseMergeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_v1_digital-twin_devices": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinDeviceListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_v1_digital-twin_graph": {
+        parameters: {
+            query?: {
+                /** @description Keep only entities re-observed at or after this instant. */
+                since?: string | null;
+                /** @description Scope the graph to one device: its processes and connections, with talks-to edges only to remotes the scoped payload still names. */
+                device_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinGraphPayload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_v1_digital-twin_ingest": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TwinIngestBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TwinIngestResult"];
                 };
             };
             /** @description Validation Error */

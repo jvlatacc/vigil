@@ -370,6 +370,17 @@
         "_setup_note": "MTD honey-routing enforcement (Cilium local redirect first). Enable the honey_router integration in Settings → Integrations and set backend/namespace there; route/unroute tools are no-ops until it is enabled. The kubernetes client is imported only when a route is applied, so installs without it start cleanly.",
         "_note": "Operator/analyst surface. The autonomous path is the daemon responder creating honey_route approval actions — never this tool server."
       }
+    },
+
+    "ebpf-xdp": {
+      "command": "python3",
+      "args": ["core/integrations/ebpf_xdp/tool.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "_setup_note": "Kernel enforcement (eBPF/XDP): talks to the per-host services/enforcement daemon over its loopback-only bearer-token API. Both env placeholders are required — with either unset the server stays dormant-by-design (no enforcer on this host). Values may also be saved in Settings → Integrations (ebpf-xdp); the daemon reads the same VIGIL_ENFORCEMENT_* names.",
+        "VIGIL_ENFORCEMENT_URL": "${VIGIL_ENFORCEMENT_URL}",
+        "VIGIL_ENFORCEMENT_TOKEN": "${VIGIL_ENFORCEMENT_TOKEN}"
+      }
     }
   }
 }
