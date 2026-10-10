@@ -1373,6 +1373,14 @@ class AIOperationsSettingsConfig(BaseModel):
     local_ollama_recovery_enabled: bool = True
     local_ollama_recovery_retry_limit: int = Field(default=1, ge=0, le=3)
     local_ollama_recovery_restart_gateway: bool = True
+    # JIT policy compiler maturity thresholds (docs/adr/0001). Read by the
+    # maturity job and the fast path's drift brake via
+    # ``core.platform.runtime_config.get_ai_operations_setting`` — the keys are
+    # already in ENV_FALLBACKS, so these fields are what the Settings UI edits.
+    policy_compiler_min_runs: int = Field(default=10, ge=1, le=1000)
+    policy_compiler_min_consistency: float = Field(default=0.90, ge=0.0, le=1.0)
+    policy_compiler_window_days: int = Field(default=30, ge=1, le=365)
+    policy_compiler_drift_limit: int = Field(default=3, ge=1, le=100)
 
 
 AI_OPERATIONS_DEFAULTS = AIOperationsSettingsConfig().model_dump()

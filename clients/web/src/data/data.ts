@@ -10,6 +10,7 @@ export type ConsoleScreenKey =
   | 'analytics'
   | 'decisions'
   | 'workflows'
+  | 'policies'
   | 'autoops'
   | 'health'
   | 'settings'
@@ -103,6 +104,7 @@ export const TITLES: Record<ConsoleScreenKey, [string, string]> = {
   analytics: ['Analytics Dashboard', 'Security operations analytics'],
   decisions: ['AI Decisions', 'Review and provide feedback for AI decisions'],
   workflows: ['Agents & workflows', 'How Vigil works a case. Workflows are the plays, agents do the work, skills are what agents know how to do, and tool permissions decide what they may change on their own.'],
+  policies: ['Compiled Policies', 'Deterministic policies compiled from proven workflow outcomes. They triage matching findings without a model call, under the same approvals and audit as everything else.'],
   autoops: ['Auto Ops', 'Autonomous operations — master orchestrator and sub-agent investigations'],
   health: ['Health', 'Operational health — LLM spend, approvals waiting, recent workflow runs, probe scores'],
   settings: ['Settings', 'Configure Vigil — AI, integrations, users and platform'],
