@@ -357,7 +357,7 @@ CLOUDFLARE_ACCOUNT_ID="..."   # required for Zero Trust + Access actions
 CLOUDFLARE_ZONE_ID="..."      # optional default zone for WAF rules
 ```
 
-All write actions route through `services/approval_service.py`; the auto-
+All write actions route through `core/response/approval_service.py`; the auto-
 responder agent only auto-approves at confidence ≥ 0.90, otherwise an analyst
 must approve in the Approvals UI before the daemon executes the call.
 
@@ -488,8 +488,8 @@ UI: **Settings → Integrations → CloudCurrent VStrike**.
 
 VStrike enrichment lives at `finding.entity_context["vstrike"]` (JSONB —
 no DB migration required). Shape is defined by
-`core/integrations/vstrike/schemas.py::VStrikeEnrichment` and mirrored by
-`clients/web/src/types/vstrike.ts`.
+`core/integrations/vstrike/schemas.py::VStrikeEnrichment` and mirrored in
+the generated API types (`clients/web/src/services/generated/schema.d.ts`).
 
 The ingest handler does read-modify-write on `entity_context` so existing
 keys (`src_ip`, `hostname`, etc.) are never clobbered.
@@ -546,15 +546,15 @@ curl -X POST http://localhost:6987/api/integrations/vstrike/findings \
 
 ### Visualization
 
-- **Finding detail**: `NetworkContextPanel` renders the VStrike sub-dict
-  (criticality, segment, mission system, blast radius, attack-path
-  breadcrumb, clickable adjacent-asset chips).
-- **Entity graph**: nodes are tinted by segment when VStrike metadata is
-  present; the first MITRE technique on a link is rendered as an edge
-  label (always on highlighted links, and at zoom > 2.0 otherwise).
-- **Pivot**: clicking an adjacent-asset chip dispatches
-  `vstrike-graph-highlight` — `pages/Investigation.tsx` listens for this
-  event and feeds the node id into `EntityGraph.highlightedNodes`.
+The console no longer embeds VStrike UI panels. The old `NetworkContextPanel`
+host was deliberately not ported under the console shell (see the note at the
+top of `clients/web/src/screens/dashboard/FindingPopup.tsx`), and the entity
+graph tinting / `vstrike-graph-highlight` pivot listeners from the pre-console
+UI no longer exist in the web client. VStrike enrichment remains available on
+findings through the API (`entity_context["vstrike"]`, shape in
+`core/integrations/vstrike/schemas.py::VStrikeEnrichment`), and kill-chain
+replay is driven through the VStrike UI session via the MCP tool — see
+[the VStrike kill-chain page](../integrations/vstrike-killchain.md).
 
 ### Testing
 

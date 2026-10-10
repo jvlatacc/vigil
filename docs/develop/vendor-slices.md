@@ -71,4 +71,4 @@ respx-mocked round trips.
 1. Add the slice directory with a `descriptor.py`, then `tool.py` following the
    table above.
 2. Add its entry to `mcp-config.json`.
-3. Document it in `docs/INTEGRATIONS.md` and in the list above.
+3. Document it in [docs/product/integrations.md](../product/integrations.md) (and add a page under `docs/integrations/` if it deserves one) and in the list above.

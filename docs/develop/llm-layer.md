@@ -25,9 +25,12 @@ router and every harness need it.
 ## Rules
 
 1. `router/` must not import `harness/`. The dependency runs one way.
-2. Nothing under `core/llm/` imports `backend` or `daemon` at module scope.
-   Lazy in-function imports of those are the sanctioned escape hatch. One
-   module-scope import is grandfathered by name in the ratchet — `harness/
-   claude.py` reading `backend.schemas.tool_schemas` — and belongs to #414.
-3. `providers/registry.py` and `bifrost/admin.py` import each other lazily, by
-   design. Do not hoist either import to module scope — it is a real cycle.
+2. Nothing under `core/` (including `core/llm/`) imports the deployables —
+   enforced by the import-linter contracts in `.importlinter` ("core is a
+   library: it must not import the deployables"), not just by convention.
+   (An earlier version of this page described a grandfathered module-scope
+   `backend.schemas.tool_schemas` import in `harness/claude.py`; that import
+   no longer exists at current HEAD.)
+3. `core/llm/providers/registry.py` and `core/llm/bifrost/admin.py` import
+   each other lazily, by design. Do not hoist either import to module scope —
+   it is a real cycle.

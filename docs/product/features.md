@@ -44,7 +44,7 @@ One-page risk posture report designed for boards and CEOs. Triggered by saying "
 
 The board brief uses non-technical language throughout — no CVE numbers or ATT&CK IDs in the main body. All metrics are pulled from actual findings and case data.
 
-The template is customizable at `docs/templates/board-brief.md`. Output is markdown in chat, with optional PDF export via the existing report pipeline.
+Output is markdown in chat, with optional PDF export via the existing report pipeline. (The upstream version of this page pointed at a customizable `docs/templates/board-brief.md` template; no such file exists in the repo.)
 
 **Quick commands:**
 - "Generate board brief"

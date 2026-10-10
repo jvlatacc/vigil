@@ -9,7 +9,7 @@ As of GH #84 PR-B, there is a single routing path:
 - **Anthropic traffic** (including extended-thinking calls) hits Bifrost's Anthropic-compatible passthrough at `{BIFROST_URL}/anthropic` using the regular Anthropic SDK with a swapped `base_url`. This preserves extended thinking, `cache_control` blocks, and cache-token usage counters.
 - **OpenAI / Ollama / other providers** hit Bifrost's `/v1` OpenAI-format surface.
 
-The single source of truth for Anthropic client construction is `core/llm/providers/clients.py` — every `Anthropic(...)` / `AsyncAnthropic(...)` call site in the repo goes through `create_anthropic_client` / `create_async_anthropic_client`, which point at Bifrost. The lone exception is `backend/api/llm_providers.py`, which validates user-supplied API keys against the upstream provider and therefore deliberately bypasses the gateway.
+The single source of truth for Anthropic client construction is `core/llm/providers/clients.py` — every `Anthropic(...)` / `AsyncAnthropic(...)` call site in the repo goes through `create_anthropic_client` / `create_async_anthropic_client`, which point at Bifrost. The lone exception is `services/api/routers/llm_providers.py`, which validates user-supplied API keys against the upstream provider and therefore deliberately bypasses the gateway.
 
 The routing decision lives in `core/llm/router/router.py`. There is no direct-SDK bypass — if Bifrost is unhealthy, LLM traffic fails loudly rather than silently taking a second path.
 
@@ -44,20 +44,20 @@ Health check: `curl http://localhost:8080/health`.
 
 ## Configuration
 
-`docker/bifrost/config.json` declares the providers, the models Bifrost will expose, and the cache backend. API keys are **not** written into the config file — they are injected as environment variables at container start time (`env.ANTHROPIC_API_KEY`, `env.OPENAI_API_KEY`, `env.OLLAMA_URL`). Vigil's backend reads per-provider keys from its own `secrets_manager`; what's in Bifrost's env are the fallback/default keys used when a provider row in `llm_provider_configs` doesn't override them.
+`infra/docker/bifrost/config.json` declares the providers, the models Bifrost will expose, and the cache backend. API keys are **not** written into the config file — they are injected as environment variables at container start time (`env.ANTHROPIC_API_KEY`, `env.OPENAI_API_KEY`, `env.OLLAMA_URL`). Vigil's backend reads per-provider keys from its own `secrets_manager`; what's in Bifrost's env are the fallback/default keys used when a provider row in `llm_provider_configs` doesn't override them.
 
 ### Model allow-list: runtime sync, not the config file
 
-The `models` array under each `providers.<name>.keys[0]` in `config.json` is a **cold-boot bootstrap list only**. The backend runs `sync_all_provider_models()` ([core/llm/bifrost/admin.py](https://github.com/Vigil-SOC/vigil/blob/main/infra/core/llm/bifrost/admin.py)) which:
+The `models` array under each `providers.<name>.keys[0]` in `config.json` is a **cold-boot bootstrap list only**. The backend runs `sync_all_provider_models()` ([core/llm/bifrost/admin.py](../../core/llm/bifrost/admin.py)) which:
 
-1. Queries each upstream provider's live catalog (Anthropic `/v1/models`, OpenAI `/v1/models`, Ollama `/api/tags`) via [core/llm/providers/discovery.py](https://github.com/Vigil-SOC/vigil/blob/main/infra/core/llm/providers/discovery.py).
-2. Writes the per-row list into the backend's dropdown cache (`_MODEL_LIST_CACHE` in [core/llm/providers/registry.py](https://github.com/Vigil-SOC/vigil/blob/main/infra/core/llm/providers/registry.py)).
+1. Queries each upstream provider's live catalog (Anthropic `/v1/models`, OpenAI `/v1/models`, Ollama `/api/tags`) via [core/llm/providers/discovery.py](../../core/llm/providers/discovery.py).
+2. Writes the per-row list into the backend's dropdown cache (`_MODEL_LIST_CACHE` in [core/llm/providers/registry.py](../../core/llm/providers/registry.py)).
 3. Unions the model IDs across all active providers of the same type and PUTs that union to Bifrost's admin API (`PUT /api/providers/{name}` with `keys[0].models` updated).
 
 **Single source of truth.** `sync_all_provider_models()` is the only writer to both caches — the UI dropdown and Bifrost's allow-list come from the same call over the same upstream fetch, so they cannot drift. `fetch_provider_models()` on the read path is a pure cache lookup that falls back to a lazy sync on a cold-start miss.
 
 **When it runs:**
-- At backend startup — launched as a background task ([services/api/main.py](https://github.com/Vigil-SOC/vigil/blob/main/infra/services/api/main.py) startup handler).
+- At backend startup — launched as a background task ([services/api/main.py](../../services/api/main.py) startup handler).
 - **Periodically** — `MODEL_CATALOG_REFRESH_INTERVAL_S` (default 300s / 5min). Set to `0` to disable the loop and only sync once at startup.
 - On demand — `POST /api/llm-providers/refresh-models` (all) or `POST /api/llm-providers/{id}/refresh-models` (one).
 - Whenever a provider is added, updated, or deleted via the Providers UI — CRUD handlers invalidate the cache and schedule a background resync.
@@ -93,7 +93,7 @@ re-seed with `docker compose up -d --force-recreate bifrost`.
 
 Some upstream providers drop older model IDs from their `/v1/models` listing even when those IDs are still callable (Anthropic did this with the Claude 3.x family). To surface those in the UI and let Bifrost route traffic for them, the backend unions a configurable "extras" set into both the dropdown and Bifrost's allow-list. Extras are flagged `deprecated=True` in the API response so the UI can badge them.
 
-The defaults live in [core/llm/providers/registry.py](https://github.com/Vigil-SOC/vigil/blob/main/infra/core/llm/providers/registry.py) (`_DEFAULT_EXTRA_MODELS`) and currently cover Claude 3.5 Haiku, 3.5 Sonnet v2, and 3 Haiku. Override per deployment via env:
+The defaults live in [core/llm/providers/registry.py](../../core/llm/providers/registry.py) (`_DEFAULT_EXTRA_MODELS`) and currently cover Claude 3.5 Haiku, 3.5 Sonnet v2, and 3 Haiku. Override per deployment via env:
 
 - `ANTHROPIC_EXTRA_MODELS="id1,id2,..."` — replaces the default list.
 - `ANTHROPIC_EXTRA_MODELS=""` — disables extras for Anthropic entirely.
@@ -102,7 +102,7 @@ The defaults live in [core/llm/providers/registry.py](https://github.com/Vigil-S
 ### Logging — authoritative cost source (#185)
 
 Bifrost's logging plugin is the source of truth for per-call cost. The
-config at `docker/bifrost/config.json` enables it explicitly with a
+config at `infra/docker/bifrost/config.json` enables it explicitly with a
 local SQLite store (`./logs.db` inside the Bifrost container). Vigil's
 `/api/analytics/cost` time-series proxies Bifrost's
 `/api/logs/histogram/cost` endpoint; on a provider repricing, an admin
@@ -156,9 +156,17 @@ Vigil benefits from two independent caching layers. They're **complementary**, n
 | Anthropic native prompt caching (GH #84 PR-C) | Request prefix (system prompt + tool schemas) | Most calls within a session | ~90% on cached input tokens | Anthropic |
 | Bifrost semantic cache (optional) | Full responses, keyed on embedding similarity | Only semantically similar retries | 100% on hit | Bifrost + Redis vector store |
 
-**Anthropic prefix caching** is turned on by default (`ANTHROPIC_PROMPT_CACHE_ENABLED=true`, kill-switch in Settings → AI Config → AI Operations). The `cache_control` markers are added in `core/llm/harness/claude.py:_apply_prompt_cache_controls` and preserved by Bifrost's `/anthropic` passthrough — verified by `scripts/bifrost_capability_probe.py`.
+**Anthropic prefix caching** is on by default: the Anthropic-native
+`cache_control` blocks survive the Bifrost `/anthropic` passthrough —
+client construction in `core/llm/providers/clients.py`, and the router
+passes extended thinking and `cache_control` through untouched
+(`core/llm/router/router.py`). The passthrough behavior is verified by
+`scripts/bifrost_capability_probe.py`. (Upstream versions of this page
+described an `ANTHROPIC_PROMPT_CACHE_ENABLED` kill-switch and a
+`_apply_prompt_cache_controls` helper in the harness; neither exists at
+current HEAD.)
 
-**Bifrost's semantic cache** is opt-in and configured through the Bifrost UI at http://localhost:8080 (not via `docker/bifrost/config.json` — v1.4.23 rejects a top-level `cache` block). Enabling it requires:
+**Bifrost's semantic cache** is opt-in and configured through the Bifrost UI at http://localhost:8080 (not via `infra/docker/bifrost/config.json` — v1.4.23 rejects a top-level `cache` block). Enabling it requires:
 
 1. A vector store (Redis recommended — reuse the existing Redis, a separate DB number)
 2. An embedding provider (OpenAI `text-embedding-3-small` or a local Ollama model)

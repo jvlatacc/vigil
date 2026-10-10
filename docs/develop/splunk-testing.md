@@ -469,7 +469,7 @@ After successful testing:
 
 For issues or questions:
 - Check logs: `logs/backend.log`, `logs/daemon.log`
-- Review documentation: `docs/INTEGRATIONS.md`, `docs/API.md`
+- Review documentation: [docs/product/integrations.md](../product/integrations.md), [docs/product/api.md](../product/api.md)
 - Open an issue on GitHub
 
 ---
