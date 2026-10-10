@@ -37,6 +37,8 @@ export interface TwinProcess {
   name: string
   user?: string | null
   command?: string | null
+  /** Where the observation came from: "seed", "darktrace", "medic", … */
+  source: string
   first_seen: string
   last_seen: string
 }
