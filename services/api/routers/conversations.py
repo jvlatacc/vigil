@@ -16,6 +16,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from core.auth.permissions import permission_gate
 from core.chat import conversation_service
 from core.routing import Auth, RouterMeta
 from core.storage.models import User
@@ -23,7 +24,10 @@ from services.api.middleware.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# Conversation history is the chat surface's own per-user data, and every
+# handler already scopes to the signed-in user. The gate keeps the roles that
+# hold no ai_chat.use out of a store they can never create anything in.
+router = APIRouter(dependencies=[permission_gate("ai_chat.use")])
 
 ROUTER_META = RouterMeta(
     prefix="/api/conversations",

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from core.auth.auth_service import AuthService, union_permission_maps
 from core.auth.password_validator import PasswordPolicyError, validate_password_strength
+from core.auth.permissions import permission_gate
 from core.auth.token_blacklist import revoke_all_for_user
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
 from core.storage.models import Role, RoleAssignment, User
@@ -85,7 +86,7 @@ def _can_assign_roles(current_user: User, roles: List[Role], session: Session) -
     return True
 
 
-@router.get("/")
+@router.get("/", dependencies=[permission_gate("users.read")])
 def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
@@ -111,13 +112,6 @@ def list_users(
     Returns:
         List of users
     """
-    # Check permission
-    if not AuthService.check_permission(current_user.user_id, "users.read"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.read required",
-        )
-
     try:
         query = session.query(User)
 
@@ -174,7 +168,9 @@ def get_user(
     Returns:
         User information
     """
-    # Check permission (or allow users to view their own profile)
+    # Viewing another user's record asks users.read, but a profile stays
+    # viewable to itself — a conditional a static route gate cannot express,
+    # so this one check stays in the handler.
     if user_id != current_user.user_id:
         if not AuthService.check_permission(current_user.user_id, "users.read"):
             raise HTTPException(
@@ -201,7 +197,11 @@ def get_user(
     return user_dict
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[permission_gate("users.write")],
+)
 def create_user(
     request: CreateUserRequest,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -218,12 +218,8 @@ def create_user(
     Returns:
         Created user information
     """
-    # Check permission
-    if not AuthService.check_permission(current_user.user_id, "users.write"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.write required",
-        )
+    # _can_assign_role below is the escalation guard — a different question
+    # from the route's users.write, which the gate already answered.
 
     # Validate password against the full strength policy. Penalize passwords
     # built from the new account's own identifiers.
@@ -275,12 +271,6 @@ def _apply_user_update(
     session: Session, current_user: User, user_id: str, request: UpdateUserRequest
 ) -> tuple[User, bool, dict]:
     """Sync half of update_user. Returns the user, whether its email changed, and the payload."""
-    if not AuthService.check_permission(current_user.user_id, "users.write"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.write required",
-        )
-
     user = session.query(User).filter(User.user_id == user_id).first()
     if not user:
         raise HTTPException(
@@ -351,7 +341,7 @@ def _apply_user_update(
     return user, email_changed, UserSchema.dump(user)
 
 
-@router.put("/{user_id}")
+@router.put("/{user_id}", dependencies=[permission_gate("users.write")])
 async def update_user(
     user_id: str,
     request: UpdateUserRequest,
@@ -398,7 +388,7 @@ async def update_user(
         )
 
 
-@router.delete("/{user_id}")
+@router.delete("/{user_id}", dependencies=[permission_gate("users.delete")])
 def delete_user(
     user_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -415,13 +405,6 @@ def delete_user(
     Returns:
         Success message
     """
-    # Check permission
-    if not AuthService.check_permission(current_user.user_id, "users.delete"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.delete required",
-        )
-
     # Prevent self-deletion
     if user_id == current_user.user_id:
         raise HTTPException(
@@ -455,12 +438,6 @@ def _apply_role_change(
     session: Session, current_user: User, user_id: str, role_id: str
 ) -> tuple[User, str, dict]:
     """Sync half of change_user_role. Returns the user, its previous role id, and the payload."""
-    if not AuthService.check_permission(current_user.user_id, "users.write"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.write required",
-        )
-
     user = session.query(User).filter(User.user_id == user_id).first()
     if not user:
         raise HTTPException(
@@ -488,7 +465,7 @@ def _apply_role_change(
     return user, old_role_id, UserSchema.dump(user)
 
 
-@router.put("/{user_id}/role")
+@router.put("/{user_id}/role", dependencies=[permission_gate("users.write")])
 async def change_user_role(
     user_id: str,
     request: ChangeUserRoleRequest,
@@ -636,7 +613,7 @@ def list_user_roles(
     return _user_roles_payload(session, user)
 
 
-@router.put("/{user_id}/roles")
+@router.put("/{user_id}/roles", dependencies=[permission_gate("users.write")])
 async def set_user_roles(
     user_id: str,
     request: SetUserRolesRequest,
@@ -651,12 +628,6 @@ async def set_user_roles(
     tokens are revoked the way a primary-role change revokes them.
     """
     try:
-        if not AuthService.check_permission(current_user.user_id, "users.write"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Permission denied: users.write required",
-            )
-
         user, payload = await asyncio.to_thread(
             _apply_role_assignments, session, current_user, user_id, request.role_ids
         )
@@ -689,7 +660,7 @@ async def set_user_roles(
         )
 
 
-@router.get("/roles/list")
+@router.get("/roles/list", dependencies=[permission_gate("users.read")])
 def list_roles(
     current_user: Annotated[User, Depends(get_current_user)],
     session: UnitOfWorkSession,
@@ -704,11 +675,6 @@ def list_roles(
     Returns:
         List of roles
     """
-    if not AuthService.check_permission(current_user.user_id, "users.read"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: users.read required",
-        )
     try:
         roles = session.query(Role).all()
         return {"roles": RoleSchema.dump_many(roles)}

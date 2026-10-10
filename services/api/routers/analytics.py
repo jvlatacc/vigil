@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from core.auth.permissions import permission_gate
 from core.llm.cost.pricing_router import GATEWAY, priced_as
 from core.llm.providers.registry import get_registry
 from core.reporting.ai_insights_service import AIInsightsService
@@ -46,7 +47,14 @@ ROUTER_META = RouterMeta(
 ai_insights_service = AIInsightsService()
 
 
-@router.get("/analytics")
+# Route permissions follow each route's effect: aggregates over findings and
+# cases ask findings.read; LLM cost data is operator material behind
+# settings.read; anything that spends tokens (estimate preview, insight
+# regeneration) asks ai_chat.use; rewriting recorded costs is an admin
+# operation behind settings.write, like the budget route beside it.
+
+
+@router.get("/analytics", dependencies=[permission_gate("findings.read")])
 async def get_analytics(
     time_range: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     *,
@@ -109,7 +117,7 @@ async def get_analytics(
     }
 
 
-@router.get("/analytics/insights")
+@router.get("/analytics/insights", dependencies=[permission_gate("findings.read")])
 async def get_analytics_insights(
     time_range: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     *,
@@ -146,7 +154,9 @@ async def get_analytics_insights(
     return cached
 
 
-@router.post("/analytics/insights/refresh")
+@router.post(
+    "/analytics/insights/refresh", dependencies=[permission_gate("ai_chat.use")]
+)
 async def refresh_analytics_insights(
     time_range: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     *,
@@ -184,7 +194,7 @@ async def refresh_analytics_insights(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/analytics/cost")
+@router.get("/analytics/cost", dependencies=[permission_gate("settings.read")])
 async def get_cost_analytics(
     time_range: str = Query("7d", pattern="^(24h|7d|30d|all)$"),
     *,
@@ -236,7 +246,7 @@ class EstimateCostRequest(BaseModel):
     max_tokens: int = Field(default=4096, ge=1, le=200_000)
 
 
-@router.post("/analytics/estimate-cost")
+@router.post("/analytics/estimate-cost", dependencies=[permission_gate("ai_chat.use")])
 async def estimate_cost_endpoint(payload: EstimateCostRequest) -> Dict[str, Any]:
     """Return a USD low/high band for a hypothetical LLM call.
 
@@ -299,7 +309,9 @@ class RecalculateCostRequest(BaseModel):
     limit: int = Field(default=200, ge=1, le=1000)
 
 
-@router.post("/analytics/recalculate-cost")
+@router.post(
+    "/analytics/recalculate-cost", dependencies=[permission_gate("settings.write")]
+)
 async def recalculate_cost_endpoint(
     payload: Optional[RecalculateCostRequest] = None,
 ) -> Dict[str, Any]:

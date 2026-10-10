@@ -72,6 +72,96 @@ GATED_ROUTES = [
     ),
     ("POST", "/api/workflows/w-1/execute", {}, "ai_chat.use"),
     ("POST", "/api/claude/chat/stream", {"messages": []}, "ai_chat.use"),
+    # --- Route-coverage sweep: the eight formerly authn-only routers --------
+    # conversations — chat-surface data, ai_chat.use end to end.
+    ("GET", "/api/conversations/", None, "ai_chat.use"),
+    ("PATCH", "/api/conversations/{conversation_id}", {"title": "t"}, "ai_chat.use"),
+    ("DELETE", "/api/conversations/{conversation_id}", None, "ai_chat.use"),
+    ("POST", "/api/conversations/import", None, "ai_chat.use"),
+    # detection rules — detections.read on reads, detections.write on writes.
+    ("GET", "/api/detection-rules/sources", None, "detections.read"),
+    ("GET", "/api/detection-rules/sources/{source_id}", None, "detections.read"),
+    ("GET", "/api/detection-rules/stats", None, "detections.read"),
+    ("GET", "/api/detection-rules/mcp-env", None, "detections.read"),
+    ("POST", "/api/detection-rules/sources", {}, "detections.write"),
+    ("DELETE", "/api/detection-rules/sources/{source_id}", None, "detections.write"),
+    (
+        "POST",
+        "/api/detection-rules/sources/{source_id}/update",
+        None,
+        "detections.write",
+    ),
+    ("POST", "/api/detection-rules/update-all", None, "detections.write"),
+    ("POST", "/api/detection-rules/reload", None, "detections.write"),
+    # agents — the chat cast: reads ask ai_chat.use, the global toggle
+    # (which changes what every chat offers) asks settings.write.
+    ("GET", "/api/agents/agents", None, "ai_chat.use"),
+    ("GET", "/api/agents/agents/{agent_id}", None, "ai_chat.use"),
+    (
+        "PUT",
+        "/api/agents/agents/{agent_id}/enabled",
+        {"enabled": False},
+        "settings.write",
+    ),
+    # overview / triage / timeline — findings surfaces, findings.read.
+    ("GET", "/api/overview", None, "findings.read"),
+    ("GET", "/api/overview/alerts/{finding_id}", None, "findings.read"),
+    ("GET", "/api/triage", None, "findings.read"),
+    ("GET", "/api/timeline/range", None, "findings.read"),
+    ("GET", "/api/timeline/case/{case_id}", None, "findings.read"),
+    ("GET", "/api/timeline/finding/{finding_id}/context", None, "findings.read"),
+    ("GET", "/api/timeline/cluster/{cluster_id}", None, "findings.read"),
+    # analytics — each route asks the permission its effect implies.
+    ("GET", "/api/analytics", None, "findings.read"),
+    ("GET", "/api/analytics/insights", None, "findings.read"),
+    ("POST", "/api/analytics/insights/refresh", None, "ai_chat.use"),
+    ("GET", "/api/analytics/cost", None, "settings.read"),
+    ("POST", "/api/analytics/estimate-cost", {}, "ai_chat.use"),
+    ("POST", "/api/analytics/recalculate-cost", None, "settings.write"),
+    # ingestion — findings.read for the job pipeline, findings.write for
+    # actions that create findings; the S3 picker rides with the writes.
+    ("GET", "/api/ingest/jobs", None, "findings.read"),
+    ("GET", "/api/ingest/jobs/{job_id}", None, "findings.read"),
+    ("GET", "/api/ingest/formats", None, "findings.read"),
+    ("GET", "/api/ingest/csv-template/{data_type}", None, "findings.read"),
+    ("POST", "/api/ingest/upload", None, "findings.write"),
+    ("POST", "/api/ingest/ingest-string", None, "findings.write"),
+    ("POST", "/api/ingest/sync-s3-folder", None, "findings.write"),
+    ("GET", "/api/ingest/s3-files", None, "findings.write"),
+    ("POST", "/api/ingest/s3-file", {"key": "k"}, "findings.write"),
+    # users — inline handler checks migrated to declarative gates (the
+    # self-profile view on GET /{user_id} keeps its conditional handler check:
+    # a profile is always viewable to itself, and being in-handler it cannot
+    # appear here as a static row).
+    ("GET", "/api/users/", None, "users.read"),
+    ("POST", "/api/users/", {}, "users.write"),
+    ("PUT", "/api/users/{user_id}", {}, "users.write"),
+    ("DELETE", "/api/users/{user_id}", None, "users.delete"),
+    ("PUT", "/api/users/{user_id}/role", {"role_id": "role-viewer"}, "users.write"),
+    ("PUT", "/api/users/{user_id}/roles", {"role_ids": ["role-viewer"]}, "users.write"),
+    ("GET", "/api/users/roles/list", None, "users.read"),
+    # llm providers — writes behind settings.write; reads stay open, like the
+    # config router's documented reads-open posture.
+    ("POST", "/api/llm/providers", {}, "settings.write"),
+    ("PUT", "/api/llm/providers/{provider_id}", {}, "settings.write"),
+    ("DELETE", "/api/llm/providers/{provider_id}", None, "settings.write"),
+    ("POST", "/api/llm/providers/{provider_id}/set-default", None, "settings.write"),
+    ("POST", "/api/llm/providers/{provider_id}/test", None, "settings.write"),
+    ("POST", "/api/llm/providers/discover-models", {}, "settings.write"),
+    ("POST", "/api/llm/providers/test-connection", {}, "settings.write"),
+    (
+        "POST",
+        "/api/llm/providers/{provider_id}/refresh-models",
+        None,
+        "settings.write",
+    ),
+    ("POST", "/api/llm/providers/refresh-models", None, "settings.write"),
+    # bifrost — the whole router sits behind settings.write.
+    ("GET", "/api/bifrost/routability", None, "settings.write"),
+    ("POST", "/api/bifrost/status", None, "settings.write"),
+    # jira export — cases.read, the right the case routes themselves ask.
+    ("POST", "/api/cases/{case_id}/export/jira", {}, "cases.read"),
+    ("POST", "/api/cases/{case_id}/remediation/jira", {}, "cases.read"),
 ]
 
 
@@ -181,6 +271,59 @@ def _write_routes_without_a_guard() -> set[str]:
     for route in app.routes:
         visit(route)
     return found
+
+
+# --- The swept routers: every route asks for a permission -------------------
+
+SWEPT_ROUTERS = (
+    "conversations",
+    "detection_rules",
+    "agents",
+    "overview",
+    "triage",
+    "timeline",
+    "analytics",
+    "ingestion",
+)
+
+
+def _has_permission_gate(dependencies) -> bool:
+    """True if any dependency is a ``permission_gate`` — accepts both the
+    ``Depends`` objects routers and routes carry (``.dependency``) and the
+    resolved ``Dependant`` objects the route tree carries (``.call``)."""
+    for dep in dependencies:
+        fn = getattr(dep, "dependency", None) or getattr(dep, "call", None)
+        if getattr(fn, "__qualname__", "").startswith("require_permission."):
+            return True
+    return False
+
+
+def test_every_route_on_the_swept_routers_declares_a_permission():
+    """Route-coverage sweep ratchet: no route on the eight routers this
+    refactor swept may exist without a permission gate — a router-level gate
+    covers every route on it, and a router listed here without one fails.
+
+    A new route on a gated router inherits the gate automatically; a new
+    router that wants to stay authn-only must simply not be listed here.
+    """
+    import importlib
+
+    ungated = []
+    for name in SWEPT_ROUTERS:
+        module = importlib.import_module(f"services.api.routers.{name}")
+        router = module.router
+        router_gated = _has_permission_gate(router.dependencies)
+        if router_gated:
+            continue
+        for route in router.routes:
+            if not _has_permission_gate(getattr(route, "dependencies", [])):
+                methods = sorted(getattr(route, "methods", ()) or ())
+                ungated.append(f"{name}: {'/'.join(methods)} {route.path}")
+
+    assert ungated == [], (
+        "Routers swept by the route-coverage work must gate every route "
+        "(router-level or per-route):\n  - " + "\n  - ".join(ungated)
+    )
 
 
 def test_a_write_route_without_a_permission_guard_is_on_the_reviewed_list():

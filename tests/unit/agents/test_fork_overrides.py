@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from core.storage.models import Base, ConfigAuditLog, CustomAgent
-from services.api.middleware.auth import get_current_active_user
+from services.api.middleware.auth import get_current_active_user, get_current_user
 from services.api.routers import agents as agents_router
 from services.api.routers import custom_agents
 
@@ -60,12 +60,18 @@ def db(monkeypatch):
 
 
 @pytest.fixture
-def client(db):
+def client(db, monkeypatch):
     app = FastAPI()
     app.include_router(custom_agents.router, prefix="/api")
     app.include_router(agents_router.router, prefix="/api")
     app.dependency_overrides[get_current_active_user] = lambda: SimpleNamespace(
         user_id="u-1"
+    )
+    # The agents-router reads now carry the ai_chat.use gate; answer it as a
+    # signed-in analyst would be answered without session auth.
+    app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id="u-1")
+    monkeypatch.setattr(
+        "core.auth.auth_service.AuthService.check_permission", lambda *_: True
     )
     return TestClient(app)
 

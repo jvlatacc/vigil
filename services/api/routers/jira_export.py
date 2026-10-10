@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from core.auth.auth_service import AuthService
+from core.auth.permissions import permission_gate
 from core.integrations._base.config import resolve
 from core.integrations.jira.descriptor import JIRA
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
@@ -73,7 +73,11 @@ def _export_failure(exc: Exception) -> JiraExportResponse:
     return JiraExportResponse(success=False, error=error)
 
 
-@router.post("/cases/{case_id}/export/jira", response_model=JiraExportResponse)
+@router.post(
+    "/cases/{case_id}/export/jira",
+    response_model=JiraExportResponse,
+    dependencies=[permission_gate("cases.read")],
+)
 def export_case_to_jira(
     case_id: str,
     request: JiraExportRequest,
@@ -92,12 +96,6 @@ def export_case_to_jira(
     Returns:
         Export result with JIRA issue key
     """
-    # Check permission
-    if not AuthService.check_permission(current_user.user_id, "cases.read"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: cases.read required",
-        )
 
     # get_integration_config strips secrets, so the token is never in that dict.
     jira = resolve(JIRA)
@@ -244,7 +242,11 @@ def export_case_to_jira(
         return _export_failure(e)
 
 
-@router.post("/cases/{case_id}/remediation/jira", response_model=JiraExportResponse)
+@router.post(
+    "/cases/{case_id}/remediation/jira",
+    response_model=JiraExportResponse,
+    dependencies=[permission_gate("cases.read")],
+)
 def export_remediation_to_jira(
     case_id: str,
     request: JiraRemediationExportRequest,
@@ -263,12 +265,6 @@ def export_remediation_to_jira(
     Returns:
         Export result with created subtask keys
     """
-    # Check permission
-    if not AuthService.check_permission(current_user.user_id, "cases.read"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: cases.read required",
-        )
 
     # Same reader as case export: username plus the secret api_token.
     jira = resolve(JIRA)

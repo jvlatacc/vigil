@@ -15,6 +15,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from core.auth.permissions import permission_gate
 from core.llm.bifrost.admin import (
     fetch_catalogue_models,
     push_provider_key,
@@ -38,7 +39,7 @@ from core.secrets import delete_secret, get_secret, set_secret
 from core.storage.models import LLMProviderConfig, User
 from core.storage.schemas import LLMProviderConfigSchema
 from core.time import utcnow
-from services.api.middleware.auth import get_current_active_user, require_settings_admin
+from services.api.middleware.auth import get_current_active_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -177,14 +178,23 @@ async def list_providers(
     return [_to_response(r) for r in rows]
 
 
-@router.post("", response_model=LLMProviderResponse, status_code=201)
-@router.post("/", response_model=LLMProviderResponse, status_code=201)
+@router.post(
+    "",
+    response_model=LLMProviderResponse,
+    status_code=201,
+    dependencies=[permission_gate("settings.write")],
+)
+@router.post(
+    "/",
+    response_model=LLMProviderResponse,
+    status_code=201,
+    dependencies=[permission_gate("settings.write")],
+)
 async def create_provider(
     payload: LLMProviderCreate,
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    require_settings_admin(current_user)
     _validate_type(payload.provider_type)
     _validate_provider_base_url_shape(payload.base_url)
 
@@ -219,14 +229,17 @@ async def create_provider(
     return _to_response(row)
 
 
-@router.put("/{provider_id}", response_model=LLMProviderResponse)
+@router.put(
+    "/{provider_id}",
+    response_model=LLMProviderResponse,
+    dependencies=[permission_gate("settings.write")],
+)
 async def update_provider(
     provider_id: str,
     payload: LLMProviderUpdate,
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    require_settings_admin(current_user)
     _validate_provider_base_url_shape(payload.base_url)
     row = provider_service.get_provider(db, provider_id)
     if row is None:
@@ -285,13 +298,12 @@ async def update_provider(
     return _to_response(row)
 
 
-@router.delete("/{provider_id}")
+@router.delete("/{provider_id}", dependencies=[permission_gate("settings.write")])
 async def delete_provider(
     provider_id: str,
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    require_settings_admin(current_user)
     row = provider_service.get_provider(db, provider_id)
     if row is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -333,13 +345,16 @@ async def delete_provider(
     return {"success": True, "provider_id": provider_id}
 
 
-@router.post("/{provider_id}/set-default", response_model=LLMProviderResponse)
+@router.post(
+    "/{provider_id}/set-default",
+    response_model=LLMProviderResponse,
+    dependencies=[permission_gate("settings.write")],
+)
 async def set_default_provider(
     provider_id: str,
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    require_settings_admin(current_user)
     row = provider_service.set_default(db, provider_id)
     if row is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -478,13 +493,12 @@ async def _probe_provider_connection(
     return success, error
 
 
-@router.post("/{provider_id}/test")
+@router.post("/{provider_id}/test", dependencies=[permission_gate("settings.write")])
 async def test_provider(
     provider_id: str,
     db: UnitOfWorkSession,
     current_user: Annotated[User, Depends(get_current_active_user)],
 ):
-    require_settings_admin(current_user)
     row = provider_service.get_provider(db, provider_id)
     if row is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -528,21 +542,20 @@ class TestConnectionRequest(BaseModel):
     organization: Optional[str] = None
 
 
-@router.post("/discover-models")
+@router.post("/discover-models", dependencies=[permission_gate("settings.write")])
 async def discover_models(
     req: DiscoverModelsRequest,
     current_user: User = Depends(get_current_active_user),
 ):
     """Pre-save model discovery for the Add Provider dialog.
 
-    Admin-only because it makes an outbound HTTP request whose target
-    is influenced by the request body (``base_url``). The URL is run
+    settings.write-gated because it makes an outbound HTTP request whose
+    target is influenced by the request body (``base_url``). The URL is run
     through :func:`core.platform.url_safety.validate_provider_url` inside
-    each discovery helper, but we also require the caller to be an
-    authenticated admin so a stolen session is the only path to even
+    each discovery helper, but the route-level gate also requires the caller
+    to hold ``settings.write``, so a stolen session is the only path to even
     reach that validation.
     """
-    require_settings_admin(current_user)
 
     if req.provider_type not in VALID_PROVIDER_TYPES:
         raise HTTPException(
@@ -592,20 +605,19 @@ async def discover_models(
     return {"models": [m.id for m in meta]}
 
 
-@router.post("/test-connection")
+@router.post("/test-connection", dependencies=[permission_gate("settings.write")])
 async def test_connection(
     req: TestConnectionRequest,
     current_user: User = Depends(get_current_active_user),
 ):
     """Stateless pre-save connection test for the Add Provider wizard.
 
-    Admin-only and persists nothing: it probes the provider against the
-    credentials in the body. Same trust model as ``/discover-models`` — the
-    raw key is accepted in the body, but only an authenticated admin can
-    reach it. A static single-segment path, so it never collides with
+    settings.write-gated and persists nothing: it probes the provider against
+    the credentials in the body. Same trust model as ``/discover-models`` —
+    the raw key is accepted in the body, but only a ``settings.write`` holder
+    can reach it. A static single-segment path, so it never collides with
     ``/{provider_id}/test``.
     """
-    require_settings_admin(current_user)
     _validate_type(req.provider_type)
     success, error = await _probe_provider_connection(
         provider_type=req.provider_type,
@@ -634,7 +646,9 @@ async def list_models(
     return {"models": models}
 
 
-@router.post("/{provider_id}/refresh-models")
+@router.post(
+    "/{provider_id}/refresh-models", dependencies=[permission_gate("settings.write")]
+)
 async def refresh_provider_models(
     provider_id: str,
     db: UnitOfWorkSession,
@@ -644,7 +658,6 @@ async def refresh_provider_models(
     same-type providers' models to Bifrost's allow-list. Invalidates the
     registry's TTL cache so the next dropdown fetch sees fresh data.
     """
-    require_settings_admin(current_user)
     row = provider_service.get_provider(db, provider_id)
     if row is None:
         raise HTTPException(status_code=404, detail="provider not found")
@@ -663,7 +676,7 @@ async def refresh_provider_models(
     }
 
 
-@router.post("/refresh-models")
+@router.post("/refresh-models", dependencies=[permission_gate("settings.write")])
 async def refresh_all_provider_models(
     current_user: User = Depends(get_current_active_user),
 ):
@@ -671,7 +684,6 @@ async def refresh_all_provider_models(
     resulting allow-lists to Bifrost. Useful after enabling a new
     provider or rotating keys in bulk.
     """
-    require_settings_admin(current_user)
 
     invalidate_model_cache()
     sync_results = await sync_all_provider_models()
