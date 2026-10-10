@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VigilMap — memory context explorer</title>
+    <style>
+      /* Shell styles only; the 3D scene brings its own layer next PR. */
+      :root {
+        color-scheme: dark;
+        --bg: #0e1116;
+        --panel: #161b22;
+        --border: #2d333b;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --accent: #d29922;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      .vigilmap-shell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        padding: 1rem;
+        box-sizing: border-box;
+      }
+      .status-card,
+      .placeholder-panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.5rem 2rem;
+        max-width: 34rem;
+      }
+      .status-card h1,
+      .placeholder-panel h1 {
+        margin-top: 0;
+        font-size: 1.15rem;
+      }
+      .error-message {
+        color: #f85149;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .status-note {
+        color: var(--muted);
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      button {
+        background: var(--accent);
+        border: none;
+        border-radius: 6px;
+        color: #1b1b09;
+        font: inherit;
+        font-weight: 600;
+        padding: 0.4rem 0.9rem;
+        cursor: pointer;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 0.75rem 0;
+      }
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        padding: 0.25rem 1.25rem 0.25rem 0;
+        text-align: left;
+        font-weight: 400;
+      }
+      caption {
+        text-align: left;
+        color: var(--muted);
+        font-size: 0.8rem;
+        padding-bottom: 0.25rem;
+      }
+      code {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.05rem 0.3rem;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
