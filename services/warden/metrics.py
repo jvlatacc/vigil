@@ -78,6 +78,18 @@ class WardenMetrics:
             labelnames=("outcome",),  # deciding | advisory | unavailable
             registry=self._registry,
         )
+        self.reconcile_attempts = Counter(
+            "warden_reconcile_attempts_total",
+            "Journal reconcile pushes by outcome.",
+            labelnames=("outcome",),
+            registry=self._registry,
+        )
+        self.reconcile_records = Counter(
+            "warden_reconcile_records_total",
+            "Journal records by reconcile result.",
+            labelnames=("result",),
+            registry=self._registry,
+        )
         self.live_actions = Gauge(
             "warden_live_actions",
             "Live reversible actions currently enforced.",

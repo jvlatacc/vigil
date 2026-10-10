@@ -20,6 +20,8 @@ Every variable Warden reads:
 ``WARDEN_SYNC_TIMEOUT_SECONDS``   Per-attempt HTTP timeout (default 10).
 ``WARDEN_MISSED_SYNCS_THRESHOLD`` Consecutive misses that leave SYNCED (default 3).
 ``WARDEN_GRACE_WINDOW_SECONDS``   DEGRADED dwell time before AUTONOMOUS (default 900).
+``WARDEN_RECONCILE_INTERVAL_SECONDS``  Journal push cadence when connected (default 30).
+``WARDEN_RECONCILE_BATCH_SIZE``  Max journal records per reconcile push (default 100).
 ``WARDEN_SENTINEL_TOKEN``       Local webhook bearer; unset = receiver fail-closed.
 ``WARDEN_SENTINEL_PORT``        Local alert receiver (default 8091).
 ``WARDEN_HEALTH_PORT``          Health listener (default 9092).
@@ -76,6 +78,8 @@ class WardenConfig:
     sync_timeout_seconds: float = 10.0
     missed_syncs_threshold: int = 3
     grace_window_seconds: float = 900.0
+    reconcile_interval_seconds: float = 30.0
+    reconcile_batch_size: int = 100
     sentinel_token: str | None = None
     sentinel_port: int = 8091
     health_port: int = 9092
@@ -143,6 +147,10 @@ class WardenConfig:
             sync_timeout_seconds=get_float("WARDEN_SYNC_TIMEOUT_SECONDS", 10.0),
             missed_syncs_threshold=get_int("WARDEN_MISSED_SYNCS_THRESHOLD", 3),
             grace_window_seconds=get_float("WARDEN_GRACE_WINDOW_SECONDS", 900.0),
+            reconcile_interval_seconds=get_float(
+                "WARDEN_RECONCILE_INTERVAL_SECONDS", 30.0
+            ),
+            reconcile_batch_size=get_int("WARDEN_RECONCILE_BATCH_SIZE", 100),
             sentinel_token=get("WARDEN_SENTINEL_TOKEN"),
             sentinel_port=get_int("WARDEN_SENTINEL_PORT", 8091),
             health_port=get_int("WARDEN_HEALTH_PORT", 9092),
@@ -189,6 +197,10 @@ class WardenConfig:
             problems.append("WARDEN_MISSED_SYNCS_THRESHOLD must be at least 1")
         if self.grace_window_seconds < 0:
             problems.append("WARDEN_GRACE_WINDOW_SECONDS must not be negative")
+        if self.reconcile_interval_seconds <= 0:
+            problems.append("WARDEN_RECONCILE_INTERVAL_SECONDS must be positive")
+        if self.reconcile_batch_size < 1:
+            problems.append("WARDEN_RECONCILE_BATCH_SIZE must be at least 1")
         ports = {
             "WARDEN_SENTINEL_PORT": self.sentinel_port,
             "WARDEN_HEALTH_PORT": self.health_port,
