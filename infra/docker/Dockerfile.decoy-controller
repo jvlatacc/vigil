@@ -1,0 +1,52 @@
+# =============================================================================
+# Decoy-controller — reference enforcement service for honey-routing (feature 5)
+#
+# A separate trust domain from Vigil: token-authenticated, driver-based
+# steering (memory / nftables / cilium), never on the production routing
+# path. Runs:  python -m services.decoy_controller.main
+# Exposes port:  8484 (DECOY_CONTROLLER_PORT)
+#
+# The service has its OWN dependency set (services/decoy_controller/
+# requirements.txt) — deliberately not the shared requirements.lock, because
+# its kubernetes client must stay scoped to this service.
+# =============================================================================
+
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+LABEL org.opencontainers.image.title="vigil-decoy-controller"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      nftables \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -g 1000 vigil && useradd -u 1000 -g 1000 -d /home/vigil -m -s /sbin/nologin vigil
+
+WORKDIR /app
+
+COPY services/decoy_controller/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+COPY --chown=vigil:vigil services/decoy_controller/ ./services/decoy_controller/
+
+# Persistent nothing: the registry is intentionally in-memory (restarting
+# re-asserts from Vigil's lease sweep; see registry.py's docstring).
+RUN if [ -n "${VIGIL_VERSION}" ]; then echo "${VIGIL_VERSION}" > /app/VERSION; fi
+
+USER vigil
+
+ENV HOME=/home/vigil \
+    PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    DECOY_CONTROLLER_HOST=0.0.0.0 \
+    DECOY_CONTROLLER_PORT=8484
+
+EXPOSE 8484
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://localhost:8484/health || exit 1
+
+CMD ["python", "-m", "services.decoy_controller.main"]

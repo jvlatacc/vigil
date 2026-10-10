@@ -602,6 +602,7 @@ dbInit:
     - 37_workflow_runs_outcome.sql
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
+    - 40_deception_tables.sql
     - 40_edge_nodes.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
@@ -926,6 +927,21 @@ config:
   DAEMON_FORCE_APPROVAL: "false"
   DAEMON_ENFORCEMENT_FORCE_APPROVAL: "true"
   DAEMON_DRY_RUN: "false"
+  # Deception / honey-routing (feature 5) — inert until enabled.
+  DAEMON_DECEPTION_ENABLED: "false"
+  DAEMON_DECEPTION_BACKEND: "dry_run"
+  DAEMON_HONEY_ROUTE_FLOOR: "0.80"
+  DAEMON_HONEY_ROUTE_TTL: "3600"
+  DAEMON_HONEY_ROUTE_MAX_DURATION: "86400"
+  DAEMON_HONEY_ROUTE_MIN_OBSERVATIONS: "3"
+  DAEMON_HONEY_ROUTE_WINDOW: "3600"
+  DAEMON_DECEPTION_KILL_SWITCH: "false"
+  DAEMON_DECEPTION_ALLOWLIST: ""
+  # Decoy-controller integration fallbacks (feature 5): the daemon reads them
+  # when the decoy_controller integration has no Settings-store entry. Same
+  # values the decoy-controller service runs with.
+  DECOY_CONTROLLER_BASE_URL: ""
+  DECOY_CONTROLLER_API_TOKEN: ""
   # Honey-routing (the deceive band): default off — enabling it is a human
   # configuration act, and the floor is its own band, not the response one.
   DAEMON_MTD_ENABLED: "false"
@@ -1188,6 +1204,30 @@ pgadmin:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Decoy farm (feature 5, opt-in)
+# -----------------------------------------------------------------------------
+# The decoy lab ships as a docker-compose profile (`deception`); there are no
+# decoy templates in this chart. On Kubernetes, run the farm out-of-band and
+# point the telemetry shipper at the daemon webhook:
+#
+#   1. A namespace dedicated to decoys (e.g. vigil-decoys) with a
+#      default-deny NetworkPolicy for ingress AND egress — decoys are treated
+#      as already-compromised; egress deny is the containment invariant.
+#   2. Cowrie, OpenCanary (watching a Samba decoy share) and the fake-app
+#      decoy as Deployments in that namespace, with the same read-only-rootfs,
+#      cap-drop-ALL and resource-limit hardening the compose profile applies
+#      (infra/docker/docker-compose.yml, profile `deception`). The
+#      decoy-controller (compose service of the same name, or its own
+#      deployment) with driver=cilium programs steering into them via Local
+#      Redirect Policies.
+#   3. The telemetry shipper (services/decoy_farm/shipper.py) in the main
+#      namespace: DECOY_FARM_WEBHOOK_URL pointing at the daemon webhook
+#      service and DECOY_FARM_WEBHOOK_TOKEN equal to DAEMON_WEBHOOK_TOKEN.
+#
+# The daemon-side knobs above (DAEMON_DECEPTION_*) stay unchanged; the farm
+# is deployment plumbing, not a chart concern.
 
 # -----------------------------------------------------------------------------
 # Tests (helm test)

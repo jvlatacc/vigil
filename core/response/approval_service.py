@@ -77,9 +77,10 @@ class ActionType(Enum):
     WAF_BLOCK = "waf_block"  # Cloudflare WAF IP Access Rule
     GATEWAY_BLOCK = "gateway_block"  # Cloudflare Zero Trust Gateway DNS/HTTP rule
     ACCESS_REVOKE = "access_revoke"  # Cloudflare Zero Trust Access session revoke
-    # MTD: divert an attacker's flows into decoy services instead of answering
-    # from production. Reversible (unroute restores the path); enforced through
-    # a backend integration, so execution without one is an honest failure.
+    # MTD (feature 5): divert a recon source's flows into decoy services
+    # instead of answering from production. Reversible (unroute restores the
+    # path); enforced through a backend integration, so execution without one
+    # is an honest failure.
     HONEY_ROUTE = "honey_route"
     XDP_BLOCK_IP = "xdp_block_ip"  # Kernel XDP drop of a source IP (enforcement daemon)
     SOCKET_REDIRECT = "socket_redirect"  # Kernel sockmap redirect to the capture sink
@@ -328,7 +329,7 @@ class ApprovalService:
             or kernel_hold
         )
         requires_approval, rule = approval_requirement(
-            forced, reversibility, confidence, self.config
+            forced, reversibility, confidence, self.config, action_type=action_type
         )
         if human_only:
             rule = decision_rule("approval.human_only", True)

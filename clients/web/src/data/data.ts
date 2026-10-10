@@ -13,6 +13,7 @@ export type ConsoleScreenKey =
   | 'twin'
   | 'autoops'
   | 'health'
+  | 'deception'
   | 'settings'
 
 /** A nav item carrying a gate only renders when the gate is satisfied. */
@@ -37,6 +38,7 @@ export const NAV: [IconName, string, ConsoleScreenKey | null, NavGate?][] = [
   ['graph', 'Digital Twin', 'twin'],
   ['bot', 'Auto Ops', 'autoops'],
   ['chart', 'Health', 'health'],
+  ['shield', 'Deception', 'deception'],
   ['gear', 'Settings', 'settings'],
 ]
 
@@ -108,5 +110,6 @@ export const TITLES: Record<ConsoleScreenKey, [string, string]> = {
   twin: ['Digital Twin', 'Physical devices mapped to the processes and connections that run on them'],
   autoops: ['Auto Ops', 'Autonomous operations — master orchestrator and sub-agent investigations'],
   health: ['Health', 'Operational health — LLM spend, approvals waiting, recent workflow runs, probe scores'],
+  deception: ['Deception', 'Where suspicious sources are being steered — active leases, captured intel, and the kill switch'],
   settings: ['Settings', 'Configure Vigil — AI, integrations, users and platform'],
 }

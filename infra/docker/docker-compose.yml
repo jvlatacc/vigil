@@ -48,6 +48,17 @@ x-intent-env: &intent-env
   DAEMON_MONITOR_THRESHOLD: ${DAEMON_MONITOR_THRESHOLD:-0.70}
   DAEMON_CRITICAL_ACTION_FLOOR: ${DAEMON_CRITICAL_ACTION_FLOOR:-0.70}
   DAEMON_HIGH_ACTION_FLOOR: ${DAEMON_HIGH_ACTION_FLOOR:-0.80}
+  # Feature 5 - deception / honey-routing. Shipped defaults are inert:
+  # the posture is off and the backend is dry-run until both are set.
+  DAEMON_DECEPTION_ENABLED: ${DAEMON_DECEPTION_ENABLED:-false}
+  DAEMON_DECEPTION_BACKEND: ${DAEMON_DECEPTION_BACKEND:-dry_run}
+  DAEMON_HONEY_ROUTE_FLOOR: ${DAEMON_HONEY_ROUTE_FLOOR:-0.80}
+  DAEMON_HONEY_ROUTE_TTL: ${DAEMON_HONEY_ROUTE_TTL:-3600}
+  DAEMON_HONEY_ROUTE_MAX_DURATION: ${DAEMON_HONEY_ROUTE_MAX_DURATION:-86400}
+  DAEMON_HONEY_ROUTE_MIN_OBSERVATIONS: ${DAEMON_HONEY_ROUTE_MIN_OBSERVATIONS:-3}
+  DAEMON_HONEY_ROUTE_WINDOW: ${DAEMON_HONEY_ROUTE_WINDOW:-3600}
+  DAEMON_DECEPTION_KILL_SWITCH: ${DAEMON_DECEPTION_KILL_SWITCH:-false}
+  DAEMON_DECEPTION_ALLOWLIST: ${DAEMON_DECEPTION_ALLOWLIST:-}
   DAEMON_FORCE_APPROVAL: ${DAEMON_FORCE_APPROVAL:-false}
   DAEMON_MTD_ENABLED: ${DAEMON_MTD_ENABLED:-false}
   DAEMON_MTD_CONFIDENCE_FLOOR: ${DAEMON_MTD_CONFIDENCE_FLOOR:-0.60}
@@ -1048,6 +1059,222 @@ services:
     profiles:
       - misp
 
+  # Decoy controller — reference enforcement service for the honey-routing
+  # posture (feature 5). Vigil decides, leases, and audits; this service
+  # programs redirects and enforces their TTLs. It is never on the production
+  # routing path (fail-open) and ships inert: the default `memory` driver
+  # records what it would do and touches no traffic.
+  #
+  # Real single-host enforcement (nftables DNAT) needs kernel privileges and
+  # the host's routing view — replace `ports:`/`networks:` with
+  #   network_mode: host
+  #   cap_add: [NET_ADMIN]
+  # and set DECOY_CONTROLLER_DRIVER=nftables. On Kubernetes use the cilium
+  # driver instead. The decoy farm itself joins the `deception` profile
+  # separately and attaches only to decoy-net.
+  decoy-controller:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-controller
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: deeptempo-decoy-controller
+    environment:
+      # Empty token denies every steering request (auth is deny-by-default).
+      DECOY_CONTROLLER_TOKEN: ${DECOY_CONTROLLER_TOKEN:-}
+      DECOY_CONTROLLER_DRIVER: ${DECOY_CONTROLLER_DRIVER:-memory}
+      DECOY_CONTROLLER_PORT: "8484"
+      DECOY_CONTROLLER_SWEEP_INTERVAL: ${DECOY_CONTROLLER_SWEEP_INTERVAL:-30}
+      DECOY_CONTROLLER_MAX_TTL: ${DECOY_CONTROLLER_MAX_TTL:-86400}
+      DECOY_CONTROLLER_MAX_RULES: ${DECOY_CONTROLLER_MAX_RULES:-100}
+      DECOY_CONTROLLER_DECOY_IP: ${DECOY_CONTROLLER_DECOY_IP:-10.0.5.10}
+      # Farm endpoints by listen port (profile `deception`): per-port decoy
+      # routing — cowrie SSH/Telnet, samba SMB, the fake app (port 80 steered
+      # to its unprivileged 8080). Override when your farm differs.
+      DECOY_CONTROLLER_DECOY_MAP: ${DECOY_CONTROLLER_DECOY_MAP:-2222=10.0.5.11,2223=10.0.5.11,445=10.0.5.13,80=10.0.5.10:8080,8080=10.0.5.10:8080}
+      DECOY_CONTROLLER_PROTOCOLS: ${DECOY_CONTROLLER_PROTOCOLS:-tcp}
+      DECOY_CONTROLLER_BOOT_DRAIN: ${DECOY_CONTROLLER_BOOT_DRAIN:-true}
+    ports:
+      - "127.0.0.1:8484:8484"
+    restart: unless-stopped
+    networks:
+      # Control plane: the daemon programs it over deeptempo-network. The
+      # decoy-net membership is for the enforcement driver's view of the
+      # decoy plane, not for decoys to reach production.
+      - deeptempo-network
+      - decoy-net
+
+  # The decoy farm proper (feature 5): the lab honey-routing steers attackers
+  # into. Decoys attach to decoy-net ONLY (internal — no egress), are
+  # read-only-rootfs, capability-free, resource-capped, and hold no secrets;
+  # they are treated as already-compromised infrastructure. The farm ships no
+  # published ports: it is reachable only through the steering controller.
+  decoy-cowrie:
+    profiles:
+      - deception
+    # Upstream honeypot image, pinned by digest (cowrie/cowrie `latest`,
+    # pushed 2026-10-05). Deliberately NOT rebuilt from this repo: the decoy
+    # plane ships no Vigil code or credentials.
+    image: cowrie/cowrie@sha256:710f1e4601a663ac8591f58a42b44e4cd3b7ea170c7e6cdb9e54c430a30cd459
+    container_name: deeptempo-decoy-cowrie
+    hostname: websrv-01
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /cowrie/cowrie-git/var/log/cowrie
+      - /cowrie/cowrie-git/var/run
+      - /cowrie/cowrie-git/var/tmp
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+    volumes:
+      # Session logs land on the dedicated named volume; only the telemetry
+      # shipper reads them (read-only).
+      - decoy_logs_cowrie:/cowrie/cowrie-git/var/log/cowrie
+    networks:
+      decoy-net:
+        ipv4_address: 10.0.5.11
+
+  decoy-opencanary:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-opencanary
+      args:
+        VIGIL_VERSION: ${VIGIL_VERSION:-}
+    image: vigil-decoy-opencanary:${VIGIL_VERSION:-latest}
+    container_name: deeptempo-decoy-opencanary
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /tmp
+      - /var/run
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+    volumes:
+      # Alerts land on the shared farm volume for the shipper.
+      - decoy_logs:/decoy-logs
+    networks:
+      decoy-net:
+        ipv4_address: 10.0.5.12
+
+  decoy-samba:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-samba
+      args:
+        VIGIL_VERSION: ${VIGIL_VERSION:-}
+    image: vigil-decoy-samba:${VIGIL_VERSION:-latest}
+    container_name: deeptempo-decoy-samba
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/cache/samba
+      - /var/lib/samba
+      - /var/lock/samba
+      - /var/log/samba
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+    volumes:
+      # The audit feed rsyslog writes; OpenCanary tails it.
+      - decoy_logs:/decoy-logs
+    networks:
+      decoy-net:
+        ipv4_address: 10.0.5.13
+
+  decoy-http:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-farm
+      args:
+        VIGIL_VERSION: ${VIGIL_VERSION:-}
+    image: vigil-decoy-farm:${VIGIL_VERSION:-latest}
+    container_name: deeptempo-decoy-http
+    command: ["python", "-m", "services.decoy_farm.http_decoy"]
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+    volumes:
+      - decoy_logs:/decoy-logs
+    networks:
+      decoy-net:
+        ipv4_address: 10.0.5.10
+
+  decoy-shipper:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-farm
+      args:
+        VIGIL_VERSION: ${VIGIL_VERSION:-}
+    image: vigil-decoy-farm:${VIGIL_VERSION:-latest}
+    container_name: deeptempo-decoy-shipper
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 64
+    tmpfs:
+      - /tmp
+    environment:
+      # The shipper is the farm's one bridge to Vigil: it reads decoy logs
+      # read-only and posts findings to the daemon's generic ingest webhook.
+      # It has no decoy-net membership and no other credentials. When
+      # DAEMON_WEBHOOK_TOKEN is set on the daemon, set DECOY_FARM_WEBHOOK_TOKEN
+      # to the same value (e.g. in .env: DECOY_FARM_WEBHOOK_TOKEN=${DAEMON_WEBHOOK_TOKEN}).
+      DECOY_FARM_WEBHOOK_URL: ${DECOY_FARM_WEBHOOK_URL:-http://soc-daemon:8081/ingest}
+      DECOY_FARM_WEBHOOK_TOKEN: ${DECOY_FARM_WEBHOOK_TOKEN:-}
+      DECOY_FARM_POLL_INTERVAL: ${DECOY_FARM_POLL_INTERVAL:-5}
+      DECOY_FARM_FARM_ID: ${DECOY_FARM_FARM_ID:-decoy-farm}
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    restart: unless-stopped
+    volumes:
+      # All reads: decoy telemetry flows one way, into Vigil.
+      - decoy_logs:/decoy-logs:ro
+      - decoy_logs_cowrie:/cowrie-logs:ro
+    networks:
+      - deeptempo-network
+
 volumes:
   postgres_data:
     driver: local
@@ -1085,6 +1312,15 @@ volumes:
     driver: local
   misp_logs:
     driver: local
+  # Decoy telemetry (feature 5, profile `deception`): decoys write session
+  # logs, the shipper reads them. Two volumes because the distroless Cowrie
+  # image (non-root, volume-population ownership) must never contend with the
+  # root-owned farm volume the other decoys write to.
+  decoy_logs:
+    driver: local
+  decoy_logs_cowrie:
+    driver: local
+
   # Edge daemon durable state (journal, policy cache, credential) and its
   # observation source. Per-node by design: state never leaves the node.
   edge_data:
@@ -1095,4 +1331,18 @@ volumes:
 networks:
   deeptempo-network:
     driver: bridge
+  # The decoy plane (feature 5): isolated from the outside world — decoy
+  # containers attach here and to nothing else (deny-by-default egress is
+  # the farm's containment invariant; telemetry ships through the controller
+  # and Vigil's webhook, not directly out). The decoy-controller itself also
+  # joins deeptempo-network so the daemon can program it.
+  decoy-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        # Fixed addressing: the decoy-controller's decoy map (and any real
+        # steering driver) targets these static decoy addresses.
+        - subnet: 10.0.5.0/24
+          gateway: 10.0.5.1
 

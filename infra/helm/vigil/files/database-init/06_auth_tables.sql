@@ -64,7 +64,9 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "users.read": false,
     "settings.read": false,
     "ai_chat.use": false,
-    "ai_decisions.approve": false
+    "ai_decisions.approve": false,
+    "deception.read": false,
+    "deception.manage": false
 }', true),
 ('role-analyst', 'Analyst', 'Full access to findings and cases, limited integrations', '{
     "findings.read": true,
@@ -80,7 +82,9 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
-    "ai_decisions.approve": false
+    "ai_decisions.approve": false,
+    "deception.read": true,
+    "deception.manage": false
 }', true),
 ('role-senior-analyst', 'Senior Analyst', 'Full analyst access plus approval rights', '{
     "findings.read": true,
@@ -96,7 +100,9 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": false,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "deception.read": true,
+    "deception.manage": true
 }', true),
 ('role-manager', 'Manager', 'User management and all integrations', '{
     "findings.read": true,
@@ -114,7 +120,9 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "deception.read": true,
+    "deception.manage": true
 }', true),
 ('role-admin', 'Admin', 'Full system access', '{
     "findings.read": true,
@@ -132,9 +140,27 @@ INSERT INTO roles (role_id, name, description, permissions, is_system_role) VALU
     "settings.read": true,
     "settings.write": true,
     "ai_chat.use": true,
-    "ai_decisions.approve": true
+    "ai_decisions.approve": true,
+    "deception.read": true,
+    "deception.manage": true
 }', true)
 ON CONFLICT (role_id) DO NOTHING;
+
+-- Feature 5: the deception keys, filled into role maps that predate them.
+-- The seed above is DO NOTHING, so an existing install's rows never gained
+-- the new keys and default-deny would have locked every operator out. The
+-- guarded fill runs only when a role holds neither key, so a grant or
+-- exemption an operator flipped afterwards is never reset.
+UPDATE roles SET permissions = permissions || '{"deception.read": false, "deception.manage": false}'::jsonb
+    WHERE role_id = 'role-viewer' AND NOT (permissions ? 'deception.read');
+UPDATE roles SET permissions = permissions || '{"deception.read": true, "deception.manage": false}'::jsonb
+    WHERE role_id = 'role-analyst' AND NOT (permissions ? 'deception.read');
+UPDATE roles SET permissions = permissions || '{"deception.read": true, "deception.manage": true}'::jsonb
+    WHERE role_id = 'role-senior-analyst' AND NOT (permissions ? 'deception.read');
+UPDATE roles SET permissions = permissions || '{"deception.read": true, "deception.manage": true}'::jsonb
+    WHERE role_id = 'role-manager' AND NOT (permissions ? 'deception.read');
+UPDATE roles SET permissions = permissions || '{"deception.read": true, "deception.manage": true}'::jsonb
+    WHERE role_id = 'role-admin' AND NOT (permissions ? 'deception.read');
 
 -- No default admin is seeded. The row that used to live here carried a bcrypt
 -- hash matching no password, so it could never be signed into — it only made

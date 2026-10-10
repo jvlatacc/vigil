@@ -27,12 +27,12 @@ PINNED = {
         "5d92035ff67486b3d4ef35bc337fc56c4d2a076848b1f8c5a5d4823a7e83f203",
     ),
     "full-investigation": (
-        1,
-        "6427075c3fdd4b4cc6d2c061dfa21ac63d87e0278c2618cb1a400bf8365ee156",
+        2,
+        "854f7c3136e30b31c1c6d61c1ce3a6498df4f03b1388a0eeb90b5fb84c38a8b5",
     ),
     "incident-response": (
-        1,
-        "b2ec7cfc1eb091d8c1d55642001bd61a94142a7e7178583383b96dae267f907c",
+        2,
+        "3bd6f16aec3057e4a27f27f95d2c7545fb300c4a491f8ae857bb41e3a6853fae",
     ),
     "root-cause-analysis": (
         1,

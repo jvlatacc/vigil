@@ -170,9 +170,14 @@ class TestTheTriggerMatrix:
 
     @pytest.mark.asyncio
     async def test_below_the_auto_line_the_row_waits_for_a_person(self):
+        # The release merge composes the bands: a reversible honey_route row
+        # auto-approves at the spec's dedicated floor (0.80), not the deny
+        # band's 0.90 — transparent and TTL-reversible. Below the auto line
+        # here means below that floor (still above the MTD routing band's
+        # own 0.60, so the probe routes and the ROW is what waits).
         with _no_db(decoy=_decoy()) as session:
             responder = _responder()
-            await responder._evaluate_response(_probe_finding(triage_confidence=0.85))
+            await responder._evaluate_response(_probe_finding(triage_confidence=0.70))
             assert len(session.added) == 1
             assert session.added[0].status == "pending"
             assert responder.stats["pending_approval"] == 1

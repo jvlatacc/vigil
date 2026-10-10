@@ -15,6 +15,13 @@ ENV_EXEMPT_FILES = {
     # paths arrive as env from the process that spawns that server, so it sits
     # on the same boundary as ENV_EXEMPT_GLOBS below.
     "core/detections/tools.py",
+    # Decoy-farm standalone processes (compose deception profile): spawned as
+    # containers whose config arrives only as env vars. They cannot use
+    # core.config.get_settings() — the medic contract keeps services.decoy_farm
+    # from importing core at all. telemetry.py and opencanary_config.py stay
+    # ratcheted: they are pure libraries, deliberately env-free.
+    "services/decoy_farm/shipper.py",
+    "services/decoy_farm/http_decoy.py",
 }
 
 # The other side of that boundary: core/integrations/*/tool.py are standalone

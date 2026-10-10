@@ -31,6 +31,7 @@ forbidden_modules =
     core.auth
     core.cases
     core.chat
+    core.deception
     core.detections
     core.federation
     core.findings
@@ -52,6 +53,7 @@ source_modules =
     core.auth
     core.cases
     core.chat
+    core.deception
     core.detections
     core.edge
     core.federation
@@ -114,6 +116,8 @@ forbidden_modules =
     tools
     services.api
     services.daemon
+    services.decoy_controller
+    services.decoy_farm
     services.worker
     services.decoy
     services.edge
@@ -132,5 +136,7 @@ forbidden_modules =
     services.api
     services.daemon
     services.decoy
+    services.decoy_controller
+    services.decoy_farm
     services.medic
     services.worker

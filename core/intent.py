@@ -133,6 +133,24 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         HIGHER_TIGHTER,
     ),
     IntentField(
+        "respond.honey_route_enabled",
+        "response.honey_route_enabled",
+        "daemon_deception_enabled",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "respond.honey_route_floor",
+        "response.honey_route_floor",
+        "daemon_honey_route_floor",
+        HIGHER_TIGHTER,
+    ),
+    IntentField(
+        "respond.honey_route_ttl_seconds",
+        "response.honey_route_ttl_seconds",
+        "daemon_honey_route_ttl",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
         "escalate.severities",
         "escalation.escalate_severities",
         "daemon_escalate_severities",

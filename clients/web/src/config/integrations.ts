@@ -834,6 +834,61 @@ export const INTEGRATIONS: IntegrationMetadata[] = [
     docs_url: 'https://developers.cloudflare.com/api/',
   },
   {
+    id: 'decoy_controller',
+    name: 'Decoy Controller',
+    category: 'Network Security',
+    description:
+      'Decoy steering for the honey-routing posture: transparently redirects a suspicious source into the instrumented decoy farm on a short TTL lease — no deny signal reaches the source. Vigil decides, leases, and audits; the controller programs the network. Ships with the reference decoy-controller service (services/decoy_controller/).',
+    functionality_type: 'Network Protection',
+    fields: [
+      {
+        name: 'base_url',
+        label: 'Controller URL',
+        type: 'text',
+        required: true,
+        placeholder: 'http://decoy-controller:8484',
+        helpText:
+          'Base URL of the decoy-controller enforcement service (compose: http://decoy-controller:8484). Selecting the controller steering backend requires this integration.',
+      },
+      {
+        name: 'api_token',
+        label: 'API Token',
+        type: 'password',
+        required: true,
+        helpText:
+          'Bearer token the controller requires on every steering call (DECOY_CONTROLLER_TOKEN). Every request is denied without it.',
+      },
+    ],
+  },
+  {
+    id: 'honey_router',
+    name: 'Honey Router',
+    category: 'Network Security',
+    description:
+      'MTD honey-routing enforcement through Cilium Local Redirect Policies: steers a suspicious source\u2019s matching traffic into the decoy workloads on a TTL lease. No secret fields \u2014 the backend talks to the Kubernetes API with the pod\u2019s in-cluster service account (or the operator\u2019s kubeconfig), never a Vigil-stored credential.',
+    functionality_type: 'Network Protection',
+    fields: [
+      {
+        name: 'backend',
+        label: 'Enforcement Backend',
+        type: 'text',
+        required: true,
+        default: 'cilium',
+        helpText:
+          'Which enforcement backend applies routes. Only "cilium" exists; anything else is an honest failure at route time, not a silent no-op.',
+      },
+      {
+        name: 'namespace',
+        label: 'Decoy Namespace',
+        type: 'text',
+        required: true,
+        default: 'default',
+        helpText:
+          'Namespace the decoy workloads and their redirect policies live in. The policy object is namespaced, so this must be where the decoy pods actually run.',
+      },
+    ],
+  },
+  {
     id: 'cloudforce_one',
     name: 'Cloudflare Cloudforce One',
     category: 'Threat Intelligence',

@@ -46,6 +46,7 @@ from core.storage.models.config import (
     UserPreference,
 )
 from core.storage.models.containment import ContainmentAction
+from core.storage.models.deception import DeceptionLease, DeceptionProbe
 from core.storage.models.digital_twin import (
     TwinConnection,
     TwinDevice,
@@ -106,6 +107,8 @@ __all__ = [
     "Conversation",
     "CustomAgent",
     "CustomWorkflow",
+    "DeceptionLease",
+    "DeceptionProbe",
     "EdgeBundle",
     "EdgeNode",
     "EpisodicDistilFailure",

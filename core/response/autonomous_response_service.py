@@ -11,6 +11,7 @@ from core.response.approval_service import (
     ActionType,
     ApprovalService,
     PendingAction,
+    Reversibility,
 )
 from core.response.config import ResponseConfig, is_recon_probe
 from core.response.guards import (
@@ -430,7 +431,7 @@ class AutonomousResponseService:
                 return result
 
         except Exception as e:
-            logger.error(f"Error creating isolation action: {e}")
+            logger.error("Error creating isolation action: %s", e)
             return {"error": str(e)}
 
     def _execute_isolation(
@@ -451,6 +452,256 @@ class AutonomousResponseService:
             "error": "unsupported_action_type",
             "message": "No EDR executor is configured for host isolation",
         }
+
+    def create_honey_route_action(
+        self,
+        attacker_ip: str,
+        destination_ips: List[str],
+        ports: List[int],
+        confidence: float,
+        reason: str,
+        evidence: List[str],
+        evidence_origins: Optional[Sequence[FindingOriginStatus]] = None,
+    ) -> Optional[Dict]:
+        """Create a honey-route action (feature 5) for a corroborated recon source.
+
+        Per-attacker idempotency — ``honey_route:<attacker_ip>`` — so one
+        source probing five hosts yields one lease, not five rows. A
+        reversible redirect carries its own approval floor
+        (``config.honey_route_floor``): at or above it the row auto-approves
+        and executes inline through the steering backend; below it the row
+        waits for an analyst exactly as everything else does.
+
+        The guard chain runs first, the same fail-closed gate
+        ``create_isolation_action`` passes (#944, D1): a transparent
+        redirect is still machine-speed response, so invariant, breaker,
+        origin and quota verdicts interpose before the approval gate, and
+        the execution re-check re-judges the row like every other.
+        ``evidence_origins`` mirrors the isolation contract; a caller that
+        does not supply them is judged on zero statuses (the origin gate
+        passes vacuously, logged at debug).
+        """
+        if not attacker_ip or attacker_ip == "unknown":
+            logger.warning("Honey-route action skipped: no actionable source IP")
+            return None
+
+        # The guard chain (#944, D1): invariant, breaker, origin, quota —
+        # cheapest-and-most-specific first. The target is the SOURCE, so the
+        # never-quarantine invariant reads the attacker IP (a protected
+        # source waits for a person); a honey-route row names no hostname.
+        verdict = self.evaluate_guards(
+            ActionType.HONEY_ROUTE.value,
+            attacker_ip,
+            None,
+            evidence_origins or (),
+        )
+        gate_rule = verdict.rule if verdict.needs_human else None
+
+        try:
+            action, inserted = self.approval_service._put_action(
+                action_type=ActionType.HONEY_ROUTE,
+                title=f"Honey Route: {attacker_ip}",
+                description=f"Transparent redirect of {attacker_ip} into decoy services "
+                f"(ports {', '.join(str(p) for p in ports) or 'n/a'}); "
+                f"no deny signal is sent to the source.",
+                target=attacker_ip,
+                confidence=confidence,
+                reason=reason,
+                evidence=evidence,
+                created_by=AgentId.AUTO_RESPONDER.value,
+                parameters={
+                    "attacker_ip": attacker_ip,
+                    "destination_ips": list(destination_ips or []),
+                    "ports": [int(p) for p in (ports or [])],
+                },
+                reversibility=Reversibility.REVERSIBLE,
+                idempotency_key=f"{ActionType.HONEY_ROUTE.value}:{attacker_ip}",
+                gate_rule=gate_rule,
+            )
+
+            if not inserted:
+                return {
+                    "status": action.status,
+                    "reused": True,
+                    "action_id": action.action_id,
+                    "message": f"Honey-route already recorded for {attacker_ip}",
+                    "confidence": action.confidence,
+                    "requires_approval": action.requires_approval,
+                    "result": action.execution_result,
+                }
+
+            if action.status == ActionStatus.APPROVED.value:
+                logger.info(
+                    f"Action {action.action_id} auto-approved for honey-routing "
+                    f"(confidence: {confidence:.2%})"
+                )
+                execution_result = self._execute_honey_route(action)
+
+                if execution_result.get("success"):
+                    self.approval_service.mark_executed(
+                        action.action_id, execution_result
+                    )
+                    return {
+                        "status": "executed",
+                        "action_id": action.action_id,
+                        "message": f"{attacker_ip} steered into decoys",
+                        "confidence": confidence,
+                        "result": execution_result,
+                    }
+
+                self.approval_service.mark_failed(
+                    action.action_id,
+                    execution_result.get("error", "Unknown error"),
+                )
+                return {
+                    "status": ActionStatus.FAILED.value,
+                    "action_id": action.action_id,
+                    "message": execution_result.get("message")
+                    or f"Honey-route of {attacker_ip} was not executed",
+                    "confidence": confidence,
+                    "result": execution_result,
+                }
+            else:
+                logger.info(
+                    f"Honey-route action {action.action_id} pending approval "
+                    f"(confidence: {confidence:.2%})"
+                )
+                result: Dict = {
+                    "status": "pending_approval",
+                    "action_id": action.action_id,
+                    "message": "Honey-route action created, awaiting analyst approval",
+                    "confidence": confidence,
+                    "requires_approval": True,
+                }
+                if verdict.needs_human:
+                    # A held action carries its gate's rationale on the
+                    # result and the row, lands it in ai_decision_logs
+                    # (#944, D6), and escalates through Slack/PagerDuty —
+                    # nothing is dropped silently. While the breaker is
+                    # OPEN the escalation is claimed once per OPEN period
+                    # (D4), not once per action.
+                    result["guard"] = {
+                        "state": verdict.state.value,
+                        "rule": verdict.rule,
+                    }
+                    self._log_guard_denial(
+                        action.action_id,
+                        verdict,
+                        ActionType.HONEY_ROUTE.value,
+                        confidence,
+                        evidence,
+                    )
+                    result["guard_escalate"] = self._claim_escalation(verdict)
+                return result
+
+        except Exception as e:
+            logger.error("Error creating honey-route action: %s", e)
+            return {"error": str(e)}
+
+    def _execute_honey_route(
+        self, action, ttl_seconds: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Execute one approved honey_route row through its steering backend.
+
+        Two row shapes share the ``honey_route`` action type after the
+        release merge, so the executor dispatches on the row's own
+        parameter shape: rows carrying the spine's lease parameters
+        (``attacker_ip``/``destination_ips``/``ports``) were minted by the
+        feature-5 spine and steer through the DeceptionLeaseService backend
+        — the dry-run default and the rollback handle in the result. Every
+        other row — ``decoy_id`` rows from the MTD band, and any row
+        matching neither shape — routes through the honey_router
+        integration (the registry contract), whose gate-then-validate order
+        names the failure (``missing_decoy_id``) before any database or
+        backend touch. The creators write disjoint parameter sets, and both
+        branches keep their own honest-failure contract.
+        """
+        params = getattr(action, "parameters", None) or {}
+        lease_shape = bool(
+            params.get("attacker_ip")
+            or params.get("destination_ips")
+            or params.get("ports")
+        )
+        if lease_shape and not params.get("decoy_id"):
+            return self._execute_honey_route_via_lease(action, ttl_seconds)
+        return self._execute_honey_route_via_registry(action)
+
+    def _execute_honey_route_via_lease(
+        self, action, ttl_seconds: Optional[int] = None
+    ) -> Dict:
+        """Steer one approved honey-route action; the first real rollback arm.
+
+        Mints the lease row (or reuses the one a crashed attempt left),
+        programs the backend with the lease scope, and returns the standard
+        ``{success, ...}`` dict — enriched with the lease id, backend, TTL
+        and rollback handle that ``execution_result`` must carry: the
+        unsteer is driven by the daemon's lease sweep from this record, not
+        by the approval row. A backend error marks the action FAILED and
+        leaves production routing untouched (fail-open).
+        """
+        from core.deception.leases import DeceptionLeaseService, run_backend_call
+
+        params = action.parameters or {}
+        attacker_ip = params.get("attacker_ip") or action.target
+        ttl = int(ttl_seconds or self.config.honey_route_ttl_seconds)
+
+        try:
+            lease_service = DeceptionLeaseService()
+        except NotImplementedError as e:
+            # The configured backend does not exist yet (controller ships with
+            # the decoy-controller service); building it must fail loudly.
+            return {"success": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return {"success": False, "error": f"steering backend unavailable: {e}"}
+
+        try:
+            existing = lease_service.by_action(action.action_id)
+            if existing is not None and existing.status == "active":
+                lease_id = existing.lease_id
+            else:
+                lease_id = lease_service.mint(
+                    attacker_ip=attacker_ip,
+                    destination_ips=list(params.get("destination_ips") or []),
+                    ports=[int(p) for p in (params.get("ports") or [])],
+                    action_id=action.action_id,
+                    ttl_seconds=ttl,
+                )
+
+            result = run_backend_call(
+                lease_service.steer_lease(lease_id, ttl_seconds=ttl)
+            )
+            if result.get("success"):
+                return {
+                    **result,
+                    "lease_id": lease_id,
+                    "ttl": ttl,
+                    "rollback": f"DELETE /steer/{lease_id}",
+                }
+            return {**result, "lease_id": lease_id}
+        except Exception as e:  # noqa: BLE001
+            logger.exception(
+                "Honey-route execution failed for action %s", action.action_id
+            )
+            return {"success": False, "error": str(e)}
+
+    def execute_honey_route_action(self, action) -> Dict:
+        """Execute one approved honey-route action now and record the outcome.
+
+        The tool-layer twin of the sweep's ``honey_route`` arm: the same
+        executor and the same executed/failed marking, so a bound,
+        permissioned caller triggers now what the 30-second sweep would do
+        on its next tick. Never called with a PENDING row — the tool layer
+        refuses those, because executing one would bypass the human decision
+        the row is held for.
+        """
+        result = self._execute_honey_route(action)
+        if result.get("success"):
+            self.approval_service.mark_executed(action.action_id, result)
+        else:
+            self.approval_service.mark_failed(
+                action.action_id, result.get("error", "Unknown error")
+            )
+        return result
 
     def execute_approved_actions(self) -> List[Dict]:
         """
@@ -652,15 +903,18 @@ class AutonomousResponseService:
     # MTD honey-route executor
     # ------------------------------------------------------------------
 
-    def _execute_honey_route(self, action) -> Dict[str, Any]:
+    def _execute_honey_route_via_registry(self, action) -> Dict[str, Any]:
         """Execute an approved honey_route through the honey_router integration.
 
-        Lazy import and the ``is_integration_enabled`` gate are the Cloudflare
-        precedent: the enforcement modules (and their storage imports) stay
-        off installs that never enable the integration. With no backend
-        configured this returns an honest structured failure — the
-        ``isolate_host`` rule: a fabricated success would record a routing
-        that never happened, and the attacker would keep probing production.
+        The MTD band's row shape (``decoy_id`` parameter): the backend is
+        the honey_router integration's registry contract, unchanged from
+        main. Lazy import and the ``is_integration_enabled`` gate are the
+        Cloudflare precedent: the enforcement modules (and their storage
+        imports) stay off installs that never enable the integration. With
+        no backend configured this returns an honest structured failure —
+        the ``isolate_host`` rule: a fabricated success would record a
+        routing that never happened, and the attacker would keep probing
+        production.
         """
         from core.config import is_integration_enabled
 

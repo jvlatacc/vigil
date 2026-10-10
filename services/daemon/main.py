@@ -91,6 +91,7 @@ class SOCDaemon:
         logger.info("Initializing daemon components...")
 
         # Import here to avoid circular imports
+        from core.deception.backends import set_vendor_error_hooks
         from core.integrations.mcp.client import (
             build_mcp_client,
             set_process_mcp_client,
@@ -105,6 +106,15 @@ class SOCDaemon:
         from services.daemon.processor import FindingProcessor
         from services.daemon.responder import AutonomousResponder
         from services.daemon.scheduler import TaskScheduler
+        from services.daemon.vendor_errors import (
+            record_vendor_error,
+            vendor_cooling_down,
+        )
+
+        # Composition root for the deception steering backend's cooldown:
+        # core.deception cannot import services (the deployables contract), so
+        # the daemon hands its shared vendor-error bookkeeping over here.
+        set_vendor_error_hooks(record_vendor_error, vendor_cooling_down)
 
         # Resolve the DB credentials now so a missing password stops startup,
         # rather than surfacing on the first query inside a component task.
@@ -147,6 +157,8 @@ class SOCDaemon:
             mtd_config=self.config.mtd,
         )
         self._scheduler = TaskScheduler(self.config.scheduler)
+        # The lease sweep counts its outcomes on the responder's stats.
+        self._scheduler.set_responder(self._responder)
         self._orchestrator = Orchestrator(
             self.config.orchestrator,
             approvals=approvals,

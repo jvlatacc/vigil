@@ -703,6 +703,95 @@ APPROVAL_TOOLS = [
     },
 ]
 
+# Deception tools (feature 5 — dynamic honey-routing). Proposing is inert: it
+# only mints a human_only approval row, so no permission and no bound caller is
+# required — a hunt may propose. Executing a steer is a person's call and
+# refuses an unbound caller exactly as approve_action does.
+DECEPTION_TOOLS = [
+    {
+        "name": "propose_honey_route",
+        "description": (
+            "Propose honey-routing a suspicious source into the decoy farm: "
+            "the source's traffic is transparently redirected to instrumented "
+            "decoys on a short TTL lease instead of being denied, so its next "
+            "moves are observed rather than tipped off with a block. Use it "
+            "when the evidence shows reconnaissance or lateral-movement "
+            "probing from one source (for example repeated T1046/T1595 "
+            "probes). Writes one human_only approval row per attacker IP and "
+            "never executes anything itself: a person decides, and the "
+            "daemon's lease sweep steers on approval."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "attacker_ip": {
+                    "type": "string",
+                    "description": "The source IP to steer into decoys",
+                },
+                "destination_ips": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Internal IPs the source was probing; the redirect is "
+                        "scoped to these"
+                    ),
+                },
+                "ports": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": (
+                        "The suspicious ports the source probed; the redirect "
+                        "is scoped to this service class, never all traffic"
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "Why this source is deception-worthy — the "
+                        "corroborated evidence, for the analyst who decides"
+                    ),
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "Your confidence in the recon attribution, 0.0-1.0. "
+                        "The row waits for a person whatever this says."
+                    ),
+                    "default": 0.8,
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Finding IDs or other evidence references backing the "
+                        "proposal"
+                    ),
+                },
+            },
+            "required": ["attacker_ip", "reason"],
+        },
+    },
+    {
+        "name": "execute_honey_route",
+        "description": (
+            "Execute an already-approved honey-route action now instead of "
+            "waiting for the daemon's sweep. Refuses when no person is bound "
+            "to this call and requires the approval permission; a pending "
+            "action must be approved (approve_action) first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action_id": {
+                    "type": "string",
+                    "description": "The approved honey-route action ID to execute",
+                },
+            },
+            "required": ["action_id"],
+        },
+    },
+]
+
 # The local indicator database the threat-feed poller fills. Present whether or
 # not a deployment carries an external intel integration, which is why it is here
 # rather than left to MCP.
@@ -857,6 +946,7 @@ ALL_TOOLS = (
     + THREAT_INTEL_TOOLS
     + DECOY_TOOLS
     + APPROVAL_TOOLS
+    + DECEPTION_TOOLS
     + MEMORY_TOOLS
     + SKILL_TOOLS
 )

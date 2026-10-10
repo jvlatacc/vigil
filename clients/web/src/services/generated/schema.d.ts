@@ -3555,6 +3555,130 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/deception/kill-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Kill Switch
+         * @description Set the stored kill-switch toggle.
+         *
+         *     The env override (``DAEMON_DECEPTION_KILL_SWITCH``) trips the switch
+         *     independently and cannot be cleared from here; either source alone
+         *     stops steering.
+         */
+        post: operations["post_api_deception_kill-switch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deception/leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Leases
+         * @description Lease rows newest-first, optionally filtered by status.
+         */
+        get: operations["get_api_deception_leases"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deception/leases/{lease_id}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Lease
+         * @description Operator release: unsteer now, record the rollback and the reason.
+         */
+        post: operations["post_api_deception_leases_lease_id_release"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deception/probes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Probes
+         * @description Recent recon observations newest-first — the captured-intel panel.
+         */
+        get: operations["get_api_deception_probes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deception/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Settings
+         * @description Store the honey-routing knobs; they apply without a daemon restart.
+         */
+        post: operations["post_api_deception_settings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/deception/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Deception Status
+         * @description The posture summary: knobs, kill-switch state, lease counts.
+         */
+        get: operations["get_api_deception_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/detection-rules/mcp-env": {
         parameters: {
             query?: never;
@@ -10581,6 +10705,37 @@ export interface components {
             /** Webhook Secret */
             webhook_secret?: string | null;
         };
+        /**
+         * DeceptionSettingsWrite
+         * @description The Settings › Deception form, stored as one system_config row.
+         *
+         *     Bounds mirror the steering semantics: a lease TTL a renewal can reach
+         *     within the max duration, a corroboration window at least a minute wide,
+         *     a floor anywhere in the confidence range. The backend ships as dry_run;
+         *     ``controller`` is selectable here but build_backend refuses it until the
+         *     decoy-controller service is configured — the status names that.
+         */
+        DeceptionSettingsWrite: {
+            /**
+             * Allowlist
+             * @default
+             */
+            allowlist: string;
+            /** Backend */
+            backend: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Honey Route Floor */
+            honey_route_floor: number;
+            /** Max Duration Seconds */
+            max_duration_seconds: number;
+            /** Min Observations */
+            min_observations: number;
+            /** Ttl Seconds */
+            ttl_seconds: number;
+            /** Window Seconds */
+            window_seconds: number;
+        };
         /** Decision */
         Decision: {
             /** Actor */
@@ -11429,6 +11584,16 @@ export interface components {
             /** Routable */
             routable: boolean;
         };
+        /**
+         * KillSwitchToggle
+         * @description The console kill-switch toggle write.
+         */
+        KillSwitchToggle: {
+            /** Enabled */
+            enabled: boolean;
+            /** Reason */
+            reason?: string | null;
+        };
         /** LLMProviderCreate */
         LLMProviderCreate: {
             /** Api Key */
@@ -11512,6 +11677,14 @@ export interface components {
             is_default?: boolean | null;
             /** Name */
             name?: string | null;
+        };
+        /**
+         * LeaseRelease
+         * @description An operator release.
+         */
+        LeaseRelease: {
+            /** Reason */
+            reason?: string | null;
         };
         /**
          * LoginRequest
@@ -19847,6 +20020,212 @@ export interface operations {
             path: {
                 integration_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_deception_kill-switch": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KillSwitchToggle"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_deception_leases: {
+        parameters: {
+            query?: {
+                status?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_deception_leases_lease_id_release: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                lease_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["LeaseRelease"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_deception_probes: {
+        parameters: {
+            query?: {
+                source_ip?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_api_deception_settings: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeceptionSettingsWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_deception_status: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

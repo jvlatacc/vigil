@@ -1,0 +1,14 @@
+# Decoy-controller service dependencies — scoped to this service on purpose.
+#
+# NEVER merge these into the repo-root requirements.txt/requirements.lock:
+# the enforcement plane is a separate trust domain from Vigil, and its
+# dependencies (notably the Kubernetes client) must not enter the daemon's
+# or API's import graph (see .importlinter's medic contract and the service
+# package docstring).
+fastapi>=0.141.1
+uvicorn>=0.20.0
+pydantic>=2.0.0
+
+# Only needed by the cilium driver; imported lazily there so the memory and
+# nftables drivers run without it.
+kubernetes>=29.0.0

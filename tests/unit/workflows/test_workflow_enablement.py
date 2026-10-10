@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+from core.agents import run_start
 from core.api.v1 import agent_runs_router
 from core.storage.models import ConfigAuditLog, SystemConfig
 from core.workflows import catalog, workflows_router
@@ -275,8 +276,8 @@ async def test_v1_start_refuses_a_disabled_workflow_and_accepts_an_enabled_one(s
     assert SCHEDULED_WORKFLOW in exc.value.detail
 
     with (
-        patch.object(agent_runs_router, "_begin_run_row"),
-        patch.object(agent_runs_router, "enqueue_run", AsyncMock(return_value="j")),
+        patch.object(run_start, "_begin_run_row"),
+        patch.object(run_start, "enqueue_run", AsyncMock(return_value="j")),
     ):
         res = await agent_runs_router.start_run(_start(f"workflow:{CUSTOM}"))
     assert res.job_id == "j"

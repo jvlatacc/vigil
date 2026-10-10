@@ -193,6 +193,11 @@ class AutonomousResponder:
             "escalated": 0,
             "honey_routed": 0,
             "errors": 0,
+            # Feature 5 — the honey-routing posture, on top of the deny bands.
+            "honey_reused": 0,
+            "honey_pending": 0,
+            "honey_released": 0,
+            "honey_failed": 0,
             "fastpath_rolled_back": 0,
             "fastpath_escalated": 0,
             "fastpath_adjudication_errors": 0,
@@ -234,7 +239,10 @@ class AutonomousResponder:
                     continue
 
                 if item.get("type") == "response_candidate":
-                    await self._evaluate_response(item["finding"])
+                    await self._evaluate_response(
+                        item["finding"],
+                        deception_signal=bool(item.get("deception_signal")),
+                    )
 
             except asyncio.CancelledError:
                 break
@@ -269,7 +277,9 @@ class AutonomousResponder:
             except asyncio.TimeoutError:
                 pass
 
-    async def _evaluate_response(self, finding: Dict[str, Any]):
+    async def _evaluate_response(
+        self, finding: Dict[str, Any], deception_signal: bool = False
+    ):
         """Evaluate finding and determine response action."""
         finding_id = finding.get("finding_id", "unknown")
         self.stats["evaluated"] += 1
@@ -302,7 +312,11 @@ class AutonomousResponder:
         entity_context = finding.get("entity_context", {})
 
         decided = response_action_decision(
-            severity, confidence, recommended_action, self.response_config
+            severity,
+            confidence,
+            recommended_action,
+            self.response_config,
+            deception_signal=deception_signal,
         )
 
         if decided:
@@ -319,6 +333,8 @@ class AutonomousResponder:
                 await self._create_response_action(
                     finding, response_action, entity_context, rule
                 )
+            elif response_action == "honey_route":
+                await self._create_honey_route_action(finding, rule)
         else:
             if not self.response_config.auto_response_enabled:
                 logger.debug("Auto-response disabled, skipping")
@@ -588,6 +604,61 @@ class AutonomousResponder:
             else:
                 logger.warning(f"Action creation result: {result}")
 
+    async def _create_honey_route_action(self, finding: Dict[str, Any], rule: str):
+        """Create a honey-route action for a corroborated recon source (feature 5).
+
+        The attacker IP comes from the same canonicalization the predicate
+        used (the FINDING_IP_KEYS path, validated for routability) — not raw
+        ``src_ips``, whose key set varies by data source. Honors
+        ``dry_run`` exactly as the deny actions do: intent logged, nothing
+        created, nothing steered.
+        """
+        if self.response_config.dry_run:
+            logger.info(
+                "[DRY RUN] Would create honey_route action for finding %s; %s",
+                finding.get("finding_id"),
+                rule,
+            )
+            return
+
+        from core.deception.signals import canonical_source_ip
+        from core.deception.signals import destination_ips as decoy_destinations
+        from core.deception.signals import extract_ports
+
+        finding_id = finding.get("finding_id")
+        source_ip = canonical_source_ip(finding)
+        if not source_ip:
+            logger.warning("No actionable source IP for honey-route on %s", finding_id)
+            return
+
+        result = self._response_service.create_honey_route_action(
+            attacker_ip=source_ip,
+            destination_ips=decoy_destinations(finding),
+            ports=extract_ports(finding),
+            confidence=finding.get("triage_confidence", 0.5),
+            reason=f"Automated deception response to {finding_id}; {rule}",
+            evidence=[finding_id] if finding_id else [],
+            evidence_origins=origin_statuses_for(finding),
+        )
+
+        if result:
+            if result.get("status") == "executed" and result.get("reused"):
+                self.stats["honey_reused"] += 1
+                logger.info(
+                    f"Skipped honey_route for {finding_id}: source already routed"
+                )
+            elif result.get("status") == "executed":
+                self.stats["honey_routed"] += 1
+                logger.info(f"Honey-routed source for {finding_id}")
+            elif result.get("status") == "pending_approval":
+                self.stats["honey_pending"] += 1
+                logger.info(f"Created pending honey_route action for {finding_id}")
+            elif result.get("status") == "failed":
+                self.stats["honey_failed"] += 1
+                logger.warning("Honey_route action failed: %s", result)
+            else:
+                logger.warning("Honey-route action creation result: %s", result)
+
     async def _evaluate_mtd_route(self, finding: Dict[str, Any], confidence: float):
         """Evaluate the MTD band and propose a honey-route when it fires.
 
@@ -624,11 +695,11 @@ class AutonomousResponder:
             logger.info("MTD not routing %s: mtd.no_decoy_available", finding_id)
             return
 
-        await self._create_honey_route_action(
+        await self._create_mtd_honey_route_action(
             finding, attacker_ip, decoy, confidence, rule
         )
 
-    async def _create_honey_route_action(
+    async def _create_mtd_honey_route_action(
         self,
         finding: Dict[str, Any],
         attacker_ip: str,
@@ -637,6 +708,11 @@ class AutonomousResponder:
         rule: str,
     ):
         """Create the honey-route proposal the MTD band decided on.
+
+        Renamed from ``_create_honey_route_action`` at the release merge:
+        the feature-5 spine ships a same-named creator with a different
+        signature, and two same-named methods would silently shadow.
+        Behavior is unchanged from main.
 
         The row is the decision plane's deliverable: reversible (unroute
         restores the normal path), keyed per attacker so repeated probes

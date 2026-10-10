@@ -19,7 +19,9 @@ Usage: $0 [--daemon|-d] [--headless] [--with <profile>] [--all]
                     the auto-open, and the ready banner points at headless
                     onboarding and the /mcp endpoint instead of the console.
       --with NAME   Also start a profiled service (splunk, kafka, pgadmin,
-                    jaeger, prometheus, grafana, otel-collector). Repeatable.
+                    jaeger, prometheus, grafana, otel-collector, deception).
+                    Repeatable. `deception` stands up the whole decoy farm
+                    (controller + decoys + telemetry shipper).
       --all         Also start every profiled service
       backup        Run one snapshot in the backend image and exit. Does not
                     start the API, frontend, or agent layer.
@@ -282,7 +284,12 @@ fi
 # --- Services (autostart list + any --with/--all extras) ---
 start_autostart_services
 for svc in $EXTRA_SERVICES; do
-    ensure_container "$(service_container "$svc")" "$svc" "$(service_profile "$svc")"
+    # Multi-service profiles expand here: `--with deception` starts the whole
+    # decoy farm. Deliberately NOT part of --all — honeypots are an explicit
+    # opt-in, never a side effect of a broad startup.
+    for farm_svc in $(profile_services "$svc"); do
+        ensure_container "$(service_container "$farm_svc")" "$farm_svc" "$(service_profile "$farm_svc")"
+    done
 done
 
 # --- Database init ---

@@ -77,6 +77,9 @@ class FindingProcessor:
         # The queue-for-response line is the band's review threshold, so the
         # processor reads the same ResponseConfig the responder does (#916).
         self.response_config = response_config or ResponseConfig.from_settings()
+        # Built lazily: the deception posture (feature 5) is off by default and
+        # must cost nothing until it is on.
+        self._deception_signal_service = None
         # The Fast-Path's blast-radius config (speculative containment): the
         # gate consults nothing but this and the finding dict. Ledger and
         # executor registry are built on the first qualifying finding, so a
@@ -450,6 +453,66 @@ class FindingProcessor:
         except Exception as e:
             logger.error(f"Response evaluation failed for {finding_id}: {e}")
             self.stats["errors"] += 1
+
+    def _deception_service(self):
+        """The deception signal service, rebuilt when the knobs change.
+
+        The Settings › Deception write lands in a system_config row and
+        :meth:`DeceptionConfig.resolved` picks it up on its short
+        cache, so when the merged config differs from the cached service's
+        the service is rebuilt — enable/allowlist/window changes are live
+        without a daemon restart. Test doubles injected into
+        ``_deception_signal_service`` are honored verbatim.
+        """
+        from core.deception.config import DeceptionConfig
+        from core.deception.signals import DeceptionSignalService
+
+        config = DeceptionConfig.resolved()
+        current = self._deception_signal_service
+        if current is None or (
+            isinstance(current, DeceptionSignalService) and current.config != config
+        ):
+            self._deception_signal_service = DeceptionSignalService(config=config)
+        return self._deception_signal_service
+
+    def _deception_signal(self, finding: Dict[str, Any]) -> bool:
+        """The deterministic recon predicate for honey-routing (feature 5).
+
+        Deliberately not AI-triage output: the posture fires on recon-shape
+        (MITRE recon TIDs or a recon/lateral category), a canonicalized
+        ``entity_context`` source IP (the FINDING_IP_KEYS path — raw
+        ``src_ips`` key sets vary by data source), a non-exempt source, and
+        per-attacker corroboration. Each qualifying finding is one probe
+        observation; the posture needs ``min_observations`` inside the
+        window. A kill-switch, a disabled posture, or any DB failure answers
+        False — uncertainty never steers.
+        """
+        try:
+            from core.deception.allowlist import allowlist_from_config
+            from core.deception.signals import (
+                canonical_source_ip,
+                is_recon_shaped,
+                recon_evidence,
+            )
+
+            service = self._deception_service()
+            if not service.config.enabled:
+                return False
+            source_ip = canonical_source_ip(finding)
+            if not source_ip or not is_recon_shaped(finding):
+                return False
+            if allowlist_from_config(service.config).is_exempt(source_ip):
+                return False
+            service.record_probe(
+                source_ip, finding.get("finding_id"), recon_evidence(finding)
+            )
+            if service.kill_switch_active():
+                return False
+            return service.is_corroborated(source_ip)
+        except Exception as e:  # noqa: BLE001 — the deception arm can never
+            # break the response evaluation that owns this call site.
+            logger.error("Deception signal evaluation failed: %s", e)
+            return False
 
     def _note_enrich_failure(self, finding_id: str) -> None:
         """Trip the breaker after a run of enrichment failures."""
@@ -1069,6 +1132,12 @@ REASONING: [Brief explanation]
         recommended_action = finding.get("recommended_action", "").lower()
         confidence = finding.get("triage_confidence", 0.5)
 
+        # Feature 5: the deterministic recon predicate rides this evaluation.
+        # Off by default; when it fires, the finding reaches the responder
+        # even below the review threshold — the honey-route floor is lower,
+        # and the deny-shaped bands still win inside the decision function.
+        deception_signal = self._deception_signal(finding)
+
         # The MTD band adds its own candidates beside the containment ones:
         # a probe triage recommended deceiving, and a scanning-tagged probe
         # (T1046/T1595) whose tags say deceive even when triage chose a
@@ -1087,11 +1156,12 @@ REASONING: [Brief explanation]
             or confidence >= self.response_config.review_threshold
         )
 
-        if should_respond and self._response_queue:
+        if (should_respond or deception_signal) and self._response_queue:
             await self._response_queue.put(
                 {
                     "type": "response_candidate",
                     "finding": finding,
+                    "deception_signal": deception_signal,
                     "timestamp": utcnow().isoformat(),
                 }
             )

@@ -463,6 +463,74 @@ export const slaPoliciesApi = {
   }) => api.get(`/sla-policies/${policyId}/cases`, { params }),
 }
 
+// Deception (feature 5): the honey-routing posture — leases, probes, and the
+// Settings knobs. Reads are gated deception.read, writes deception.manage.
+export interface DeceptionStatus {
+  enabled: boolean
+  backend: string
+  backend_error: string | null
+  honey_route_floor: number
+  ttl_seconds: number
+  max_duration_seconds: number
+  min_observations: number
+  window_seconds: number
+  kill_switch_active: boolean
+  allowlist: string
+  lease_counts: Record<string, number>
+}
+
+export interface DeceptionLease {
+  lease_id: string
+  attacker_ip: string
+  action_id: string | null
+  destination_ips: string[]
+  ports: number[]
+  status: string
+  backend: string
+  backend_ref: string | null
+  ttl_seconds: number
+  started_at: string | null
+  expires_at: string | null
+  renewal_count: number
+  released_at: string | null
+  release_reason: string | null
+  rollback_result: Record<string, unknown> | null
+  created_at: string | null
+}
+
+export interface DeceptionProbe {
+  probe_id: string
+  source_ip: string
+  finding_id: string | null
+  evidence: Record<string, unknown> | null
+  created_at: string | null
+}
+
+export interface DeceptionSettingsWrite {
+  enabled: boolean
+  backend: string
+  honey_route_floor: number
+  ttl_seconds: number
+  max_duration_seconds: number
+  min_observations: number
+  window_seconds: number
+  allowlist: string
+}
+
+export const deceptionApi = {
+  getStatus: () => api.get('/deception/status'),
+  getLeases: (params?: { status?: string; limit?: number }) =>
+    api.get('/deception/leases', { params }),
+  releaseLease: (leaseId: string, reason?: string) =>
+    api.post(`/deception/leases/${leaseId}/release`, reason ? { reason } : null),
+  setKillSwitch: (enabled: boolean, reason?: string) =>
+    api.post('/deception/kill-switch', { enabled, reason: reason ?? null }),
+  updateSettings: (data: DeceptionSettingsWrite) =>
+    api.post('/deception/settings', data),
+  getProbes: (params?: { source_ip?: string; limit?: number }) =>
+    api.get('/deception/probes', { params }),
+}
+
 export const caseMetricsApi = {
   getSummary: () => api.get('/cases/metrics/summary'),
   getMTTD: (params?: { start_date?: string; end_date?: string; priority?: string }) =>

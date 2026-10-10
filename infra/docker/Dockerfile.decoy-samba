@@ -1,0 +1,35 @@
+# =============================================================================
+# Decoy-samba — the SMB endpoint OpenCanary watches
+#
+# Samba with full_audit + rsyslog writing the audit feed onto the shared
+# decoy_logs volume; OpenCanary (decoy-opencanary) tails that file and alerts.
+# The share is fake, the host is isolated (decoy-net, internal), and nothing
+# here is a real credential. The rootfs is read-only at runtime (compose) —
+# the share itself only accepts writes that fail, which the audit still logs.
+# =============================================================================
+
+FROM debian:bookworm-slim
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+LABEL org.opencontainers.image.title="vigil-decoy-samba"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      samba \
+      samba-vfs-modules \
+      rsyslog \
+      smbclient \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY infra/docker/decoy/smb.conf /etc/samba/smb.conf
+COPY infra/docker/decoy/rsyslog-samba.conf /etc/rsyslog.d/30-samba-audit.conf
+COPY infra/docker/decoy/samba-entrypoint.sh /usr/local/bin/decoy-samba-entrypoint
+RUN chmod +x /usr/local/bin/decoy-samba-entrypoint \
+    && mkdir -p /srv/decoy-share
+
+EXPOSE 445
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD smbclient -L localhost -N >/dev/null 2>&1
+
+ENTRYPOINT ["/usr/local/bin/decoy-samba-entrypoint"]

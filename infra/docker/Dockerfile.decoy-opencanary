@@ -1,0 +1,38 @@
+# =============================================================================
+# Decoy-opencanary — low-interaction HTTP honeypot + SMB audit watcher
+#
+# Only pip-installed opencanary; no other dependencies. The SMB endpoint
+# itself is the sibling decoy-samba container: OpenCanary watches its audit
+# log on the shared decoy_logs volume and alerts as JSON for the shipper.
+# Config is upstream's generated default with the farm's overrides merged at
+# build time — every module off except http + smb (see
+# services/decoy_farm/opencanary_config.py).
+# =============================================================================
+
+ARG PYTHON_VERSION=3.12
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG VIGIL_VERSION=
+LABEL org.opencontainers.image.version="${VIGIL_VERSION}"
+LABEL org.opencontainers.image.title="vigil-decoy-opencanary"
+
+RUN pip install --no-cache-dir opencanary==0.9.10
+
+COPY services/decoy_farm/ /app/services/decoy_farm/
+
+# Upstream's generated default config, then the farm's overrides — the build
+# fails loudly if either step breaks.
+RUN opencanaryd --copyconfig \
+    && python3 /app/services/decoy_farm/opencanary_config.py /etc/opencanaryd/opencanary.conf
+
+COPY infra/docker/decoy/opencanary-entrypoint.sh /usr/local/bin/opencanary-entrypoint
+RUN chmod +x /usr/local/bin/opencanary-entrypoint
+
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080', timeout=3)"
+
+ENTRYPOINT ["/usr/local/bin/opencanary-entrypoint"]

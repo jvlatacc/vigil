@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from core.agents import run_start
 from core.agents.run_limits import MAX_COST_USD, MAX_ITERATIONS
 from core.api.v1 import agent_runs_router
 from core.routing import request_unit_of_work
@@ -25,8 +26,8 @@ def client(monkeypatch, authenticate_app):
         queued.append(job)
         return "job-1"
 
-    monkeypatch.setattr(agent_runs_router, "enqueue_run", _enqueue)
-    monkeypatch.setattr(agent_runs_router, "_begin_run_row", lambda *a, **k: None)
+    monkeypatch.setattr(run_start, "enqueue_run", _enqueue)
+    monkeypatch.setattr(run_start, "_begin_run_row", lambda *a, **k: None)
     app = FastAPI()
     authenticate_app(app)
     app.include_router(agent_runs_router.router, prefix="/api/agent-runs")

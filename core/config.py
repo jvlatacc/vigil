@@ -270,6 +270,29 @@ class Settings(BaseSettings):
     daemon_high_action_floor: float = 0.80
     daemon_force_approval: bool = False
     daemon_dry_run: bool = False
+    # Deception / honey-routing (feature 5). Every default is inert: the
+    # posture is off and the steering backend is dry-run until an operator
+    # configures both. The floors below live in core/deception/config.py's
+    # DeceptionConfig, read from these fields.
+    daemon_deception_enabled: bool = False
+    daemon_deception_backend: str = "dry_run"
+    # Auto-approve floor for honey_route rows — below the 0.90 deny bar on
+    # purpose (transparent + reversible), above high_action_floor.
+    daemon_honey_route_floor: float = 0.80
+    # One redirect lease's TTL, and the ceiling on its total life including
+    # renewals. The lease, not the approval row, is what expires.
+    daemon_honey_route_ttl: int = 3600
+    daemon_honey_route_max_duration: int = 86400
+    # Distinct recon observations a source needs inside the window before
+    # the posture may fire.
+    daemon_honey_route_min_observations: int = 3
+    daemon_honey_route_window: int = 3600
+    # Emergency stop: refuses new steering and releases active leases. The
+    # console toggle persists in system_config; this env var works alone.
+    daemon_deception_kill_switch: bool = False
+    # Comma-separated IPs/CIDRs exempt from steering (sanctioned scanners,
+    # shared NAT).
+    daemon_deception_allowlist: str = ""
     # Speculative-containment Fast-Path: deterministic, LLM-free micro-
     # containment decided in the store-to-triage window. See
     # core.response.fastpath. Ships apply-disabled and in shadow mode;

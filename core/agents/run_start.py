@@ -33,6 +33,10 @@ class WorkflowDisabled(RuntimeError):
     message ``disabled_message`` produced, so every surface answers the same
     words for the same switch."""
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
 
 class RunQueueUnavailable(RuntimeError):
     """The queue that would carry the run refused it."""
