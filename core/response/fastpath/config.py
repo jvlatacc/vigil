@@ -47,6 +47,10 @@ class FastPathConfig(BaseSettings):
     # The subset with a real enforcement integration in v1 — the rest ride
     # the simulation adapter. Dispatch reads this; the policy does not.
     enforced_action_types: frozenset[str] = frozenset({"rate_limit"})
+    # The slow track: enqueueing the adjudicate run after dispatch and the
+    # daemon's verdict scan. Off by default, like the master switch — the
+    # fast path is fully functional (TTL sweep as the fail-safe) without it.
+    adjudication_enabled: bool = False
 
     @field_validator("default_ttl_seconds", "max_ttl_seconds")
     @classmethod

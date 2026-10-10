@@ -60,6 +60,7 @@ class TaskScheduler:
             "reports_generated": 0,
             "cleanups_run": 0,
             "speculative_released": 0,
+            "adjudications_consumed": 0,
             "errors": 0,
         }
 
@@ -161,6 +162,20 @@ class TaskScheduler:
             ScheduledTask(
                 name="speculative_ttl_sweep",
                 func=self._run_speculative_ttl_sweep,
+                interval=60,
+                enabled=True,
+                run_on_start=False,
+            )
+        )
+
+        # The verdict consumer: finished adjudication runs have their
+        # CONCLUDE verdict applied once. Same shape as the sweep — an
+        # empty query until an adjudication finishes, so it registers
+        # unconditionally and lets the config gate the work per tick.
+        self._tasks.append(
+            ScheduledTask(
+                name="speculative_verdict_scan",
+                func=self._run_speculative_verdict_scan,
                 interval=60,
                 enabled=True,
                 run_on_start=False,
@@ -455,6 +470,31 @@ class TaskScheduler:
             "speculative_examined": outcome.examined,
             "speculative_released": outcome.released,
         }
+
+    async def _run_speculative_verdict_scan(self):
+        """Apply the verdicts of finished adjudication runs — the review seam's clock.
+
+        Off-thread for the DB work like the sweep above. Ticks while
+        adjudication is disabled cost one config read; the scan is a
+        no-op query while no adjudication run exists.
+        """
+        from core.response.fastpath.config import FastPathConfig
+
+        config = FastPathConfig()
+        if not config.adjudication_enabled:
+            return None
+        from core.response.fastpath.adjudication import (
+            consume_completed_adjudications,
+        )
+
+        counts = await consume_completed_adjudications(config=config)
+        if counts.get("examined"):
+            logger.info(
+                "Speculative verdict scan: %s",
+                {k: v for k, v in counts.items() if v},
+            )
+        self.stats["adjudications_consumed"] += counts.get("consumed", 0)
+        return {"adjudication_verdicts": counts}
 
     async def _run_sandbox_poll(self):
         """Advance pending sandbox submissions to completed reports."""

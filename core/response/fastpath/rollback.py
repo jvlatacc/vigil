@@ -1,14 +1,16 @@
-"""The rollback verbs: release, escalate, expire.
+"""The rollback verbs: release, escalate, retain, expire.
 
-Three ways a speculative row leaves its live state, all converging on the
-same terminal transitions. ``release`` drives the enforcement adapter's
-release verb and marks the row ``rolled_back`` — the widened idempotency
-index (seed 40) then frees the key, so the target can be restricted again.
-``escalate`` creates the full containment action through the unmodified
-approval pipeline — a person still decides, whatever confidence says — and
-links it from the speculative row, which becomes ``escalated``.
-``expire`` is the fail-safe: a sweep that releases every speculative row
-past ``expires_at`` regardless of what adjudication is doing.
+Four ways a speculative row's live state changes, three of them terminal.
+``release`` drives the enforcement adapter's release verb and marks the row
+``rolled_back`` — the widened idempotency index (seed 40) then frees the
+key, so the target can be restricted again. ``escalate`` creates the full
+containment action through the unmodified approval pipeline — a person
+still decides, whatever confidence says — and links it from the
+speculative row, which becomes ``escalated``. ``retain`` extends the row's
+expiry once, bounded by the ceiling — the row stays speculative, and no
+second retain is possible. ``expire`` is the fail-safe: a sweep that
+releases every speculative row past ``expires_at`` regardless of what
+adjudication is doing.
 
 Two invariants shape the order of operations. The adapter I/O happens
 before any status write: a row only says ``rolled_back`` once the
@@ -22,7 +24,7 @@ still done no harm at the vendor.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from sqlalchemy import select
@@ -73,6 +75,12 @@ TTL_SWEEP_ACTOR = "ttl-sweep"
 # The #917 field names — one string shape, everywhere, for later parsing.
 RELEASE_REASON_FIELD = "fast_path.release_reason"
 ESCALATION_LINK_FIELD = "fast_path.escalation"
+RETENTION_RULE_FIELD = "fast_path.retention"
+
+# The once-per-action retention marker, inside ``parameters["adjudication"]``.
+# The retain claim reads it under the row lock, so a second retain — a racing
+# adjudicator or a replayed scan — reads its own write and refuses.
+RETENTION_FIELD = "retention"
 
 # Rows released per sweep tick. The rest wait for the next one — the sweep
 # runs every minute, and a bounded batch keeps a pile-up of expiries from
@@ -136,6 +144,22 @@ class EscalationOutcome:
     escalated: bool
     full_action: Optional[PendingAction]
     detail: str
+
+
+@dataclass(frozen=True)
+class RetainOutcome:
+    """What one retain attempt did.
+
+    ``extended=False`` is a refusal (not speculative, or already retained
+    once) or a lost race, said in ``detail``; the row is left exactly as
+    it was found, and the TTL sweep keeps its appointment either way.
+    """
+
+    action_id: str
+    extended: bool
+    detail: str
+    expires_at: Optional[datetime] = None
+    extension_seconds: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -394,6 +418,78 @@ class RollbackService:
             True,
             full,
             f"escalated to {full.action_id} ({full.action_type})",
+        )
+
+    # ------------------------------------------------------------------
+    # retain — the adjudicator's one bounded extension
+    # ------------------------------------------------------------------
+
+    def retain(
+        self, action_id: str, extension_seconds: Optional[int], *, actor: str
+    ) -> RetainOutcome:
+        """Extend a live speculative row's expiry — once, and bounded.
+
+        The adjudicator's ``retain`` verdict: one more window on the same
+        restriction, asked while the row is still live. The ask is clamped
+        to ``max_ttl_seconds`` — an adjudicator's retain may never hold a
+        restriction past the hard ceiling — and applies at most once per
+        action: the claim reads the retention marker inside the row lock,
+        so a second retain refuses without touching the row. The extension
+        runs from the current expiry, not from now: a retain says "keep it
+        longer", not "restart the clock". A row another actor resolved
+        first is refused — the fail-safe always wins.
+        """
+        ask = (
+            extension_seconds
+            if extension_seconds is not None
+            else self.config.default_ttl_seconds
+        )
+        if ask <= 0:
+            return RetainOutcome(action_id, False, f"non-positive retention ask {ask}")
+        extension = min(ask, self.config.max_ttl_seconds)
+        now = datetime.now(timezone.utc)
+        db = get_db_manager()
+        with db.session_scope() as session:
+            row = session.execute(
+                select(ApprovalAction)
+                .where(ApprovalAction.action_id == action_id)
+                .where(ApprovalAction.status == ActionStatus.SPECULATIVE.value)
+                .with_for_update()
+            ).scalar_one_or_none()
+            if row is None:
+                return RetainOutcome(
+                    action_id,
+                    False,
+                    "action is not speculative (unknown or already resolved)",
+                )
+            parameters = dict(row.parameters or {})
+            adjudication = dict(parameters.get("adjudication") or {})
+            if adjudication.get(RETENTION_FIELD):
+                previous = adjudication[RETENTION_FIELD]
+                return RetainOutcome(
+                    action_id,
+                    False,
+                    f"already retained once by {previous.get('actor')!r}",
+                )
+            base = row.expires_at or now
+            current = base if base > now else now
+            new_expiry = current + timedelta(seconds=extension)
+            adjudication[RETENTION_FIELD] = {
+                "asked_seconds": ask,
+                "extension_seconds": extension,
+                "actor": actor,
+                "from": current.isoformat(),
+                "to": new_expiry.isoformat(),
+                "at": now.isoformat(),
+            }
+            parameters["adjudication"] = adjudication
+            row.expires_at = new_expiry
+            row.parameters = parameters
+            base_reason = row.reason or ""
+            annotation = decision_rule(RETENTION_RULE_FIELD, str(extension))
+            row.reason = f"{base_reason}; {annotation}" if base_reason else annotation
+        return RetainOutcome(
+            action_id, True, f"retained {extension}s", new_expiry, extension
         )
 
     # ------------------------------------------------------------------

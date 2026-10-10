@@ -16,6 +16,7 @@ from core.time import utcnow
 if TYPE_CHECKING:
     # Type-only: the runtime import stays inside the lazy build so a disabled
     # fast path imports none of the enforcement stack.
+    from core.response.approval_service import PendingAction
     from core.response.fastpath.speculative_service import SpeculativeActionService
 
 from services.daemon.config import ProcessingConfig, ResponseConfig
@@ -1129,10 +1130,34 @@ REASONING: [Brief explanation]
                     finding.get("finding_id"),
                     decision.rule,
                 )
+                await self._enqueue_adjudication(outcome.action)
         except Exception:  # noqa: BLE001 — the fast path must never fail the finding
             self.stats["fast_path_errors"] += 1
             logger.exception(
                 "fast path dispatch failed for finding %s; the slow path is "
                 "unaffected",
                 finding.get("finding_id"),
+            )
+
+    async def _enqueue_adjudication(self, action: "PendingAction") -> None:
+        """Send the row's adjudication on its way — additive, never gating.
+
+        The dispatch and the enqueue are deliberately separate failure
+        domains: a queue that refuses (or a config read that fails) is
+        logged and the row waits for the TTL sweep, which is the fail-safe
+        regardless. The enqueue re-reads the committed row itself, so the
+        brief describes only what the ledger actually holds.
+        """
+        if not self.fast_path_config.adjudication_enabled:
+            return
+        try:
+            from services.daemon.speculative_adjudication import (
+                enqueue_speculative_adjudication,
+            )
+
+            await enqueue_speculative_adjudication(action, self.fast_path_config)
+        except Exception:  # noqa: BLE001 — adjudication is additive
+            logger.exception(
+                "adjudication enqueue failed for %s; the row resolves by its " "TTL",
+                action.action_id,
             )
