@@ -33,7 +33,8 @@ class SwatchGallery extends StatelessWidget {
                   height: 44,
                   decoration: BoxDecoration(
                     color: colors.byName(name),
-                    borderRadius: BorderRadius.circular(metrics.radiusCardInner),
+                    borderRadius:
+                        BorderRadius.circular(metrics.radiusCardInner),
                     border: Border.all(color: colors.ln1),
                   ),
                 ),

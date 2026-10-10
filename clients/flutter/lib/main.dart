@@ -66,7 +66,8 @@ class _NeedsYouHomeState extends State<NeedsYouHome> {
               height: 24,
               decoration: BoxDecoration(
                 color: colors.dtRed,
-                borderRadius: BorderRadius.circular(context.vigilMetrics.radiusPillSm - 3),
+                borderRadius: BorderRadius.circular(
+                    context.vigilMetrics.radiusPillSm - 3),
               ),
               alignment: Alignment.center,
               child: Text(
@@ -75,7 +76,8 @@ class _NeedsYouHomeState extends State<NeedsYouHome> {
               ),
             ),
             const SizedBox(width: 8),
-            const Text('What needs a person', style: VigilTypography.sectionTitle),
+            const Text('What needs a person',
+                style: VigilTypography.sectionTitle),
           ],
         ),
         actions: [
@@ -83,7 +85,8 @@ class _NeedsYouHomeState extends State<NeedsYouHome> {
             tooltip: 'Design system',
             icon: const VigilIcon(VigilIcons.wall),
             onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const DesignSystemScreen()),
+              MaterialPageRoute<void>(
+                  builder: (_) => const DesignSystemScreen()),
             ),
           ),
         ],
@@ -177,18 +180,24 @@ class DesignSystemScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: VigilTypography.sectionTitle.copyWith(color: colors.tx0)),
+              Text(title,
+                  style:
+                      VigilTypography.sectionTitle.copyWith(color: colors.tx0)),
               const SizedBox(height: 12),
               child,
             ],
           ),
         );
     return Scaffold(
-      appBar: AppBar(title: const Text('Design system', style: VigilTypography.sectionTitle)),
+      appBar: AppBar(
+          title:
+              const Text('Design system', style: VigilTypography.sectionTitle)),
       body: ListView(
         children: [
-          section('Colors — .vg-dark', const SwatchGallery(colors: VigilColors.dark)),
-          section('Colors — .vg-light', const SwatchGallery(colors: VigilColors.light)),
+          section('Colors — .vg-dark',
+              const SwatchGallery(colors: VigilColors.dark)),
+          section('Colors — .vg-light',
+              const SwatchGallery(colors: VigilColors.light)),
           section('Icons', const IconGallery()),
           section('Type ramp', const TypeRampGallery()),
         ],

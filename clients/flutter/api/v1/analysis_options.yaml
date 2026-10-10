@@ -1,0 +1,23 @@
+# Analysis policy for the GENERATED api/v1 package (vigil_api_v1).
+#
+# Everything under lib/ is emitted by `tool/generate_api_client.py` — the
+# app's own analysis options never apply here. The generator's output carries
+# a handful of benign lints (model imports some API classes don't use, one
+# raw-generic in the shared serializer registry); they are ignored as a
+# generated-code policy so `flutter analyze` from the app stays clean and the
+# drift gate (`generate_api_client.py --check`) stays the source of truth for
+# this package. Real diagnostics (errors) are NOT downgraded — the generate
+# script patches the generator's non-compiling serializer bodies instead.
+analyzer:
+  language:
+    strict-inference: true
+    strict-raw-types: true
+    strict-casts: false
+  exclude:
+    - test/*.dart
+  errors:
+    deprecated_member_use_from_same_package: ignore
+    unused_import: ignore
+    duplicate_import: ignore
+    unused_element_parameter: ignore
+    strict_raw_type: ignore

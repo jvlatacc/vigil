@@ -7,16 +7,24 @@ environment:
   sdk: ^3.5.4
 
 dependencies:
+  dio: ^5.7.0
   flutter:
     sdk: flutter
+  # Tokens at rest — iOS Keychain / Android Keystore / desktop keyrings.
+  flutter_secure_storage: ^9.2.2
   # SVG path-data parser for the VigilIcons stroke set (pure Dart, the same
   # parser flutter_svg uses).
   path_parsing: ^1.1.0
+  # Generated dart-dio client for the frozen /api/v1 contract
+  # (tool/generate_api_client.py). Pure Dart; shares the app's Dio instance.
+  vigil_api_v1:
+    path: api/v1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_secure_storage_platform_interface: ^1.1.2
 
 flutter:
   uses-material-design: true

@@ -14,12 +14,14 @@ void main() {
 
   setUpAll(() {
     manifest = jsonDecode(
-      File('../../docs/design/console/assets/icons/icons.json').readAsStringSync(),
+      File('../../docs/design/console/assets/icons/icons.json')
+          .readAsStringSync(),
     ) as Map<String, dynamic>;
   });
 
   test('icon count matches the manifest (82-icon line set)', () {
-    expect(manifest.length, 82, reason: 'manifest size changed? re-audit the set');
+    expect(manifest.length, 82,
+        reason: 'manifest size changed? re-audit the set');
     expect(VigilIcons.all.length, manifest.length,
         reason: 'VigilIcons drifted from icons.json');
     expect(VigilIcons.byName.length, manifest.length);
@@ -29,7 +31,8 @@ void main() {
     for (final entry in manifest.entries) {
       final icon = VigilIcons.byName[entry.key];
       expect(icon, isNotNull, reason: 'missing icon: ${entry.key}');
-      expect(icon!.path.trim(), entry.value, reason: 'path drift: ${entry.key}');
+      expect(icon!.path.trim(), entry.value,
+          reason: 'path drift: ${entry.key}');
       expect(icon.name, entry.key);
     }
   });

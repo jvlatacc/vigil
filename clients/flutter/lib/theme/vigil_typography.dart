@@ -32,6 +32,7 @@ class VigilTypography {
     fontWeight: FontWeight.w700,
     fontFamily: uiFamily,
   );
+
   /// token weight 650 -> w700 (static-font CSS matching).
   static const TextStyle sectionTitle = TextStyle(
     fontSize: 13,
@@ -54,6 +55,7 @@ class VigilTypography {
     fontWeight: FontWeight.w600,
     fontFamily: uiFamily,
   );
+
   /// token pairs this style with tx2.
   static const TextStyle meta = TextStyle(
     fontSize: 12,
