@@ -9,8 +9,10 @@ import { NAV } from '../data/data'
 // these resolve to the mocked implementations (vi.mock below is hoisted)
 import api, { streamFetch, aiDecisionsApi, approvalsApi, workflowApi, configApi, consoleApi, timelineApi } from '../services/api'
 
-const authState = vi.hoisted(() => ({
-  allow: (_permission: string): boolean => true,
+// Typed wide: tests below reassign allow with implementations that inspect
+// the permission; a zero-arg default is assignable to it without lint noise.
+const authState: { allow: (permission: string) => boolean } = vi.hoisted(() => ({
+  allow: () => true,
 }))
 
 vi.mock('../contexts/AuthContext', () => ({

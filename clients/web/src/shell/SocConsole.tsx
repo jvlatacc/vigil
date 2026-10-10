@@ -32,6 +32,7 @@ import AnalyticsScreen from '../screens/analytics/AnalyticsScreen'
 import DecisionsScreen from '../screens/decisions/DecisionsScreen'
 import WorkflowsScreen from '../screens/workflows/WorkflowsScreen'
 import AutoOpsScreen from '../screens/autoops/AutoOpsScreen'
+import NetworkTwinScreen from '../screens/twin/NetworkTwinScreen'
 import HealthScreen from '../screens/health/HealthScreen'
 import HomeScreen from '../screens/home/HomeScreen'
 import SettingsScreen from '../screens/settings/SettingsScreen'
@@ -49,7 +50,7 @@ import {
 } from './statusLine'
 
 const PRIMARY_KEYS = ['home', 'overview', 'triage', 'cases', 'workflows', 'settings']
-const MORE_KEYS = ['dashboard', 'metrics', 'analytics', 'decisions', 'autoops', 'health']
+const MORE_KEYS = ['dashboard', 'metrics', 'analytics', 'decisions', 'autoops', 'twin', 'health']
 
 const AUTONOMY_ACT = 'Autonomy · Act · reversible changes on its own'
 const AUTONOMY_ASSIST = 'Autonomy · Assist · asks before changes'
@@ -65,6 +66,7 @@ const SCREENS: Record<ConsoleScreenKey, (props: ConsoleScreenProps) => JSX.Eleme
   decisions: DecisionsScreen,
   workflows: WorkflowsScreen,
   autoops: AutoOpsScreen,
+  twin: NetworkTwinScreen,
   health: HealthScreen,
   settings: SettingsScreen,
 }

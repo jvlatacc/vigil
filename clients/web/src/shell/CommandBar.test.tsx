@@ -8,12 +8,15 @@ import { ToastProvider } from './toast'
 import type { BoardLink } from './commandBarModel'
 
 const { execute, createCase, deleteCase, readDoc, checkCoverage, attachDocument, getCase, getFinding, getIntegrations, apiGet, apiPost } = vi.hoisted(() => ({
-  execute: vi.fn((..._args: unknown[]) => Promise.resolve({ data: {} })),
-  createCase: vi.fn((..._args: unknown[]) => Promise.resolve({ data: { case_id: 'case-new' } })),
-  deleteCase: vi.fn((..._args: unknown[]) => Promise.resolve({ data: {} })),
-  readDoc: vi.fn((..._args: unknown[]) => Promise.resolve({ data: { text: '', pages: 1, condensed: false } })),
-  checkCoverage: vi.fn((..._args: unknown[]) => Promise.resolve({ data: {} })),
-  attachDocument: vi.fn((..._args: unknown[]) => Promise.resolve({ data: {} })),
+  // Wide signatures on the mocks, zero-arg default impls: wrappers call them
+  // with real args and tests index mock.calls and swap payloads per test, so
+  // the type keeps the args and leaves the payload unknown.
+  execute: vi.fn<(id: string, params: unknown) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: {} })),
+  createCase: vi.fn<(data: unknown) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: { case_id: 'case-new' } })),
+  deleteCase: vi.fn<(id: string) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: {} })),
+  readDoc: vi.fn<(file: File) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: { text: '', pages: 1, condensed: false } })),
+  checkCoverage: vi.fn<(body: unknown) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: {} })),
+  attachDocument: vi.fn<(id: string, file: File, opts: unknown) => Promise<{ data: unknown }>>(() => Promise.resolve({ data: {} })),
   getCase: vi.fn(),
   getFinding: vi.fn(),
   getIntegrations: vi.fn(),
