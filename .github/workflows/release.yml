@@ -485,6 +485,11 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
 
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1
+
       - name: Sign image (keyless)
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
@@ -696,7 +701,7 @@ jobs:
     # multi-arch index digests cosign signed and SBOM-attested. smoke-test
     # already gated on them transitively, so ordering is unchanged: SBOMs
     # attach only to a verified release.
-    needs: [version, smoke-test, build-backend, build-daemon, build-agent]
+    needs: [version, smoke-test, build-backend, build-daemon, build-agent, build-enforcer]
     permissions:
       contents: write    # edit release body
       packages: read
