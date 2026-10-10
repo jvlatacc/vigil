@@ -96,6 +96,12 @@ aiokafka>=0.14.0
 taxii2-client>=2.3.0
 stix2>=3.0.2
 
+# Local SLM triage for the Warden edge runtime (optional). Deliberately absent
+# from requirements.lock: a native-build dependency must not land in every
+# image, and the lazy import in services/warden/triage.py degrades triage to
+# rules-only when it is missing. Install only where the SLM channel is wanted:
+#   pip install -r requirements-warden-slm.txt
+
 # PDF report generation (chat reports, case reports). The feature ships in
 # services/api/routers/claude.py → /generate-chat-report; without this dep the endpoint
 # returns 503 even though the feature is wired into the UI.

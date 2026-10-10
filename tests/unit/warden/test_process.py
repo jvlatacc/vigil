@@ -390,3 +390,43 @@ class TestBuildWarden:
         warden = warden_main.build_warden(config, trust_root=root)
         assert isinstance(warden, Warden)
         assert warden.config.node_id == "wn-env0000"
+
+    def test_build_warden_wires_slm_when_model_path_set(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        key = make_policy_key()
+        root_path = _write_root_file(tmp_path, key)
+        model_path = tmp_path / "security-slm-1b-q4.gguf"
+        model_path.write_bytes(b"staged-by-the-operator")
+        monkeypatch.setenv("WARDEN_CONTROL_PLANE_URL", "http://127.0.0.1:6987")
+        monkeypatch.setenv("WARDEN_NODE_ID", "wn-env0000")
+        monkeypatch.setenv("WARDEN_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("WARDEN_TRUST_ROOT_PATH", str(root_path))
+        monkeypatch.setenv("WARDEN_SLM_MODEL_PATH", str(model_path))
+
+        config = WardenConfig.from_env()
+        assert config.slm_model_path == model_path
+        root = load_trust_root(config.trust_root_path, now=NOW)
+        warden = warden_main.build_warden(config, trust_root=root)
+
+        assert warden._loop is not None
+        assert warden._loop._deps.slm is not None
+        # No pack yet: the channel is unloaded, not failed.
+        assert warden._loop._deps.slm.status()["state"] == "unloaded"
+
+    def test_build_warden_without_model_path_has_no_slm_channel(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        key = make_policy_key()
+        root_path = _write_root_file(tmp_path, key)
+        monkeypatch.setenv("WARDEN_CONTROL_PLANE_URL", "http://127.0.0.1:6987")
+        monkeypatch.setenv("WARDEN_NODE_ID", "wn-env0000")
+        monkeypatch.setenv("WARDEN_DATA_DIR", str(tmp_path / "data"))
+        monkeypatch.setenv("WARDEN_TRUST_ROOT_PATH", str(root_path))
+
+        config = WardenConfig.from_env()
+        root = load_trust_root(config.trust_root_path, now=NOW)
+        warden = warden_main.build_warden(config, trust_root=root)
+
+        assert warden._loop is not None
+        assert warden._loop._deps.slm is None

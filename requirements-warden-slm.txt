@@ -1,0 +1,10 @@
+# Optional dependency group for Warden's local SLM triage — the pip-requirements
+# shape of setup.py's extras_require. Not installed by anything by default: the
+# llama.cpp native build must never land in every image, and the runtime degrades
+# to rules-only triage when the import is missing (services/warden/triage.py).
+# Install only on hosts where the SLM channel is wanted:
+#   pip install -r requirements-warden-slm.txt
+# The model file itself is never in the repo — a signed policy pack ships a
+# model_manifest, and services/warden/triage.py verifies the file's sha256
+# against it before every load.
+llama-cpp-python>=0.3.0

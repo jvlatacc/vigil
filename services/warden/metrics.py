@@ -72,6 +72,12 @@ class WardenMetrics:
             labelnames=("reason",),
             registry=self._registry,
         )
+        self.slm_opinions = Counter(
+            "warden_slm_opinions_total",
+            "Local SLM rankings by outcome.",
+            labelnames=("outcome",),  # deciding | advisory | unavailable
+            registry=self._registry,
+        )
         self.live_actions = Gauge(
             "warden_live_actions",
             "Live reversible actions currently enforced.",
