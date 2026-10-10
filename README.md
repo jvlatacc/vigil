@@ -106,6 +106,14 @@ Enable and configure integrations under **Settings → Integrations**, or genera
 
 **Detection rules.** The detection-engineering integration ([security-detections-mcp](https://www.npmjs.com/package/security-detections-mcp)) indexes community rule sets (Sigma, Splunk ESCU, Elastic, KQL) for search, coverage analysis, and gap identification. Vigil does not ship the rules; fetch them with `./scripts/setup_detection_repos.sh` (or `SETUP_DETECTION_REPOS=1 ./setup_dev.sh`).
 
+## Security
+
+Authentication is on by default (no account or default password ships; the first visit creates the admin), and every request is authorized: each `/api` route requires a named permission or a recorded exemption, and tool dispatch — backend and MCP, on every call surface — checks the caller's permission before any transport work. A user's effective permissions are the union of their primary and additional roles, and a user can only grant role combinations whose permissions they already hold. Roles and per-user assignments are administered in the console.
+
+MCP calls authenticate with tokens your identity provider issues, not static keys. URL-based MCP servers are reached natively over streamable-HTTP carrying RFC 8707 resource-bound OAuth 2.1 tokens — acquired, cached, and refreshed by Vigil — and Vigil's own `/mcp` surface accepts IdP-issued JWTs beside credentials minted from Settings. The token proves who; Vigil's roles decide what. See [MCP OAuth](docs/mcp-oauth.md) for setup on Okta, Entra ID, Keycloak, and Auth0.
+
+Vulnerability reporting and supported versions: [SECURITY.md](SECURITY.md).
+
 ---
 
 ## Quick Start
