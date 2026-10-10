@@ -353,7 +353,9 @@ class MCPService:
         # Read-only use — no child env is built here (nothing spawns), so
         # the CA-bundle forwarding the child-env ratchet requires does not
         # apply to this site.
-        env = os.environ  # noqa: ENV001 - read-only substitution source; no child env built
+        env = (
+            os.environ
+        )  # noqa: ENV001 - read-only substitution source; no child env built
 
         raw_url = str(http_cfg.get("url") or "")
         url = self._substitute_env_vars(raw_url, env)
