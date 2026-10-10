@@ -73,6 +73,21 @@ Per-component names and labels.
 {{- printf "%s-agent-serve" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- define "vigil.warden.fullname" -}}
+{{- printf "%s-warden" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* Warden's own token Secret — deliberately not the shared app Secret:
+     node credentials enroll and revoke independently of the control
+     plane's secrets. */}}
+{{- define "vigil.warden.secretName" -}}
+{{- if .Values.warden.tokens.existingSecret -}}
+{{- .Values.warden.tokens.existingSecret -}}
+{{- else -}}
+{{- printf "%s-secret" (include "vigil.warden.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "vigil.postgres.fullname" -}}
 {{- printf "%s-postgres" (include "vigil.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
@@ -167,6 +182,7 @@ The "llmWorker" component always reuses the backend image.
          which command the Deployment runs (infra/docker/Dockerfile.agent). */ -}}
   {{- if eq $comp "agentWorker" -}}{{- $suffix = "agent" -}}{{- end -}}
   {{- if eq $comp "agentServe" -}}{{- $suffix = "agent" -}}{{- end -}}
+  {{- if eq $comp "warden" -}}{{- $suffix = "warden" -}}{{- end -}}
   {{- $repo = printf "%s/%s-%s" $registry $ns $suffix -}}
 {{- end -}}
 {{- if eq $tag "" -}}

@@ -276,4 +276,42 @@ spec:
         - protocol: TCP
           port: {{ .Values.redis.service.port }}
 {{- end }}
+---
+{{- if .Values.warden.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "vigil.fullname" . }}-warden
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "warden") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "warden") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # Sentinel intake: only from configured CIDRs (empty = cluster-internal
+    # only). Alert producers (EDR/syslog shippers) belong here.
+    {{- with .Values.networkPolicies.warden.sentinelAllowFrom }}
+    - from:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.warden.ports.sentinel }}
+    {{- end }}
+    # Cluster-internal to all warden ports (kubelet probes, in-cluster calls).
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.warden.ports.sentinel }}
+        - protocol: TCP
+          port: {{ .Values.warden.ports.health }}
+        - protocol: TCP
+          port: {{ .Values.warden.ports.metrics }}
+{{- end }}
 {{- end }}

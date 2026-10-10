@@ -1,0 +1,172 @@
+{{- if .Values.warden.enabled }}
+{{- /*
+Warden — edge containment runtime, one per defended node.
+
+A DaemonSet, not a Deployment: each node in the selected fleet runs exactly
+one Warden, defending that node/segment. Warden enrolls on first start and
+persists its node identity + per-node bearer token in the data dir, so pod
+restarts on the same node stay enrolled — the hostPath volume below is that
+continuity guarantee, not env config.
+
+Trust root: required at render time when warden is enabled. A node without
+one can never verify a policy pack and would sit in BOOTSTRAP forever —
+that is a misconfiguration, and the chart refuses to hand it over silently.
+*/ -}}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "vigil.warden.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vigil.componentLabels" (dict "context" . "component" "warden") | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vigil.componentSelectorLabels" (dict "context" . "component" "warden") | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        {{- include "vigil.componentLabels" (dict "context" . "component" "warden") | nindent 8 }}
+        {{- with .Values.warden.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/warden-secret.yaml") . | sha256sum }}
+        {{- with .Values.warden.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vigil.serviceAccountName" . }}
+      {{- include "vigil.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.warden.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: warden
+          image: {{ include "vigil.image" (dict "context" . "component" "warden") | quote }}
+          imagePullPolicy: {{ include "vigil.imagePullPolicy" (dict "context" . "component" "warden") }}
+          ports:
+            - name: sentinel
+              containerPort: {{ .Values.warden.ports.sentinel }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.warden.ports.health }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.warden.ports.metrics }}
+              protocol: TCP
+          env:
+            # Control plane (policy fetch + journal reconcile): the in-cluster
+            # backend Service by default; override for a remote control plane.
+            - name: WARDEN_CONTROL_PLANE_URL
+              value: {{ .Values.warden.controlPlaneUrl | default (printf "http://%s:%v" (include "vigil.backend.fullname" .) .Values.backend.service.port) | quote }}
+            # Trust material is mounted read-only below.
+            - name: WARDEN_TRUST_ROOT_PATH
+              value: /app/trust-root/trust-root.json
+            - name: WARDEN_DATA_DIR
+              value: {{ .Values.warden.persistence.mountPath | quote }}
+            # 0.0.0.0 so kubelet probes, scrapers and alert producers reach
+            # the listeners (the host-run default is loopback).
+            - name: WARDEN_BIND_HOST
+              value: 0.0.0.0
+            - name: WARDEN_LOG_LEVEL
+              value: {{ .Values.warden.logLevel | quote }}
+            {{- with .Values.warden.node.segmentLabels }}
+            - name: WARDEN_SEGMENT_LABELS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.warden.node.selfAddresses }}
+            # Extends the protected-target guard (self/gateway/control-plane/
+            # DNS are always covered) with this node's own addresses.
+            - name: WARDEN_SELF_ADDRESSES
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.warden.node.id }}
+            # Normally empty — enrollment persists node identity in the data
+            # dir and restarts reuse it.
+            - name: WARDEN_NODE_ID
+              value: {{ . | quote }}
+            {{- end }}
+            # Tokens come from the warden Secret (chart-rendered, pre-created,
+            # or ExternalSecret-materialized). optional: true — an enrolled
+            # node restarting legitimately has neither key present.
+            - name: WARDEN_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vigil.warden.secretName" . }}
+                  key: WARDEN_ENROLLMENT_TOKEN
+                  optional: true
+            - name: WARDEN_SENTINEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vigil.warden.secretName" . }}
+                  key: WARDEN_SENTINEL_TOKEN
+                  optional: true
+            {{- with .Values.warden.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Probes ride the same /health the image HEALTHCHECK reads. A dead
+          # component task answers 503, so liveness catches a stopped loop —
+          # a Warden that stopped defending must look stopped.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.warden.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.warden.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            # Trust material: read-only, a path of its own — not under the
+            # writable data dir.
+            - name: trust-root
+              mountPath: /app/trust-root
+              readOnly: true
+            {{- if .Values.warden.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.warden.persistence.mountPath }}
+            {{- end }}
+      volumes:
+        - name: trust-root
+          configMap:
+            name: {{ required "warden.trustRoot.existingConfigMap is required when warden.enabled (nodes verify policy packs offline against it)" .Values.warden.trustRoot.existingConfigMap }}
+        {{- if .Values.warden.persistence.enabled }}
+        - name: data
+          hostPath:
+            path: {{ .Values.warden.persistence.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
+      {{- with .Values.warden.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.warden.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.warden.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -892,6 +892,10 @@ networkPolicies:
     # policy takes the Deployment down. Set false on Calico or Cilium, which
     # permit node-sourced health checks — then only the backend can reach it.
     allowProbesFromAnyNamespace: true
+  warden:
+    # CIDRs allowed to reach the Sentinel intake port. Empty means
+    # cluster-internal only. Alert producers on defended hosts belong here.
+    sentinelAllowFrom: []
 
 # -----------------------------------------------------------------------------
 # Development utilities (issue #117) — off by default, not for production
@@ -936,6 +940,106 @@ pgadmin:
     limits:
       cpu: 500m
       memory: 512Mi
+
+# -----------------------------------------------------------------------------
+# Warden — edge containment runtime (Local Autonomy Mesh)
+# -----------------------------------------------------------------------------
+# One Warden per defended node: opt-in DaemonSet. Nodes enroll on first start
+# (one-time enrollment token), pull signed policy packs from the control
+# plane, enforce only what the signed autonomy envelope allows, and reconcile
+# their hash-chained journal on reconnect. Warden never touches Postgres or
+# Redis. The image defaults (uid 10002, 0700 data dir, read-only root) live
+# in infra/docker/Dockerfile.warden.
+warden:
+  enabled: false
+  image:
+    repository: ""   # empty → auto-derive from global.imageNamespace + "-warden"
+    tag: ""
+    pullPolicy: ""
+  # Listeners (match services/warden/config.py defaults).
+  ports:
+    sentinel: 8091   # local alert intake (bearer-token gated)
+    health: 9092     # /health + /status — startup/liveness/readiness probes
+    metrics: 9093    # Prometheus /metrics
+  logLevel: INFO
+  # Control plane base URL for policy sync + journal reconcile. Empty → the
+  # in-cluster backend Service; override for a hub cluster or remote console.
+  controlPlaneUrl: ""
+  node:
+    # Comma-separated segment labels the control plane targets packs with.
+    segmentLabels: ""
+    # Comma-separated extra addresses the protected-target guard must never
+    # act against (this node's own service/gateway addresses). The guard
+    # always covers self/gateway/control-plane/DNS; this extends the list.
+    selfAddresses: ""
+    # Normally empty: enrollment persists node identity + bearer token in
+    # the data dir, so pod restarts on the same node stay enrolled.
+    id: ""
+  # Node credentials. Rendered into a warden-only Secret (warden-secret.yaml)
+  # or referenced — never the shared app Secret: node tokens enroll and
+  # revoke independently of the control plane's secrets.
+  tokens:
+    # Pre-created Secret with keys WARDEN_ENROLLMENT_TOKEN / WARDEN_SENTINEL_TOKEN.
+    existingSecret: ""
+    # One-time enrollment token from the control plane. Empty after
+    # enrollment is correct — the per-node token lives in the data dir.
+    enrollmentToken: ""
+    # Sentinel receiver bearer token. Empty = receiver fail-closed.
+    sentinelToken: ""
+  # Trust root for offline policy-pack verification: a ConfigMap (data key
+  # trust-root.json) the operator maintains, mounted read-only. Required at
+  # render time when warden is enabled — a node without it can never leave
+  # BOOTSTRAP, by design.
+  trustRoot:
+    existingConfigMap: ""
+  # ExternalSecrets Operator materialization of the token Secret. When
+  # enabled, warden-secret.yaml is skipped (same contract as the app
+  # secrets.externalSecret block).
+  externalSecret:
+    enabled: false
+    refreshInterval: 1h
+    secretStoreRef:
+      name: ""
+      kind: ClusterSecretStore
+    dataFrom: []
+    data: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    # Policy store + decision journal. Node-local hostPath: the journal must
+    # survive pod restarts (undoable actions live in it), and a DaemonSet pod
+    # always lands back on its node. Pre-create the directory on the host
+    # (owner 10002:10002, mode 0700) for the strictest posture — otherwise
+    # kubelet creates it and fsGroup applies.
+    enabled: true
+    mountPath: /var/lib/vigil-warden
+    hostPath: /var/lib/vigil-warden
+  # Warden's image runs uid/gid 10002 (Medic holds 10001, the app 1000).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10002
+    runAsGroup: 10002
+    fsGroup: 10002
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    # The image is built for it: the only write path is the data volume.
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
 
 # -----------------------------------------------------------------------------
 # Tests (helm test)

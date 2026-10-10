@@ -25,6 +25,7 @@ from typing import Any, Callable
 from core.edge.policy import PolicyPack
 from core.edge.target_guard import TargetGuard
 from core.edge.verify import load_root
+from services.warden.check import check_health, probe_host
 from services.warden.config import WardenConfig
 from services.warden.engine import (
     DecisionLoop,
@@ -322,9 +323,32 @@ def build_warden(config: WardenConfig, *, trust_root: dict) -> Warden:
     return warden
 
 
+def _run_check() -> int:
+    """The HEALTHCHECK path: one GET to the process's own /health listener.
+
+    Runs from the image HEALTHCHECK (Dockerfile.warden). Validation is
+    deliberately not consulted — the probe must answer before trust material
+    or enrollment exist, and a probe that required a trust root could never
+    report on a process that is waiting for one.
+    """
+    try:
+        config = WardenConfig.from_env()
+    except ValueError as exc:
+        print(f"warden check: invalid configuration: {exc}", file=sys.stderr)
+        return 2
+    code, reason = check_health(probe_host(config.bind_host), config.health_port)
+    print(f"warden check: {reason}")
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Build the process from the environment and run it until signalled."""
-    del argv  # no flags yet: the environment is the config channel
+    """Dispatch ``check`` to the probe; anything else runs the process.
+
+    The environment is the config channel — there are no other flags.
+    """
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args[:1] == ["check"]:
+        return _run_check()
     configure_logging("INFO")
     try:
         config = WardenConfig.from_env()
