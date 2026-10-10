@@ -1,4 +1,4 @@
-package ai.deeptempo.vigil_flutter
+package ai.deeptempo.vigil
 
 import io.flutter.embedding.android.FlutterActivity
 
