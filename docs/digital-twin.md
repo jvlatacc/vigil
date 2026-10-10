@@ -9,18 +9,15 @@ console reads.
 The twin is fed by observation ingest, not by inference: a host sensor, a
 seed script, or an NDR adapter posts what it saw, and every fact in the twin
 is one of those observations or an upsert of one. The vocabulary — devices,
-processes, connections — is the settled contract; the graph shape on top of
-it is still maturing, which is why the read surface the console uses is
-deliberately unversioned.
+processes, connections — is the settled contract; the graph the console reads
+is derived by ``core.twin.ingest`` and served on the versioned surface below.
 
 ## Where it lives
 
 | Piece | Path | What it is |
 |---|---|---|
 | Contract API | `core/api/v1/digital_twin_router.py` | The versioned surface at `/api/v1/digital-twin` |
-| Console API | `core/twin/twin_router.py` | Unversioned `/api/twin`, mounted from `ROUTER_META` by `services/api/discovery.py` |
-| Ingest logic | `core/twin/ingest.py` | Upsert and read logic — session-passing and commit-free, so every route joins the request's unit of work |
-| Graph derivation | `core/twin/graph.py` | `build_graph()` layers the graph from the stored rows |
+| Ingest logic | `core/twin/ingest.py` | Upsert and graph read — `build_graph_payload()` layers the graph from the stored rows; session-passing and commit-free, so every route joins the request's unit of work |
 | Models | `core/storage/models/digital_twin.py` | `TwinDevice`, `TwinProcess`, `TwinConnection` |
 | Schemas | `core/storage/schemas/digital_twin.py` | `TwinIngestBatch`, `TwinIngestResult`, `TwinDeviceListResponse`, `TwinGraphPayload` |
 | Demo seed | `scripts/seed_digital_twin_demo.py` | A five-device demo topology with a lateral-movement story |
@@ -40,15 +37,7 @@ Routes answer at the versioned paths and at their pre-version aliases
 (`legacy_prefixes`): one handler set, two addresses, the v1 contract
 convention.
 
-## The console surface: `/api/twin`
-
-`core/twin/twin_router.py` serves `GET /api/twin/graph` — a console surface,
-not a contract. The graph shape will churn as the twin matures, so the router
-lives outside the frozen `/api/v1` tree (see `core/api/v1/README.md`'s
-tie-breaker for unversioned surfaces). This is the graph the case view reads:
-it joins findings to twin rows, so a finding can carry the device and process
-context it was observed on (`_case_ids_by_finding`). The console's dedicated
-twin screen reads the versioned graph instead —
+The console's dedicated twin screen reads this surface —
 `clients/web/src/screens/twin/DigitalTwinScreen.tsx` wires
 `GET /api/v1/digital-twin/graph` (`useTwinGraph.ts`).
 
@@ -122,5 +111,4 @@ curl -sS http://localhost:6987/api/v1/digital-twin/graph \
 ```
 
 Fields beyond the natural keys shown here (roles, MACs, serials, first/last
-seen) are in the schemas: `core/storage/schemas/digital_twin.py` for the
-contract, `core/storage/schemas/twin.py` for the console graph shape.
+seen) are in the schemas: `core/storage/schemas/digital_twin.py`.

@@ -52,11 +52,6 @@ from core.storage.schemas.config import (
     UserPreferenceSchema,
 )
 from core.storage.schemas.finding import FindingSchema
-from core.storage.schemas.twin import (
-    TwinEdgeSchema,
-    TwinGraphSchema,
-    TwinNodeSchema,
-)
 from core.storage.schemas.workflow import (
     ApprovalActionSchema,
     CustomAgentSchema,
@@ -111,9 +106,6 @@ __all__ = [
     "SketchMappingSchema",
     "SystemConfigSchema",
     "ThreatIndicatorSchema",
-    "TwinEdgeSchema",
-    "TwinGraphSchema",
-    "TwinNodeSchema",
     "UserPreferenceSchema",
     "UserSchema",
     "WorkflowRunPhaseSchema",
