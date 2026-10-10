@@ -1,0 +1,29 @@
+# Command-and-control network containment: EDR C2/tunneling telemetry
+# corroborated by SIEM network evidence from the same source IP.
+#
+# The one shipped rule whose action has a real executor today: waf_block is
+# the Cloudflare WAF IP Access Rule — reversible, and the responder's poll
+# executor already runs it for approved actions.
+#
+# Confidence arithmetic: 0.86 base; single-source matches stay at 0.86 —
+# review band, pending approval. Two distinct sources -> 0.96, inside the
+# auto band (>= 0.90): corroboration is what buys autonomy here, never a
+# lone feed. Blocking an IP is reversible; the approval ladder treats it so.
+#
+# SIEM steps are poll-bound (Splunk 300 s / CrowdStrike 60 s defaults): the
+# window accounts for poll cadence and does not promise sub-second
+# containment on polled feeds.
+id: network-containment-c2
+entity_key_fields: [src_ip, host]
+window_seconds: 1200
+steps:
+  - sources: [crowdstrike, sentinelone, microsoft_defender]
+    techniques: [T1071, T1572]
+    min_severity: medium
+    max_gap_seconds: 600
+  - sources: [splunk, elastic, opensearch]
+    techniques: [T1071, T1095, T1041]
+    max_gap_seconds: 900
+action_type: waf_block
+target_field: src_ip
+base_confidence: 0.86

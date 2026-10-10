@@ -400,6 +400,16 @@ class Settings(BaseSettings):
     daemon_bind_host: str = "0.0.0.0"  # nosec B104
     daemon_health_port: int = 9091
 
+    # Streaming CEP (core/cep): the daemon's in-flight correlation engine.
+    # CepConfig (core/cep/config.py) bridges these into the engine's typed
+    # view and clamps the minimums; env.example documents the keys.
+    cep_enabled: bool = True
+    cep_queue_max: int = 1000
+    cep_snapshot_interval_s: int = 60
+    cep_graph_max_nodes: int = 10000
+    cep_graph_max_edges: int = 50000
+    cep_rules_path: str = "data/cep_rules"
+
     # Orchestrator
     orchestrator_enabled: bool = False
     orchestrator_loop_interval: int = 60

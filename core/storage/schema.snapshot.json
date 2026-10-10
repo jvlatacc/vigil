@@ -1131,6 +1131,24 @@
       "nullable": false
     }
   },
+  "cep_snapshots": {
+    "created_at": {
+      "data_type": "timestamp with time zone",
+      "nullable": false
+    },
+    "engine_version": {
+      "data_type": "integer",
+      "nullable": false
+    },
+    "id": {
+      "data_type": "bigint",
+      "nullable": false
+    },
+    "payload": {
+      "data_type": "jsonb",
+      "nullable": false
+    }
+  },
   "chat_messages": {
     "complete": {
       "data_type": "boolean",
