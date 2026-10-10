@@ -6,7 +6,9 @@ import '../auth/errors.dart';
 import '../auth/session.dart';
 import '../auth/token_store.dart';
 import '../auth/vigil_authenticator.dart';
+import 'attack_api.dart';
 import 'config_api.dart';
+import 'triage_api.dart';
 
 /// Builds a [VigilClient] for a server. Injectable so tests script the
 /// transport — one adapter captures every request the app makes, across
@@ -81,6 +83,8 @@ class VigilClient {
 
     v1 = VigilApiV1(dio: _apiDio);
     config = ConfigApi(dio: _apiDio);
+    attack = AttackApi(dio: _apiDio);
+    triage = TriageApi(dio: _apiDio);
   }
 
   final TokenStore _tokenStore;
@@ -96,6 +100,12 @@ class VigilClient {
   /// Bare `/api` carries no stability promise — the accepted exception,
   /// like [auth] — so only the calls with console parity live here.
   late final ConfigApi config;
+
+  /// ATT&CK technique rollup (console surface, hand-written).
+  late final AttackApi attack;
+
+  /// Triage intake queue (console surface, hand-written).
+  late final TriageApi triage;
 
   /// Whether a session is stored on this device (drives the sign-in gate).
   Future<bool> get hasSession async => (await _tokenStore.readAccess()) != null;
