@@ -1,0 +1,36 @@
+{
+  "id": "v01-block-then-replay",
+  "description": "A fresh block enforces (201, state enforced); the same request replayed returns the original evidence without re-enforcing (200, replayed true) — the duplicate-delivery guarantee the executor's retries rely on.",
+  "steps": [
+    {
+      "name": "initial enforcement",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4417",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 3600,
+          "reason": "Credential harvesting from this host, finding f-20261009-abc",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 201, "state": "enforced", "replayed": false, "evidence_echoes_action_id": true }
+    },
+    {
+      "name": "replayed delivery",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4417",
+          "kind": "xdp_drop",
+          "target": { "ip": "203.0.113.7" },
+          "ttl_seconds": 3600,
+          "reason": "Credential harvesting from this host, finding f-20261009-abc",
+          "idempotency_key": "xdp_block_ip:203.0.113.7"
+        }
+      },
+      "expect": { "status": 200, "state": "enforced", "replayed": true, "evidence_echoes_action_id": true }
+    }
+  ]
+}

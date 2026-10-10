@@ -1,0 +1,43 @@
+name: vigil_flutter
+description: "Vigil first-party client — iOS, Android, macOS, Windows, Linux."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # SVG path-data parser for the VigilIcons stroke set (pure Dart, the same
+  # parser flutter_svg uses).
+  path_parsing: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # The console self-hosts these two families as woff2 (which Flutter cannot
+  # use); the same families ship here as static latin-subset TTFs. The token
+  # ramp's 650 weight resolves to w700 per CSS static-font matching.
+  fonts:
+    - family: Plus Jakarta Sans
+      fonts:
+        - asset: assets/fonts/plus-jakarta-sans-400.ttf
+          weight: 400
+        - asset: assets/fonts/plus-jakarta-sans-500.ttf
+          weight: 500
+        - asset: assets/fonts/plus-jakarta-sans-600.ttf
+          weight: 600
+        - asset: assets/fonts/plus-jakarta-sans-700.ttf
+          weight: 700
+    - family: Roboto Mono
+      fonts:
+        - asset: assets/fonts/roboto-mono-400.ttf
+          weight: 400
+        - asset: assets/fonts/roboto-mono-500.ttf
+          weight: 500

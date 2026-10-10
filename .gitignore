@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -304,3 +304,10 @@ index.scip.stamp
 
 # Timestamped .env copies left by setup and migration scripts.
 .env.*
+
+# Enforcement daemon: compiled CO-RE BPF objects (build-bpf.sh output).
+services/enforcement/bpf/build/
+
+# Stray redis snapshot from local dev services.
+dump.rdb
+services/enforcement/enforcement

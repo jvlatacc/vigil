@@ -21,6 +21,12 @@ def main():
     try:
         print("\nInitializing database connection...")
         init_database(create_tables=True)
+        # Bundled CISA KEV: idempotent through the upsert triple; seeded at
+        # the composition root because the storage tier must not import
+        # core.threat_intel.
+        from core.threat_intel.kev_seed import seed_kev_indicators
+
+        seed_kev_indicators()
         print("  Tables created/verified successfully")
 
         db = get_db_manager()

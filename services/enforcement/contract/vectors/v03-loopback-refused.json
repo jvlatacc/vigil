@@ -1,0 +1,21 @@
+{
+  "id": "v03-loopback-refused",
+  "description": "A loopback target is refused with invalid_target/loopback — blocking the host's own traffic is self-inflicted denial of service, and the Python side's _actionable_ip would never produce such a target.",
+  "steps": [
+    {
+      "name": "loopback target",
+      "request": {
+        "method": "POST", "path": "/v1/actions",
+        "body": {
+          "action_id": "aa-2026-10-09-4419",
+          "kind": "xdp_drop",
+          "target": { "ip": "127.0.0.1" },
+          "ttl_seconds": 3600,
+          "reason": "attempt to block loopback",
+          "idempotency_key": "xdp_block_ip:127.0.0.1"
+        }
+      },
+      "expect": { "status": 422, "error": "invalid_target", "error_reason": "loopback" }
+    }
+  ]
+}

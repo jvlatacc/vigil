@@ -1,6 +1,6 @@
 # Default values for the Vigil SOC Helm chart.
 # This is a YAML-formatted file.
-# See https://vigilsoc.org/docs/helm/ for a full reference of all values.
+# See docs/deploy/helm.md for a full reference of all values.
 
 # -----------------------------------------------------------------------------
 # Global
@@ -94,6 +94,74 @@ daemon:
     mountPath: /app/data/investigations
   podAnnotations: {}
   podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  extraEnv: []
+
+# -----------------------------------------------------------------------------
+# Kernel Enforcer (eBPF/XDP enforcement daemon — DaemonSet, one per node)
+# -----------------------------------------------------------------------------
+# The chart's most policy-divergent workload BY DESIGN: enforcement needs
+# kernel capabilities, the node's network namespace (XDP attaches to the
+# node's NIC), and the host kernel filesystems. None of that is folded into
+# the shared podSecurityContext/containerSecurityContext defaults — every
+# override lives in templates/enforcer-daemonset.yaml and is scoped to this
+# component's DaemonSet only. The daemon validates every request against the
+# shared-secret token (secrets.enforcementToken) and binds the API to
+# loopback by default; kernel state self-expires via TTLs carried in the BPF
+# maps, so a pod that disappears does not leave stale containment behind.
+# Prerequisites per enforcement node (see services/enforcement/runbook.md):
+#   • bpffs mounted at /sys/fs/bpf        (mount -t bpf bpf /sys/fs/bpf)
+#   • cgroup2 mounted at enforcer.cgroup  (modern distros do this by default)
+#   • kernel BTF at /sys/kernel/btf       (CO-RE relocation; kernels ≥ 5.8
+#     are the supported range)
+enforcer:
+  # Off by default: enabling kernel enforcement is a deliberate operator act.
+  # When disabled the DaemonSet is not rendered at all.
+  enabled: false
+  image:
+    repository: ""   # empty → auto-derive from global.imageNamespace + "-enforcer"
+    tag: ""
+    pullPolicy: ""
+  # API bind address. The default keeps the strongest guarantee from the
+  # spec's risk table (loopback-only API): reachable only on the node itself
+  # (kubectl exec, a local Vigil, an SSH tunnel). A Vigil backend running in
+  # the cluster cannot reach a node-loopback API — if you need that topology,
+  # set a non-loopback bind (e.g. "0.0.0.0:6986") and pair it with a
+  # NetworkPolicy; note that enforcement of NetworkPolicy against
+  # hostNetwork pods depends on the CNI plugin.
+  bind: "127.0.0.1:6986"
+  # API + healthz/metrics port (the enforcer binds enforcer.bind on it).
+  port: 6986
+  # XDP attaches to the node's interface (resolved inside the pod, which
+  # shares the node's network namespace).
+  interface: eth0
+  # Cgroup root for BPF LSM process interdiction (hostPath-mounted).
+  cgroup: /sys/fs/cgroup
+  # Default TTL (seconds) for enforcement entries whose action carries none.
+  defaultTtlSeconds: 3600
+  # TCP sink for socket redirects (host:port). Empty = redirect capability
+  # stays disabled on this deployment (XDP drop and interdiction unaffected).
+  sink: ""
+  # Kernel capabilities granted to the enforcer container ONLY. CAP_BPF +
+  # CAP_NET_ADMIN cover XDP drop and sockmap redirect on modern kernels;
+  # CAP_PERFMON covers perf/tracepoint-adjacent attach; CAP_SYS_ADMIN is the
+  # legacy fallback for pre-5.8 kernels and BPF LSM attach. Trim per site
+  # once GET /healthz has confirmed the per-primitive status you rely on.
+  capabilities:
+    add: [BPF, NET_ADMIN, PERFMON, SYS_ADMIN]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  podAnnotations: {}
+  podLabels: {}
+  # Default: schedule on every node. Restrict to enforcement nodes with a
+  # selector, e.g. enforcer.nodeSelector: {vigil.so/enforcer: "true"}.
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -606,6 +674,13 @@ secrets:
   #   python -c "import secrets; print(secrets.token_urlsafe(48))"
   agentInternalToken: ""
 
+  # Shared secret between Vigil's approved-action executor and the kernel
+  # enforcer's API (VIGIL_ENFORCEMENT_TOKEN). Required when enforcer.enabled:
+  # the enforcer refuses to start without it. Use the same value in the
+  # executor's environment (VIGIL_ENFORCEMENT_TOKEN). Generate with:
+  #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+  enforcementToken: ""
+
   # Optional data-source integrations.
   splunkPassword: ""
   crowdstrikeClientId: ""
@@ -744,6 +819,7 @@ config:
   DAEMON_CRITICAL_ACTION_FLOOR: "0.70"
   DAEMON_HIGH_ACTION_FLOOR: "0.80"
   DAEMON_FORCE_APPROVAL: "false"
+  DAEMON_ENFORCEMENT_FORCE_APPROVAL: "true"
   DAEMON_DRY_RUN: "false"
   # Honey-routing (the deceive band): default off — enabling it is a human
   # configuration act, and the floor is its own band, not the response one.
