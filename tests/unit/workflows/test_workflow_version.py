@@ -48,7 +48,10 @@ def _service(custom_rows=None):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "workflow_id, rows, expected",
-    [("incident-response", {}, 1), ("wf-1", {"wf-1": _custom(3)}, 3)],
+    [
+        ("incident-response", {}, 2),  # #86 added the honey-route proposal step
+        ("wf-1", {"wf-1": _custom(3)}, 3),
+    ],
 )
 async def test_execute_workflow_stores_the_version(workflow_id, rows, expected):
     service = _service(rows)
