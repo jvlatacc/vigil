@@ -139,7 +139,11 @@ class TestRefusalClasses:
     def test_confidence_below_the_effective_floor_is_refused(self):
         decision = decide(triage=LocalTriage(0.85))
         assert decision.code == BELOW_CONFIDENCE_FLOOR
-        assert decision.decision_rule == "edge.confidence_floor=0.90 not met (0.85)"
+        # The refusal names the triage channel: once an SLM can supply the
+        # confidence, "0.85" alone does not say who measured it.
+        assert (
+            decision.decision_rule == "edge.confidence_floor=0.90 not met (sensor 0.85)"
+        )
 
     @pytest.mark.parametrize("confidence", [float("nan"), 5.0, -0.5, float("inf")])
     def test_out_of_range_confidence_never_reads_as_high(self, confidence):

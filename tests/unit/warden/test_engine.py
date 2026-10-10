@@ -32,6 +32,7 @@ from services.warden.modes import ModeMachine, OperatingMode
 from services.warden.sentinel import Sentinel
 from services.warden.storage import PolicyStore
 from services.warden.sync import PolicySync
+from services.warden.triage import LocalSlm
 from tests.unit.warden.helpers import (
     WARDEN_NOW,
     FakeClock,
@@ -79,6 +80,7 @@ def make_loop(
     registry: ExecutorRegistry | None = None,
     pack_overrides: dict[str, Any] | None = None,
     grace_window_seconds: float = 900.0,
+    slm: LocalSlm | None = None,
 ) -> tuple[DecisionLoop, Sentinel, Journal, FakeClock, ExecutorRegistry]:
     """A loop over a respx-mocked sync, an in-process sentinel, a journal."""
     clock = clock or FakeClock()
@@ -126,6 +128,7 @@ def make_loop(
             guard_provider=guard_for,
             clock=clock,
             metrics=metrics,
+            slm=slm,
         ),
         interval_seconds=60.0,
         max_alert_batch=10,
