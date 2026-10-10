@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../approvals/approvals_controller.dart';
+import '../approvals/fused_decision_toast.dart';
 import '../auth/session.dart';
 import '../api/config_api.dart';
+import '../decisions/decisions_screen.dart';
+import '../home/home_screen.dart';
 import '../settings/scheme_controller.dart';
 import '../theme/extensions.dart';
 import '../theme/vigil_colors.dart';
@@ -21,9 +25,15 @@ class VigilShell extends StatefulWidget {
     required this.initialScreen,
     required this.onSignOut,
     this.scheme,
+    this.approvals,
   });
 
   final UserProfile user;
+
+  /// The approvals controller behind Home and Decisions; null keeps the
+  /// honest placeholder panes (tests instantiate the shell without a data
+  /// client). Lifecycle pause/resume is wired to this controller.
+  final ApprovalsController? approvals;
 
   /// Where the shell opens — the landing destination, or the deep-linked
   /// screen (already permission-checked by the app root).
@@ -38,7 +48,8 @@ class VigilShell extends StatefulWidget {
   State<VigilShell> createState() => _VigilShellState();
 }
 
-class _VigilShellState extends State<VigilShell> {
+class _VigilShellState extends State<VigilShell>
+    with WidgetsBindingObserver {
   /// 600 dp — the console's breakpoint between stacked and side-by-side
   /// layouts; phones navigate by bar, tablets/desktop by rail.
   static const double _railBreakpoint = 600;
@@ -47,6 +58,33 @@ class _VigilShellState extends State<VigilShell> {
       visibleDestinations(widget.user.permissions);
 
   late VigilScreen _screen = _initialScreen();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Lifecycle-aware polling: paused/hidden stops the schedule, resumed
+  /// polls immediately and rearms the 20 s cadence.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        widget.approvals?.resume();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+        widget.approvals?.pause();
+      default:
+        break;
+    }
+  }
 
   VigilScreen _initialScreen() {
     if (canSeeScreen(widget.initialScreen, widget.user.permissions)) {
@@ -215,8 +253,45 @@ class _VigilShellState extends State<VigilShell> {
   }
 
   Widget _pane(VigilColors colors) {
-    if (_screen == VigilScreen.home) return _homePane(colors);
+    final approvals = widget.approvals;
+    if (_screen == VigilScreen.home) {
+      return approvals == null
+          ? _homePane(colors)
+          : _toastOverlay(
+              HomeScreen(
+                controller: approvals,
+                onReview: _visible.contains(VigilScreen.decisions)
+                    ? () => _select(VigilScreen.decisions)
+                    : null,
+                onOpenCase: _visible.contains(VigilScreen.cases)
+                    ? () => _select(VigilScreen.cases)
+                    : null,
+              ),
+            );
+    }
+    if (_screen == VigilScreen.decisions && approvals != null) {
+      return _toastOverlay(DecisionsScreen(controller: approvals));
+    }
     return _placeholderPane(colors, _screen);
+  }
+
+  /// The fused-decision toast rides above the pane content — bottom of the
+  /// screen, clear of the phone's navigation bar.
+  Widget _toastOverlay(Widget child) {
+    final approvals = widget.approvals;
+    if (approvals == null) return child;
+    final wide = MediaQuery.sizeOf(context).width >= _railBreakpoint;
+    return Stack(
+      children: [
+        child,
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: wide ? 16 : 96,
+          child: FusedDecisionToast(controller: approvals),
+        ),
+      ],
+    );
   }
 
   /// Home — "What needs a person". The needs-you feed arrives with the
