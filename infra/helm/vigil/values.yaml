@@ -100,6 +100,108 @@ daemon:
   extraEnv: []
 
 # -----------------------------------------------------------------------------
+# Edge daemon (Local Autonomy Mesh — services/edge)
+# A DaemonSet of node-side daemons that keep defending their segments with
+# operator-signed policy bundles while the control plane is unreachable. Off
+# unless enabled: an edge node only runs once an operator enrolled it and
+# signed its autonomy bundle (docs/edge-operator-guide.md).
+# -----------------------------------------------------------------------------
+edgeDaemon:
+  enabled: false
+  image:
+    repository: ""   # empty → auto-derive from global.imageNamespace + "-edge"
+    tag: ""
+    pullPolicy: ""
+  # Node identity — REQUIRED when enabled: it names the enrolled edge_nodes
+  # row the daemon authenticates as, and the journal's actor string.
+  nodeID: ""
+  # cluster (DaemonSet pod, reversible egress-deny NetworkPolicy objects
+  # through the API server) or gateway (VPC gateway host — needs hostNetwork
+  # plus NET_ADMIN; see hostNetwork / capabilities below).
+  mode: cluster
+  # Control plane base URL for bundle pulls, heartbeats, journal uploads.
+  controlURL: http://vigil-backend:6987
+  # Segment scope submitted at enrollment; must equal the scope the operator
+  # publishes bundles under (JSON object of string -> string).
+  segmentScope: {}
+  # Labels reported for bundle scope matching (segment_scope.node_selector).
+  nodeLabels: {}
+  # One-time enrollment token, exchanged for a per-node credential at first
+  # start. After the exchange the credential lives on the node's data volume
+  # and the token is not needed again. Three sources, checked in order:
+  #   1. enrollmentExistingSecret — a Secret YOU create, with the key
+  #      VIGIL_EDGE_ENROLLMENT_TOKEN.
+  #   2. externalSecret — the External Secrets Operator pattern (below);
+  #      renders an ExternalSecret that materializes the same key.
+  #   3. enrollmentToken — a chart-templated Secret (dev/first-rollout only;
+  #      avoid putting production tokens in values files).
+  # All empty: no enrollment env is rendered — valid only on an
+  # already-enrolled node whose credential survives on the data volume.
+  enrollmentExistingSecret: ""
+  externalSecret:
+    enabled: false
+    refreshInterval: 1h
+    secretStoreRef:
+      name: ""
+      kind: ClusterSecretStore
+    # remoteRef to the enrollment token in the external store.
+    remoteRef:
+      key: ""
+      property: ""
+  enrollmentToken: ""
+  # Offline DSSE trust root — the only key source bundle signatures verify
+  # against. HOW it reaches the node is a recorded open question
+  # (image-baked vs enrollment-fetched); v1 mounts it from a ConfigMap YOU
+  # create. Empty: no trust-store mount — the daemon boots DEGRADED (Tier 0,
+  # observe-only), the spec's fail-safe.
+  trustStoreExistingConfigMap: ""
+  trustStoreKey: trust-root.dsse.json
+  # Advisory local classifier via Ollama or any OpenAI-compatible endpoint.
+  # Empty (the default): nothing is rendered here and the daemon's own
+  # default (qwen2.5:1.5b) applies. Set a model id to pin it in the chart.
+  # To run deterministic-only, disable the advisor through extraEnv:
+  #   - name: VIGIL_EDGE_MODEL
+  #     value: ""          # present-but-empty = advisor off (degraded, not dead)
+  model: ""
+  # Digest pin — required at Tier 2+; refused to be absent (a model swap must
+  # not change behavior silently behind signed caps).
+  modelDigest: ""
+  modelURL: ""
+  # Durable local state (journal, policy cache, credential). A hostPath on the
+  # node — edge state is per-node by design; a rescheduled daemon replays from
+  # the node's own journal.
+  stateHostPath: /var/lib/vigil-edge
+  # Gateway mode only: use the host's network namespace so nftables rules
+  # protect the host's own traffic, and grant NET_ADMIN for the nft binary.
+  # Cluster mode needs neither (the executor talks to the API server).
+  hostNetwork: false
+  # Cluster-mode RBAC: Role + RoleBinding granting NetworkPolicy verbs ONLY,
+  # one per managed namespace (never cluster-wide; no secrets, no workload
+  # mutation). Default: the release namespace. Dedicated ServiceAccount, not
+  # the chart's shared one.
+  rbac:
+    create: true
+    serviceAccountName: ""
+    namespaces: []
+  # Probes target /health on VIGIL_EDGE_HEALTH_PORT (state + tier + uptime).
+  healthPort: 9091
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  # Scheduling: point the DaemonSet at the nodes that need a defender. The
+  # example from the design spec marks gateways with vigil.ai/edge-role.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+  extraEnv: []
+
+# -----------------------------------------------------------------------------
 # Kernel Enforcer (eBPF/XDP enforcement daemon — DaemonSet, one per node)
 # -----------------------------------------------------------------------------
 # The chart's most policy-divergent workload BY DESIGN: enforcement needs
@@ -500,10 +602,13 @@ dbInit:
     - 37_workflow_runs_outcome.sql
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
+    - 40_edge_nodes.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
+    - 41_edge_bundles.sql
     - 41_finding_origin_stamps.sql
     - 42_digital_twin.sql
+    - 42_edge_node_watermark.sql
   resources:
     requests:
       cpu: 50m

@@ -1483,6 +1483,94 @@
       "nullable": false
     }
   },
+  "edge_bundles": {
+    "autonomy_tier": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    },
+    "bundle_id": {
+      "data_type": "character varying(100)",
+      "nullable": false
+    },
+    "envelope": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "payload": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "segment_scope": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "signed_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "signed_by": {
+      "data_type": "character varying(100)",
+      "nullable": false
+    },
+    "version": {
+      "data_type": "integer",
+      "nullable": false
+    }
+  },
+  "edge_nodes": {
+    "commit_watermark": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "credential_hash": {
+      "data_type": "character varying(64)",
+      "nullable": false
+    },
+    "enrolled_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": false
+    },
+    "last_acked_seq": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "last_boot_id": {
+      "data_type": "character varying(64)",
+      "nullable": true
+    },
+    "last_bundle_version": {
+      "data_type": "integer",
+      "nullable": true
+    },
+    "last_seen": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "node_id": {
+      "data_type": "character varying(64)",
+      "nullable": false
+    },
+    "revoke_reason": {
+      "data_type": "text",
+      "nullable": true
+    },
+    "revoked_at": {
+      "data_type": "timestamp without time zone",
+      "nullable": true
+    },
+    "revoked_by": {
+      "data_type": "character varying(100)",
+      "nullable": true
+    },
+    "segment_scope": {
+      "data_type": "jsonb",
+      "nullable": false
+    },
+    "status": {
+      "data_type": "character varying(16)",
+      "nullable": false
+    }
+  },
   "episodic_distil_failures": {
     "attempts": {
       "data_type": "integer",

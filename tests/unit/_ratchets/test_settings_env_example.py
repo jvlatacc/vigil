@@ -98,6 +98,40 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     # config dumps.
     "DECOY_INGEST_TOKEN",
     "DECOY_CANARY_PASSWORD",
+    # Edge daemon (services/edge): an isolated node-side daemon with its own
+    # pyproject/uv.lock and env protocol (services/edge/app/config.py). It is
+    # not part of the central Settings and deliberately shares no env contract
+    # with it; these names belong to the daemon's own config surface.
+    "VIGIL_EDGE_CONTROL_URL",
+    "VIGIL_EDGE_CREDENTIAL_FILE",
+    "VIGIL_EDGE_DATA_DIR",
+    "VIGIL_EDGE_ENABLED",
+    "VIGIL_EDGE_ENROLLMENT_TOKEN",
+    "VIGIL_EDGE_EVE_PATH",
+    "VIGIL_EDGE_HEALTH_PORT",
+    "VIGIL_EDGE_JOURNAL_MAX_BYTES",
+    "VIGIL_EDGE_K8S_API_URL",
+    "VIGIL_EDGE_K8S_CA_FILE",
+    "VIGIL_EDGE_K8S_TOKEN_FILE",
+    "VIGIL_EDGE_MODE",
+    "VIGIL_EDGE_MODEL",
+    "VIGIL_EDGE_MODEL_DIGEST",
+    "VIGIL_EDGE_NODE_ID",
+    "VIGIL_EDGE_NODE_LABELS",
+    "VIGIL_EDGE_REAPER_INTERVAL_SECONDS",
+    # services/edge EdgeConfig (the sovereign daemon's own config) reads these;
+    # not core Settings fields.
+    "VIGIL_EDGE_SEGMENT_SCOPE",
+    "VIGIL_EDGE_SYNC_BATCH_SIZE",
+    "VIGIL_EDGE_SYNC_INTERVAL_SECONDS",
+    "VIGIL_EDGE_SYNC_TIMEOUT_SECONDS",
+    "VIGIL_EDGE_OLLAMA_URL",
+    "VIGIL_EDGE_TRUST_STORE",
+    # core/edge/signing.py reads the bundle-signing key path through the
+    # secrets manager (get_secret), not through Settings.
+    "VIGIL_EDGE_SIGNING_KEY_FILE",
+    # SKIP_FRONTEND is already listed above under "Consumed outside the Python
+    # backend"; the edge merge's copy of that entry is folded there.
     # Locates the State Directory. vigil_path() resolves it at import time, before
     # Settings can be built, so it is read from the environment and must be
     # exported rather than set in .env.
