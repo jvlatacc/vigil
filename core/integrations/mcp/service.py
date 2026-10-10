@@ -72,12 +72,19 @@ class MCPServer:
         env: Dict[str, str],
         required_env_vars: Optional[List[str]] = None,
         auth: Optional[Dict[str, Any]] = None,
+        transport: str = "stdio",
+        url: Optional[str] = None,
     ):
         self.name = name
         self.command = command
         self.args = args
         self.cwd = cwd
         self.env = env
+        # How the client reaches this server: "stdio" spawns the command-style
+        # child; "streamable-http" connects to ``url`` over HTTP with a bearer
+        # token from the server's OAuth token provider -- no child process.
+        self.transport = transport
+        self.url = url
         # Credential placeholders declared in mcp-config.json for this
         # server. Read by mcp_client.connect_to_server at connect time.
         self.required_env_vars: List[str] = list(required_env_vars or [])
@@ -99,6 +106,18 @@ class MCPService:
     # the daemon in #695, and would pin the read path while the write path
     # resolves fresh.
     _STATE_FILENAME = "mcp_server_enabled.json"
+
+    # Auth-block fields whose ${VAR} placeholders resolve at load time. The
+    # *_key fields are deliberately absent: they name encrypted-secrets-store
+    # keys, and substituting them would silently re-point the block at a
+    # value instead of a key.
+    _EXPANDABLE_AUTH_FIELDS = (
+        "issuer_url",
+        "client_id",
+        "resource",
+        "server_url",
+        "url",
+    )
 
     def __init__(
         self,
@@ -277,6 +296,41 @@ class MCPService:
                     if server_name.startswith("_comment"):
                         continue
 
+                    transport = str(server_config.get("transport") or "stdio")
+
+                    if transport == "streamable-http":
+                        # A URL server has no child process to launch: no
+                        # command to resolve, no venv default, no spawn env.
+                        # The URL is config like any other and carries ${VAR}
+                        # placeholders the same way.
+                        url_value = server_config.get("url")
+                        url = (
+                            self._substitute_env_vars(str(url_value))
+                            if url_value
+                            else None
+                        )
+                        auth = self._resolve_auth_block(server_config.get("auth"))
+                        if url and isinstance(auth, dict):
+                            # Client and state machine both read the endpoint
+                            # from the auth block; an entry that already names
+                            # one keeps it.
+                            if not auth.get("server_url") and not auth.get("url"):
+                                auth["server_url"] = url
+                        server_configs.append(
+                            {
+                                "name": server_name,
+                                "command": "",
+                                "args": [],
+                                "cwd": project_path_str,
+                                "env": {},
+                                "required_env_vars": [],
+                                "auth": auth,
+                                "transport": transport,
+                                "url": url,
+                            }
+                        )
+                        continue
+
                     # Convert config format from mcp-config.json to our internal format
                     command = server_config.get("command", "python")
 
@@ -342,6 +396,8 @@ class MCPService:
                             "env": env,
                             "required_env_vars": required_env_vars,
                             "auth": server_config.get("auth"),
+                            "transport": transport,
+                            "url": None,
                         }
                     )
 
@@ -361,6 +417,28 @@ class MCPService:
                 config = self._enrich_security_detections_env(config)
             server = MCPServer(**config)
             self.servers[config["name"]] = server
+
+    def _resolve_auth_block(self, raw_auth):
+        """Load-time resolution of a streamable-HTTP entry's auth block.
+
+        ${VAR} placeholders in the non-key fields resolve like every other
+        config value (missing vars collapse to empty strings, which the
+        connection state reports as dormancy); the store-key fields pass
+        through untouched."""
+        if not isinstance(raw_auth, dict) or not raw_auth:
+            return raw_auth
+        resolved = dict(raw_auth)
+        for field in self._EXPANDABLE_AUTH_FIELDS:
+            value = resolved.get(field)
+            if isinstance(value, str):
+                resolved[field] = self._substitute_env_vars(value)
+        scopes = resolved.get("scopes")
+        if isinstance(scopes, list):
+            resolved["scopes"] = [
+                self._substitute_env_vars(s) if isinstance(s, str) else s
+                for s in scopes
+            ]
+        return resolved
 
     def _enrich_security_detections_env(self, config: Dict) -> Dict:
         """
