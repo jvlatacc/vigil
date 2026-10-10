@@ -12,17 +12,19 @@ import {
   usePendingDecisions,
   useDecisionStats,
   usePendingApprovals,
+  useFastPathActions,
   type Phase,
   type DecisionStatus,
   type DecisionStats,
   type ApprovalAction,
+  type FastPathAction,
 } from './useDecisions'
-import { aiDecisionsApi, approvalsApi } from '../../services/api'
+import { aiDecisionsApi, approvalsApi, fastPathApi } from '../../services/api'
 import { EmptyState, Popup, Field, TextInput, Select, Rating, Slider, Dropdown, activateOnKey } from '../../shared/ui'
 
 // One list, so a new tab cannot be added to the union and forgotten here --
 // an unknown ?tab= falls back silently, which a divergence would make invisible.
-const DEC_TABS = ['pending', 'all', 'analytics', 'approvals'] as const
+const DEC_TABS = ['pending', 'all', 'analytics', 'approvals', 'fastpath'] as const
 type DecTab = (typeof DEC_TABS)[number]
 type Assessment = 'agree' | 'partial' | 'disagree'
 
@@ -264,6 +266,182 @@ export function checkpointChip(a: ApprovalAction) {
     <span className="chip" title={typeof params.checkpoint_id === 'string' ? params.checkpoint_id : undefined}>
       {label}
     </span>
+  )
+}
+
+// ── Fast path (speculative containment) ────────────────────────────────────
+// The fast path's rows are ordinary approvals rows; this slice renders their
+// speculative lifecycle — what is restricted right now, who released what,
+// and which restrictions are only simulated. Exported for tests.
+
+const FAST_PATH_STATUS_LABEL: Record<string, string> = {
+  speculative: 'Speculative',
+  rolled_back: 'Released',
+  escalated: 'Escalated',
+  failed: 'Failed',
+}
+
+export function fastPathStatusChip(status: string) {
+  return <span className={`fpst fpst-${status}`}>{FAST_PATH_STATUS_LABEL[status] || status}</span>
+}
+
+/**
+ * The simulated badge, from the row's enforcement metadata. The API sets it;
+ * a row that somehow arrives without the field renders as simulated — the
+ * badge must fail toward honesty, not toward looking enforced.
+ */
+export function fastPathSimulated(simulated: boolean | undefined) {
+  if (simulated !== false) return <span className="fpsim">simulated</span>
+  return null
+}
+
+/** Live seconds left on a speculative row's restriction, from expires_at. */
+export function secondsLeft(expiresAt: string | undefined, nowMs: number): number | null {
+  if (!expiresAt) return null
+  const d = new Date(expiresAt).getTime()
+  if (Number.isNaN(d)) return null
+  return Math.max(0, Math.floor((d - nowMs) / 1000))
+}
+
+function fmtCountdown(s: number): string {
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+/** The countdown for a live row — a wall clock, re-rendered every second. */
+export function ExpiryCountdown({ action }: { action: FastPathAction }) {
+  // One shared now for all rows per tick, so the list moves together.
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  if (action.status !== 'speculative') {
+    return <span className="muted">—</span>
+  }
+  const left = secondsLeft(action.expires_at, now)
+  if (left === null) return <span className="muted">no expiry</span>
+  return <span className={`mono expclock ${left <= 30 ? 'low' : ''}`}>{fmtCountdown(left)}</span>
+}
+
+function ReleaseSpeculativePopup({
+  open,
+  action,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean
+  action: FastPathAction | null
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <Popup open={open} onClose={onClose} title="Release speculative action" width={560}>
+      <div className="flex flex-col gap-3.5">
+        <p className="text-[13px] text-tx-2 m-0">
+          Lift <strong>{action?.action_type || 'action'}</strong> on{' '}
+          <span className="mono">{action?.target || '—'}</span> now? The target returns to
+          unrestricted immediately — before any adjudication, human or automated, has concluded.
+        </p>
+        {action?.reason && (
+          <Field label="Deciding rule">
+            <div className="kv">
+              <div className="row"><span className="k">{action.reason}</span></div>
+            </div>
+          </Field>
+        )}
+        <div className="flex justify-end gap-2.5">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn danger" disabled={busy} onClick={onConfirm}>
+            {busy ? 'Releasing…' : 'Release now'}
+          </button>
+        </div>
+      </div>
+    </Popup>
+  )
+}
+
+function FastPathTab({
+  actions,
+  counts,
+  phase,
+  error,
+  reload,
+  onRelease,
+  acting,
+  banner,
+}: {
+  actions: FastPathAction[]
+  counts: Record<string, number>
+  phase: Phase
+  error: string | null
+  reload: () => void
+  onRelease: (a: FastPathAction) => void
+  acting: string | null
+  banner: string | null
+}) {
+  return (
+    <>
+      {banner && <div style={{ padding: '10px 22px', color: 'var(--crit)', fontSize: 13 }}>{banner}</div>}
+      <div className="table-wrap list-scroll">
+        <table className="tbl" data-testid="fast-path-table">
+          <thead>
+            <tr>
+              <th>Action</th><th>Target</th><th>Status</th><th>Enforcement</th><th>Expires</th>
+              <th>Deciding rule / outcome</th><th style={{ textAlign: 'right' }}>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            {phase === 'loading' && <StateRow cols={7}><EmptyState loading table compact icon="check2" title="Loading fast-path actions…" /></StateRow>}
+            {phase === 'error' && <StateRow cols={7}><RetryState msg={error} reload={reload} /></StateRow>}
+            {phase === 'ready' && actions.length === 0 && (
+              <StateRow cols={7}>
+                <EmptyState
+                  table
+                  icon="check2"
+                  title="No speculative actions"
+                  body="When the fast path places a time-boxed restriction, it appears here with its countdown and resolution."
+                />
+              </StateRow>
+            )}
+            {phase === 'ready' &&
+              actions.map((a) => (
+                <tr key={a.action_id} data-testid="fast-path-row">
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{a.title || a.action_id}</div>
+                    {a.action_type && <div className="muted" style={{ fontSize: 12 }}>{a.action_type}</div>}
+                  </td>
+                  <td><span className="mono" style={{ fontSize: 11 }}>{a.target || '—'}</span></td>
+                  <td>{fastPathStatusChip(a.status)}</td>
+                  <td>{fastPathSimulated(a.simulated)}</td>
+                  <td><ExpiryCountdown action={a} /></td>
+                  <td className="muted" title={a.reason} style={{ maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {a.reason || '—'}
+                  </td>
+                  <td>
+                    <span style={{ display: 'inline-flex', gap: 8, justifyContent: 'flex-end', width: '100%' }}>
+                      {a.status === 'speculative' ? (
+                        <button className="btn danger" disabled={acting === a.action_id} onClick={() => onRelease(a)}>
+                          <Icon name="x2" /> Release now
+                        </button>
+                      ) : (
+                        <span className="muted" style={{ fontSize: 12 }}>{fmtTime(a.created_at)}</span>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="muted" style={{ padding: '8px 22px', fontSize: 12 }}>
+        {counts.speculative || 0} speculative · {counts.rolled_back || 0} released · {counts.escalated || 0} escalated
+      </div>
+    </>
   )
 }
 
@@ -621,11 +799,14 @@ export default function DecisionsScreen({ setViewFull }: ConsoleScreenProps) {
   const [acting, setActing] = useState<string | null>(null)
   const [rejectFor, setRejectFor] = useState<ApprovalAction | null>(null)
   const [approvalBanner, setApprovalBanner] = useState<string | null>(null)
+  const [releaseFor, setReleaseFor] = useState<FastPathAction | null>(null)
+  const [fpBanner, setFpBanner] = useState<string | null>(null)
 
   const stats = useDecisionStats('all')
   const pending = usePendingDecisions()
   const all = useDecisions(agentF, statusF)
   const approvals = usePendingApprovals()
+  const fastPath = useFastPathActions()
   const agentIds = useDecisionAgentIds()
   const agentOpts = useMemo(
     () => [
@@ -679,6 +860,22 @@ export default function DecisionsScreen({ setViewFull }: ConsoleScreenProps) {
     }
   }
 
+  const confirmRelease = async () => {
+    const a = releaseFor
+    if (!a) return
+    setActing(a.action_id)
+    setFpBanner(null)
+    try {
+      await fastPathApi.release(a.action_id)
+      setReleaseFor(null)
+      fastPath.reload()
+    } catch (e) {
+      setFpBanner(apiErr(e, 'Failed to release action'))
+    } finally {
+      setActing(null)
+    }
+  }
+
   const filterRows = (rows: Decision[]) => {
     const q = query.trim().toLowerCase()
     if (!q) return rows
@@ -702,6 +899,7 @@ export default function DecisionsScreen({ setViewFull }: ConsoleScreenProps) {
     ['all', 'All Decisions', all.rows.length],
     ['analytics', 'Analytics', null],
     ['approvals', 'Pending Approvals', approvals.actions.length],
+    ['fastpath', 'Fast Path', fastPath.counts.speculative || 0],
   ]
 
   return (
@@ -757,6 +955,18 @@ export default function DecisionsScreen({ setViewFull }: ConsoleScreenProps) {
           banner={approvalBanner}
         />
       )}
+      {tab === 'fastpath' && (
+        <FastPathTab
+          actions={fastPath.actions}
+          counts={fastPath.counts}
+          phase={fastPath.phase}
+          error={fastPath.error}
+          reload={fastPath.reload}
+          onRelease={setReleaseFor}
+          acting={acting}
+          banner={fpBanner}
+        />
+      )}
 
       <RejectActionPopup
         open={rejectFor !== null}
@@ -764,6 +974,13 @@ export default function DecisionsScreen({ setViewFull }: ConsoleScreenProps) {
         busy={acting !== null}
         onClose={() => setRejectFor(null)}
         onConfirm={confirmReject}
+      />
+      <ReleaseSpeculativePopup
+        open={releaseFor !== null}
+        action={releaseFor}
+        busy={acting !== null}
+        onClose={() => setReleaseFor(null)}
+        onConfirm={confirmRelease}
       />
     </>
   )
