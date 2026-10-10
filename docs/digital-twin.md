@@ -47,7 +47,10 @@ not a contract. The graph shape will churn as the twin matures, so the router
 lives outside the frozen `/api/v1` tree (see `core/api/v1/README.md`'s
 tie-breaker for unversioned surfaces). This is the graph the case view reads:
 it joins findings to twin rows, so a finding can carry the device and process
-context it was observed on (`_case_ids_by_finding`).
+context it was observed on (`_case_ids_by_finding`). The console's dedicated
+twin screen reads the versioned graph instead —
+`clients/web/src/screens/twin/DigitalTwinScreen.tsx` wires
+`GET /api/v1/digital-twin/graph` (`useTwinGraph.ts`).
 
 ## Observations and idempotency
 

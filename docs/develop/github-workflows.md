@@ -35,7 +35,7 @@ The workflows are currently configured for **Continuous Integration** only - the
 
 ### 3. `release.yml` - Tag-Triggered Image Build & Publish
 - **Triggers**: Version tags (`v*.*.*`)
-- **Purpose**: Build and push the `vigil-backend`, `vigil-daemon` and `vigil-agent` images to GHCR, signing each pushed digest with cosign (keyless), generating and attesting an SBOM (syft), Trivy-scanning the signed digest, smoke-testing that the images start, and annotating the GitHub Release with the image digests. The GitHub Release object itself is created by `release-please.yml`, not this workflow.
+- **Purpose**: Build and push the `vigil-backend`, `vigil-daemon`, `vigil-agent` and `vigil-enforcer` images to GHCR, signing each pushed digest with cosign (keyless), generating and attesting an SBOM (syft), Trivy-scanning the signed digest, smoke-testing that the images start, and annotating the GitHub Release with the image digests. The GitHub Release object itself is created by `release-please.yml`, not this workflow.
 - **Deployment**: None — this workflow publishes images only, it does not deploy. (`scripts/deploy_to_vm.sh` is an unwired manual VM-deploy helper kept for the future.)
 
 ### 4. `nightly.yml` - Scheduled Testing
@@ -46,6 +46,10 @@ The workflows are currently configured for **Continuous Integration** only - the
 ### 5. `medic.yml` - Medic Service Gates
 - **Triggers**: Push/PR touching `services/medic/` or `infra/docker/Dockerfile.medic`
 - **Purpose**: The Medic service has its own lock and its own gates, so it runs as its own path-filtered workflow rather than steps in `ci-cd.yml`. Needs no secrets, so it also runs on forks.
+
+### 6. `enforcement.yml` - Enforcement Daemon Checks
+- **Triggers**: Push to `main`, or push/PR touching `services/enforcement/`, `infra/docker/Dockerfile.enforcer`, `infra/helm/`, `.dockerignore`, or the workflow itself; manual dispatch
+- **Purpose**: The enforcement daemon is a standalone Go module with its own toolchain (eBPF/XDP; see `services/enforcement/runbook.md`), so it has its own path-filtered workflow — Go checks and tests, its own image build. Needs no secrets, so it also runs on forks.
 
 ## No Secrets Required!
 

@@ -33,7 +33,7 @@ This file provides guidance for AI assistants (Claude Code and similar tools) wo
 
 ```
 vigil/
-├── services/             # Deployables: api, daemon, agent, decoy, medic, worker
+├── services/             # Deployables: api, daemon, agent, decoy, medic, worker, enforcement
 │   ├── api/              # API composition root: main.py (app entry), discovery.py, middleware/, routers/ (parked routers)
 │   ├── daemon/           # Autonomous 24/7 SOC background process
 │   │   ├── main.py       # Daemon entry point (python services/daemon/main.py)
@@ -45,6 +45,7 @@ vigil/
 │   │   └── scheduler.py      # Cron-style scheduled tasks
 │   ├── agent/            # TypeScript hunt/agent harness (hypothesis-loop hunts; arch/*.yaml capability briefs)
 │   ├── decoy/            # MTD decoy service: ssh/http canary endpoints (canary.py, ssh_decoy.py, http_decoy.py)
+│   ├── enforcement/      # Kernel enforcement daemon (Go, eBPF/XDP; standalone module, own toolchain — see services/enforcement/runbook.md)
 │   ├── medic/            # Health adjudicator: hash-chained decision records over sensor observations
 │   └── worker/           # ARQ llm-worker, drains the arq:llm queue, started directly by
 │                          # start.sh/compose/Helm (python -m services.worker), never supervised
@@ -504,9 +505,10 @@ GitHub Actions workflows in `.github/workflows/`:
 |----------|---------|------|
 | `ci-cd.yml` | Push/PR to main, develop | Lint → Unit Tests → Integration Tests → Security Scan → Docker Build |
 | `release-please.yml` | Push to `main`, manual | Read Conventional Commits since last tag → open/update a release PR with bumped `VERSION` / `Chart.yaml` (`appVersion` + `version`, lockstep) / `clients/web/package.json` / `clients/web/package-lock.json` + `CHANGELOG.md`. On merge, push `vX.Y.Z` tag and create the GitHub Release. See [releasing.md](releasing.md). |
-| `release.yml` | Version tags (`v*.*.*`) | Build & push `vigil-backend` + `vigil-daemon` images to GHCR → sign the image digest with cosign (keyless) → generate + attest an SBOM → Trivy scans the signed digest → smoke-test that the images start → annotate the GitHub Release with image digests. **Publishes images only — it does not deploy.** Does **not** create the GitHub Release object either (release-please owns that). |
+| `release.yml` | Version tags (`v*.*.*`) | Build & push the `vigil-backend`, `vigil-daemon`, `vigil-agent` and `vigil-enforcer` images to GHCR → sign each image digest with cosign (keyless) → generate + attest an SBOM → Trivy scans the signed digest → smoke-test that the images start → annotate the GitHub Release with image digests. **Publishes images only — it does not deploy.** Does **not** create the GitHub Release object either (release-please owns that). |
 | `helm-chart.yml` | Push/PR touching `infra/helm/` | Verify `database/init/` ↔ chart-bundle copies are in sync (`diff -r`) → `helm lint`/`template` across default, dev, and Bitnami-subchart values → kubeconform → `ct lint` |
 | `medic.yml` | Push/PR touching `services/medic/` or `infra/docker/Dockerfile.medic` | The Medic service has its own lock and its own gates, so it runs as its own path-filtered workflow rather than steps in `ci-cd.yml` |
+| `enforcement.yml` | Push to `main`, or push/PR touching `services/enforcement/`, `infra/docker/Dockerfile.enforcer`, `infra/helm/` | The enforcement daemon is a standalone Go module with its own toolchain (eBPF/XDP) — Go checks and tests plus its own image build, path-filtered |
 | `nightly.yml` | Daily 2 AM UTC | Comprehensive security & performance audits |
 
 CI runs:
