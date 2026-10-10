@@ -137,7 +137,7 @@ async def start_run(request: StartRunRequest) -> StartRunResponse:
     except run_start.UnknownRunKind as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except run_start.WorkflowDisabled as exc:
-        raise HTTPException(status_code=409, detail=exc.message) from None
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except run_limits.OverrideRefused as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except run_start.RunQueueUnavailable as exc:
