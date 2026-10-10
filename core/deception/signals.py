@@ -219,7 +219,7 @@ class DeceptionSignalService:
         if config is None:
             from core.deception.config import DeceptionConfig
 
-            config = DeceptionConfig.from_settings()
+            config = DeceptionConfig.resolved()
         self.config = config
 
     def record_probe(

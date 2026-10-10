@@ -20,6 +20,7 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "CRIBL_URL",
     "CRIBL_WORKER_GROUP",
     "CROWDSTRIKE_BASE_URL",
+    "DECOY_CONTROLLER_BASE_URL",
     "ELASTIC_PATHS",
     "ELASTIC_SIEM_ELASTICSEARCH_URL",
     "ELASTIC_SIEM_INDEX_PATTERN",
@@ -47,6 +48,20 @@ NOT_SETTINGS = ENV_CREDENTIAL_NAMES | {
     "PALO_ALTO_CA_CERT_PATH",
     "SPLUNK_CA_CERT_PATH",
     "VSTRIKE_CA_CERT_PATH",
+    # Decoy-controller service (services/decoy_controller/): a separate Python
+    # deployment whose config protocol is its own environment — it shares no
+    # settings machinery with Vigil by contract (see its package docstring).
+    "DECOY_CONTROLLER_TOKEN",
+    "DECOY_CONTROLLER_DRIVER",
+    "DECOY_CONTROLLER_HOST",
+    "DECOY_CONTROLLER_PORT",
+    "DECOY_CONTROLLER_SWEEP_INTERVAL",
+    "DECOY_CONTROLLER_MAX_TTL",
+    "DECOY_CONTROLLER_MAX_RULES",
+    "DECOY_CONTROLLER_DECOY_IP",
+    "DECOY_CONTROLLER_DECOY_MAP",
+    "DECOY_CONTROLLER_PROTOCOLS",
+    "DECOY_CONTROLLER_BOOT_DRAIN",
     # core.platform.runtime_config ENV_FALLBACKS: DB-first settings whose env var is
     # only the fallback when the system_config row is absent.
     "LOCAL_OLLAMA_RECOVERY_ENABLED",

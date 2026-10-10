@@ -744,6 +744,11 @@ config:
   DAEMON_HONEY_ROUTE_WINDOW: "3600"
   DAEMON_DECEPTION_KILL_SWITCH: "false"
   DAEMON_DECEPTION_ALLOWLIST: ""
+  # Decoy-controller integration fallbacks (feature 5): the daemon reads them
+  # when the decoy_controller integration has no Settings-store entry. Same
+  # values the decoy-controller service runs with.
+  DECOY_CONTROLLER_BASE_URL: ""
+  DECOY_CONTROLLER_API_TOKEN: ""
   DAEMON_ESCALATION_ENABLED: "true"
   DAEMON_ESCALATE_SEVERITIES: "critical,high"
   DAEMON_SLACK_ENABLED: "true"

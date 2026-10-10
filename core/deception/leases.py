@@ -60,7 +60,7 @@ class DeceptionLeaseService:
         config: Optional[DeceptionConfig] = None,
         backend: Optional[Any] = None,
     ):
-        self.config = config or DeceptionConfig.from_settings()
+        self.config = config or DeceptionConfig.resolved()
         self.backend = (
             backend if backend is not None else build_backend(self.config.backend)
         )

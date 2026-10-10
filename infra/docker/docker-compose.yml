@@ -909,6 +909,50 @@ services:
     profiles:
       - misp
 
+  # Decoy controller — reference enforcement service for the honey-routing
+  # posture (feature 5). Vigil decides, leases, and audits; this service
+  # programs redirects and enforces their TTLs. It is never on the production
+  # routing path (fail-open) and ships inert: the default `memory` driver
+  # records what it would do and touches no traffic.
+  #
+  # Real single-host enforcement (nftables DNAT) needs kernel privileges and
+  # the host's routing view — replace `ports:`/`networks:` with
+  #   network_mode: host
+  #   cap_add: [NET_ADMIN]
+  # and set DECOY_CONTROLLER_DRIVER=nftables. On Kubernetes use the cilium
+  # driver instead. The decoy farm itself joins the `deception` profile
+  # separately and attaches only to decoy-net.
+  decoy-controller:
+    profiles:
+      - deception
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.decoy-controller
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.12}
+    container_name: deeptempo-decoy-controller
+    environment:
+      # Empty token denies every steering request (auth is deny-by-default).
+      DECOY_CONTROLLER_TOKEN: ${DECOY_CONTROLLER_TOKEN:-}
+      DECOY_CONTROLLER_DRIVER: ${DECOY_CONTROLLER_DRIVER:-memory}
+      DECOY_CONTROLLER_PORT: "8484"
+      DECOY_CONTROLLER_SWEEP_INTERVAL: ${DECOY_CONTROLLER_SWEEP_INTERVAL:-30}
+      DECOY_CONTROLLER_MAX_TTL: ${DECOY_CONTROLLER_MAX_TTL:-86400}
+      DECOY_CONTROLLER_MAX_RULES: ${DECOY_CONTROLLER_MAX_RULES:-100}
+      DECOY_CONTROLLER_DECOY_IP: ${DECOY_CONTROLLER_DECOY_IP:-10.0.5.10}
+      DECOY_CONTROLLER_DECOY_MAP: ${DECOY_CONTROLLER_DECOY_MAP:-}
+      DECOY_CONTROLLER_PROTOCOLS: ${DECOY_CONTROLLER_PROTOCOLS:-tcp}
+      DECOY_CONTROLLER_BOOT_DRAIN: ${DECOY_CONTROLLER_BOOT_DRAIN:-true}
+    ports:
+      - "127.0.0.1:8484:8484"
+    restart: unless-stopped
+    networks:
+      # Control plane: the daemon programs it over deeptempo-network. The
+      # decoy-net membership is for the enforcement driver's view of the
+      # decoy plane, not for decoys to reach production.
+      - deeptempo-network
+      - decoy-net
+
 volumes:
   postgres_data:
     driver: local
@@ -950,4 +994,12 @@ volumes:
 networks:
   deeptempo-network:
     driver: bridge
+  # The decoy plane (feature 5): isolated from the outside world — decoy
+  # containers attach here and to nothing else (deny-by-default egress is
+  # the farm's containment invariant; telemetry ships through the controller
+  # and Vigil's webhook, not directly out). The decoy-controller itself also
+  # joins deeptempo-network so the daemon can program it.
+  decoy-net:
+    driver: bridge
+    internal: true
 

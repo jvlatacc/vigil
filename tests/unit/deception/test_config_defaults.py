@@ -90,9 +90,14 @@ class TestBackendFactory:
     def test_dry_run_is_the_buildable_default(self):
         assert isinstance(build_backend("dry_run"), DryRunBackend)
 
-    def test_the_controller_backend_is_named_not_shipped(self):
-        with pytest.raises(NotImplementedError, match="decoy-controller"):
-            build_backend("controller")
+    def test_the_controller_backend_ships_in_pr2(self):
+        # Named in the spine, shipped with the decoy-controller slice:
+        # building it is the default path once an operator points Vigil at
+        # the controller (unconfigured construction is allowed; calls fail
+        # closed without credentials — see test_controller_backend.py).
+        from core.deception.backends import ControllerBackend
+
+        assert isinstance(build_backend("controller"), ControllerBackend)
 
     def test_an_unknown_backend_fails_at_construction(self):
         with pytest.raises(ValueError, match="Unknown deception steering backend"):
