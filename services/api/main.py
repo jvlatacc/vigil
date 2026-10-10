@@ -567,6 +567,28 @@ async def _startup(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error loading secrets for MCP servers: {e}")
 
+    # One-time hygiene sweep (E7): rows written before the encrypted secret
+    # store existed keep credentials in the integration_configs JSONB, so a
+    # database dump was a credential dump. Idempotent — a scrubbed row has
+    # nothing left to move — so it runs at every startup rather than tracking
+    # a done flag. Best-effort: a failed sweep is a warning, never a failed
+    # startup; the next boot retries it.
+    try:
+        from core.integrations.integration_secrets import (
+            migrate_plaintext_credentials,
+        )
+        from core.storage.config_service import get_config_service
+
+        migrated = migrate_plaintext_credentials(get_config_service())
+        if migrated:
+            logger.warning(
+                "Migrated plaintext credentials out of integration_configs "
+                "rows into the encrypted store: %s",
+                {iid: len(fields) for iid, fields in migrated.items()},
+            )
+    except Exception as e:
+        logger.warning("Plaintext credential migration skipped: %s", e)
+
     # A configured connector with no allowlisted origin will be blocked by the
     # default CSP — warn rather than fail silently. Best-effort.
     try:
@@ -607,6 +629,14 @@ async def _startup(app: FastAPI):
                 from core.storage.connection import init_database
 
                 init_database(echo=False, create_tables=True)
+                # Bundled CISA KEV: same in-process reasoning as the reference
+                # seed (a Helm db-init Job would run before the table exists),
+                # idempotent through the upsert triple, and never fatal at
+                # startup. Lives at this composition root: the storage tier
+                # must not import core.threat_intel.
+                from core.threat_intel.kev_seed import seed_kev_indicators
+
+                seed_kev_indicators()
                 logger.info("✓ Database schema ensured (create_all)")
             except Exception as schema_err:
                 logger.error(

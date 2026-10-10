@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/vigil/enforcement/contracts/action-request/v1",
+  "title": "Enforcement action request v1",
+  "description": "Body of POST /v1/actions. The daemon refuses (structured error, never faked success) rather than partially enforcing. This is the spec's contract sample, schema form.",
+  "type": "object",
+  "required": ["action_id", "kind", "target", "reason", "idempotency_key"],
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "description": "Caller-unique id, echoed in every response and stored with the kernel evidence. Replaying it is a no-op; reusing it for a different request is a conflict.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "kind": {
+      "description": "The enforcement primitive. v1 has exactly three.",
+      "enum": ["xdp_drop", "socket_redirect", "process_interdict"]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ip": {
+          "description": "Target address. Required for xdp_drop and socket_redirect; forbidden for process_interdict. Loopback, multicast, unspecified, link-local and broadcast targets are refused.",
+          "type": "string"
+        },
+        "port": {
+          "description": "L4 port; only socket_redirect may set it. 0 means absent.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "pid": {
+          "description": "Target process id; only process_interdict may set it. 0 means absent.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ttl_seconds": {
+      "description": "Containment lifetime in seconds. Omitted means the daemon default. Refused below the 60 s floor: an enforcement that outlives its reason is a new finding, and a sub-floor TTL is a no-op wearing an enforced badge.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "reason": {
+      "description": "Why this enforcement exists — travels with the action and lands in the audit trail. Required; an unexplained kernel state is indistinguishable from compromise.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "idempotency_key": {
+      "description": "Caller's dedupe key, e.g. 'xdp_block_ip:203.0.113.7' — the approval pipeline's existing convention. Required.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  }
+}

@@ -1,0 +1,58 @@
+name: Edge
+
+# The edge daemon (Local Autonomy Mesh) has its own lock and its own gates, so
+# it has its own workflow rather than steps in ci-cd.yml — the Medic pattern.
+# Path-filtered: a PR that doesn't touch services/edge doesn't pay for it. No
+# repository condition: nothing here needs a secret, so it runs on forks as
+# well.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/edge/**"
+      - ".importlinter"
+      - ".github/workflows/edge.yml"
+  pull_request:
+    paths:
+      - "services/edge/**"
+      - ".importlinter"
+      - ".github/workflows/edge.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Outside services/: the repo's ratchets scan every .py file under it.
+  UV_PROJECT_ENVIRONMENT: ../../.venv
+
+jobs:
+  # The edge contract is the spec every later edge PR builds against, so the
+  # package's tests and its import fence gate here.
+  edge-core:
+    name: Edge daemon core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.7"
+
+      # uv picks Python 3.12 from services/edge/pyproject.toml's requires-python.
+      - name: Install Edge's locked dependencies
+        run: uv sync --project services/edge --frozen
+
+      - name: Ruff
+        run: |
+          uv run --project services/edge --frozen ruff check services/edge
+          uv run --project services/edge --frozen ruff format --check services/edge
+
+      - name: Pytest
+        run: uv run --project services/edge --frozen pytest services/edge
+
+      # The whole .importlinter file, not only Edge's contract: it is one
+      # command and the others are cheap.
+      - name: Import fence
+        run: uv run --project services/edge --frozen lint-imports

@@ -2,7 +2,7 @@
 
 The release workflow inventories each published image (syft scan of the signed
 index digest), attaches a keyless CycloneDX attestation to that same digest,
-and publishes nine SBOM files plus checksums as release assets. Any of that
+and publishes ten SBOM files plus checksums as release assets. Any of that
 silently disappearing — a deleted step, an attestation re-keyed to a mutable
 tag or to the config digest docker manifest inspect reports, an upload entry
 dropped — recreates the gap this pipeline closed, so deleting SBOM support
@@ -26,11 +26,12 @@ _SYFT_ACTION_SHA = "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c"  # v0.24.3
 _SYFT_VERSION = "v1.54.1"
 _NPM_GENERATOR = "@cyclonedx/cyclonedx-npm@6.0.1"
 
-_BUILD_JOBS = ("build-backend", "build-daemon", "build-agent")
+_BUILD_JOBS = ("build-backend", "build-daemon", "build-agent", "build-enforcer")
 _BUILD_JOB_IMAGE = {
     "build-backend": "vigil-backend",
     "build-daemon": "vigil-daemon",
     "build-agent": "vigil-agent",
+    "build-enforcer": "vigil-enforcer",
 }
 _NPM_SURFACES = (
     "clients/web",
@@ -39,11 +40,12 @@ _NPM_SURFACES = (
     "infra/docker/mcp-packages",
 )
 
-# The nine SBOM documents every release publishes (each with a .sha256 sibling).
+# The ten SBOM documents every release publishes (each with a .sha256 sibling).
 _EXPECTED_SBOM_STEMS = (
     "vigil-sbom-backend",
     "vigil-sbom-daemon",
     "vigil-sbom-agent",
+    "vigil-sbom-enforcer",
     "vigil-sbom-python",
     "vigil-sbom-npm-web",
     "vigil-sbom-npm-desktop",
@@ -222,7 +224,7 @@ def test_update_release_uploads_every_sbom_and_checksum():
     expected |= {f"{f}.sha256" for f in expected}
     got = {f.split("/", 1)[1] for f in sbom_files}
     assert got == expected, (
-        "the files: input must carry exactly the nine SBOM documents and their "
+        "the files: input must carry exactly the ten SBOM documents and their "
         f"checksums.\n  missing: {sorted(expected - got)}\n  extra: {sorted(got - expected)}"
     )
 

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deeptempo.ai/vigil/enforcement/contracts/action-response/v1",
+  "title": "Enforcement action response v1",
+  "description": "Success reply of POST /v1/actions (201 fresh, 200 replayed) and of the GET/DELETE action routes. The evidence object is what Vigil's mark_executed stores verbatim; a drop counter that ticks is the proof of enforcement.",
+  "type": "object",
+  "required": ["action_id", "state", "evidence", "expires_at", "replayed"],
+  "additionalProperties": false,
+  "properties": {
+    "action_id": { "type": "string" },
+    "state": {
+      "description": "enforced = kernel state is live; released = the entry has been removed (TTL expiry or explicit release).",
+      "enum": ["enforced", "released"]
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["attach_point", "map", "map_slot", "counters"],
+      "additionalProperties": false,
+      "properties": {
+        "attach_point": {
+          "description": "Where the program is attached, e.g. 'eth0/xdp' or 'cgroup/vigil'.",
+          "type": "string",
+          "minLength": 1
+        },
+        "map": {
+          "description": "Pinned map path holding the enforcement entry, e.g. /sys/fs/bpf/vigil/xdp_block_v1.",
+          "type": "string",
+          "pattern": "^/sys/fs/bpf/vigil/"
+        },
+        "map_slot": {
+          "description": "Slot/index the entry landed in — pairs with the map path to make the kernel state inspectable.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "counters": {
+          "description": "Data-path counters at enforcement time. Required on every success reply: evidence without counters is a faked success.",
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "expires_at": {
+      "description": "RFC 3339 UTC instant after which the kernel entry self-expires (expiry lives in the map values, so containment ages out even if Vigil disappears).",
+      "type": "string",
+      "format": "date-time"
+    },
+    "replayed": {
+      "description": "True when this reply is the idempotent answer to a duplicate delivery: same evidence, no second enforcement.",
+      "type": "boolean"
+    },
+    "released_at": {
+      "description": "Present on released actions: when the kernel state was removed.",
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

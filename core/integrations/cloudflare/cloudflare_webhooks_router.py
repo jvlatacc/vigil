@@ -12,6 +12,12 @@ Endpoints (only mounted when the flag is on):
     GET  /api/webhooks/cloudflare/cloudy/health
 
 Signature header: ``X-Cloudflare-Signature`` (hex HMAC-SHA256 of raw body).
+The body must carry ``timestamp`` (unix seconds) inside the signed payload;
+it is accepted only within ±5 minutes of the receiver's clock, and a
+verified signature is remembered past that window so the same signed body
+posted twice is rejected as a replay. The cache is in-process — a
+multi-replica deployment needs a shared store, and the receiver stays off
+by default.
 """
 
 from __future__ import annotations
@@ -20,8 +26,10 @@ import asyncio
 import hmac
 import json
 import logging
+import threading
+import time
 from hashlib import sha256
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
@@ -30,10 +38,13 @@ from core.routing import Auth, RouterMeta
 from core.secrets import get_secret
 from core.webhook_rejections import (
     BAD_SIGNATURE,
+    BAD_TIMESTAMP,
     DISABLED,
     MISSING_SIGNATURE,
     NO_SECRET,
+    REPLAY,
     SECRET_LOOKUP_FAILED,
+    STALE_TIMESTAMP,
     record_rejection,
     rejection_counts,
 )
@@ -43,6 +54,16 @@ logger = logging.getLogger(__name__)
 ENDPOINT = "cloudflare/cloudy"
 
 router = APIRouter()
+
+# The signed-payload timestamp may sit this far from the receiver's clock.
+_TIMESTAMP_SKEW_SECONDS = 300
+# A verified signature is remembered a little past the skew window: any
+# replay of it is stale-rejected by then anyway, so the entry is dead weight.
+_REPLAY_TTL_SECONDS = _TIMESTAMP_SKEW_SECONDS + 60
+
+# (verified signature hex) -> monotonic time of first acceptance.
+_seen_signatures: Dict[str, float] = {}
+_seen_lock = threading.Lock()
 
 
 # Off unless explicitly enabled. system_config wins so the Settings UI can flip
@@ -87,10 +108,52 @@ def _get_max_body_bytes() -> int:
     return max(1, get_settings().cloudy_webhook_max_body_kb) * 1024
 
 
-def _verify_signature(raw_body: bytes, provided: str, secret: str) -> bool:
+def _verified_signature(raw_body: bytes, provided: str, secret: str) -> Optional[str]:
+    """The HMAC hex when ``provided`` matches, else None.
+
+    The verified hex is the replay-cache key: it is canonical (an attacker
+    cannot poison the cache with a differently-formatted signature) and is
+    only returned for a genuine match.
+    """
     expected = hmac.new(secret.encode("utf-8"), raw_body, sha256).hexdigest()
     clean = provided.split("=", 1)[-1].strip()
-    return hmac.compare_digest(expected, clean)
+    if hmac.compare_digest(expected, clean):
+        return expected
+    return None
+
+
+def _seen_before(sig_hex: str, now: Optional[float] = None) -> bool:
+    """True when this verified signature was already accepted.
+
+    Entries expire just past the timestamp window — a signature older than
+    that is rejected as stale before this check runs, so the cache only ever
+    answers for signatures that could otherwise be ingested twice. Single
+    process: multi-replica deployments need a shared cache.
+    """
+    now = time.monotonic() if now is None else now
+    with _seen_lock:
+        for key, seen_at in list(_seen_signatures.items()):
+            if now - seen_at > _REPLAY_TTL_SECONDS:
+                del _seen_signatures[key]
+        if sig_hex in _seen_signatures:
+            return True
+        _seen_signatures[sig_hex] = now
+        return False
+
+
+def _timestamp_error(payload: Dict[str, Any]) -> Optional[str]:
+    """Rejection reason for the signed payload's timestamp, or None.
+
+    The timestamp lives inside the signed body, so a client cannot refresh it
+    without re-signing — an attacker replaying a captured body cannot move it
+    out of the window.
+    """
+    ts = payload.get("timestamp")
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        return BAD_TIMESTAMP
+    if abs(time.time() - float(ts)) > _TIMESTAMP_SKEW_SECONDS:
+        return STALE_TIMESTAMP
+    return None
 
 
 def _reject(
@@ -116,7 +179,9 @@ def _require_enabled(request: Request) -> None:
         )
 
 
-async def _read_and_verify(request: Request, signature: Optional[str]) -> bytes:
+async def _read_and_verify(
+    request: Request, signature: Optional[str]
+) -> Tuple[bytes, str]:
     # Fetch the secret once per request: a second lookup would double-count.
     try:
         secret = _get_secret()
@@ -141,14 +206,15 @@ async def _read_and_verify(request: Request, signature: Optional[str]) -> bytes:
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Body exceeds {_get_max_body_bytes()} bytes",
         )
-    if not signature or not _verify_signature(raw, signature, secret):
+    sig_hex = _verified_signature(raw, signature, secret) if signature else None
+    if not signature or sig_hex is None:
         raise _reject(
             request,
             BAD_SIGNATURE if signature else MISSING_SIGNATURE,
             status.HTTP_401_UNAUTHORIZED,
             "Invalid or missing X-Cloudflare-Signature",
         )
-    return raw
+    return raw, sig_hex
 
 
 def _parse_json(raw: bytes) -> Dict[str, Any]:
@@ -213,6 +279,29 @@ async def cloudy_event(
     x_cloudflare_signature: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     _require_enabled(request)
-    raw = await _read_and_verify(request, x_cloudflare_signature)
+    raw, sig_hex = await _read_and_verify(request, x_cloudflare_signature)
     payload = _parse_json(raw)
+    ts_error = _timestamp_error(payload)
+    if ts_error == BAD_TIMESTAMP:
+        raise _reject(
+            request,
+            BAD_TIMESTAMP,
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Webhook payload must carry a numeric 'timestamp' (unix seconds) "
+            "inside the signed body",
+        )
+    if ts_error == STALE_TIMESTAMP:
+        raise _reject(
+            request,
+            STALE_TIMESTAMP,
+            status.HTTP_401_UNAUTHORIZED,
+            "Webhook timestamp is outside the accepted window (±5 minutes)",
+        )
+    if _seen_before(sig_hex):
+        raise _reject(
+            request,
+            REPLAY,
+            status.HTTP_401_UNAUTHORIZED,
+            "Replayed webhook rejected (signature already used)",
+        )
     return await asyncio.to_thread(_ingest, payload)

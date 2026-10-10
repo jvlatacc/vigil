@@ -15,6 +15,10 @@ ATOMIC_RED_TEAM = register_descriptor(
             IntegrationField("runner_path"),
             IntegrationField("atomics_path"),
         ),
+        # Runs ATT&CK techniques against a target. The name rides the
+        # fail-closed pattern too (_execute); the declaration says so at the
+        # vendor's source of truth rather than leaving it to the name.
+        mutating_tools=("atomic_red_team_execute",),
     )
 )
 

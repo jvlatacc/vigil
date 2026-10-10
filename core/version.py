@@ -13,7 +13,7 @@ def _read_version() -> str:
     whitespace-only — e.g. in unusual test or partial-install
     environments, Docker volume-mount accidents, or tooling truncation.
     release-please is the sole writer of VERSION; see
-    https://vigilsoc.org/docs/releasing/.
+    docs/develop/releasing.md.
     """
     version_file = Path(__file__).resolve().parents[1] / "VERSION"
     try:
