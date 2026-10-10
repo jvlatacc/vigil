@@ -47,7 +47,7 @@ class ProbeMetrics:
         self._time_to_verdict_hist = None
         self._instruments_ready = False
         # In-memory shadow, keyed (probe, outcome).
-        self.results: Dict[tuple, int] = defaultdict(int)
+        self.results: dict[tuple, int] = defaultdict(int)
 
     def _ensure_instruments(self):
         if self._instruments_ready:
@@ -68,7 +68,7 @@ class ProbeMetrics:
         except Exception as _err:
             logger.debug("OTEL probe instruments unavailable: %s", _err)
 
-    def record(self, probe: str, outcome: str, time_to_verdict_s: Optional[float]):
+    def record(self, probe: str, outcome: str, time_to_verdict_s: float | None):
         """Count one score; the histogram only sees hit/miss (a verdict exists)."""
         self.results[(probe, outcome)] += 1
         self._ensure_instruments()
@@ -110,6 +110,7 @@ class MetricsServer:
         self.responder = None
         self.scheduler = None
         self.orchestrator = None
+        self.policy_maturity = None
         self.cep = None  # CepTap — None when CEP is disabled
         # The rest of the CEP loop — all None when CEP is disabled. Their
         # stats merge into the /status "cep" section (spec AC 8).
@@ -151,6 +152,10 @@ class MetricsServer:
                 # spine and its acks are untouched (spec AC 8), and a
                 # restart would not clear it faster.
                 return "degraded" if self._cep_degraded else "running"
+        # The maturity job is config-gated: an unwired scheduler is a
+        # deliberate absence, not a failed component.
+        if name == "policy-maturity" and component is None:
+            return "disabled"
         task = self._tasks.get(name)
         if component is None or task is None:
             return "not_initialized"
@@ -160,7 +165,7 @@ class MetricsServer:
                 return "stopped"
             exc = task.exception()
             return f"failed: {type(exc).__name__}" if exc else "stopped"
-        if name == "orchestrator" and not component.enabled:
+        if not getattr(component, "enabled", True):
             return "disabled"
         return "running"
 
@@ -215,7 +220,7 @@ class MetricsServer:
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         """Handle health check request."""
-        health: Dict[str, Any] = {
+        health: dict[str, Any] = {
             "status": "healthy",
             "timestamp": utcnow().isoformat(),
             "uptime_seconds": (utcnow() - self._start_time).total_seconds(),
@@ -230,6 +235,7 @@ class MetricsServer:
                 ("responder", self.responder),
                 ("scheduler", self.scheduler),
                 ("orchestrator", self.orchestrator),
+                ("policy-maturity", self.policy_maturity),
                 ("cep", self.cep),
                 ("cep-engine", self.cep_pipeline),
                 ("cep-snapshot", self.cep_snapshots),
@@ -267,9 +273,9 @@ class MetricsServer:
 
         return web.json_response(status)
 
-    def _collect_metrics(self) -> Dict[str, Any]:
+    def _collect_metrics(self) -> dict[str, Any]:
         """Collect metrics from all component stats dicts."""
-        metrics: Dict[str, Any] = {"vendors": vendor_error_snapshot()}
+        metrics: dict[str, Any] = {"vendors": vendor_error_snapshot()}
 
         if self.poller:
             metrics["poller"] = self.poller.stats.copy()

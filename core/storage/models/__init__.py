@@ -64,6 +64,12 @@ from core.storage.models.episodic import (
 from core.storage.models.exclusion import IpExclusion
 from core.storage.models.finding import Finding, FindingMitrePrediction
 from core.storage.models.mtd import MtdDecoyRegistry, MtdIpExclusion
+from core.storage.models.policy_compiler import (
+    POLICY_MODES,
+    POLICY_STATES,
+    CompiledPolicy,
+    CompiledPolicyDecision,
+)
 from core.storage.models.protected_asset import ProtectedAsset
 from core.storage.models.workflow import (
     IN_FLIGHT_INVESTIGATION_STATUSES,
@@ -101,6 +107,8 @@ __all__ = [
     "CaseTemplate",
     "CaseWatcher",
     "ChatMessage",
+    "CompiledPolicy",
+    "CompiledPolicyDecision",
     "ConfigAuditLog",
     "ContainmentAction",
     "Conversation",
@@ -131,6 +139,8 @@ __all__ = [
     "LLMInteractionLog",
     "LLMProviderConfig",
     "McpCredential",
+    "POLICY_MODES",
+    "POLICY_STATES",
     "MtdDecoyRegistry",
     "MtdIpExclusion",
     "ProtectedAsset",

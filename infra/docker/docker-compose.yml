@@ -41,6 +41,7 @@ x-agent-env: &agent-env
 # the daemon runs in soc-daemon; one list so both see the same values.
 x-intent-env: &intent-env
   DAEMON_AUTO_TRIAGE: ${DAEMON_AUTO_TRIAGE:-true}
+  JIT_FAST_PATH_ENABLED: ${JIT_FAST_PATH_ENABLED:-false}
   DAEMON_AUTO_ENRICH: ${DAEMON_AUTO_ENRICH:-true}
   DAEMON_AUTO_RESPONSE: ${DAEMON_AUTO_RESPONSE:-true}
   DAEMON_CONFIDENCE_THRESHOLD: ${DAEMON_CONFIDENCE_THRESHOLD:-0.90}

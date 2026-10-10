@@ -603,6 +603,7 @@ dbInit:
     - 38_custom_agent_fallback_model.sql
     - 39_case_findings_finding_index.sql
     - 40_cep_snapshots.sql
+    - 40_compiled_policies.sql
     - 40_edge_nodes.sql
     - 40_mtd_decoy_registry.sql
     - 40_protected_assets.sql
@@ -917,6 +918,7 @@ config:
   DAEMON_WEBHOOK_ENABLED: "true"
   DAEMON_WEBHOOK_PORT: "8081"
   DAEMON_AUTO_TRIAGE: "true"
+  JIT_FAST_PATH_ENABLED: "false"
   DAEMON_AUTO_ENRICH: "true"
   DAEMON_AUTO_RESPONSE: "true"
   DAEMON_CONFIDENCE_THRESHOLD: "0.90"

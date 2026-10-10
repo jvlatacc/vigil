@@ -12,6 +12,9 @@
 triage:
   # Run AI triage on new findings without being asked. (DAEMON_AUTO_TRIAGE)
   auto_triage: true
+  # Decide triage from compiled policies instead of an LLM call, for findings
+  # a promoted policy matches (docs/adr/0001). (JIT_FAST_PATH_ENABLED)
+  jit_fast_path_enabled: false
 
 enrich:
   # Enrich findings with threat intel automatically. (DAEMON_AUTO_ENRICH)

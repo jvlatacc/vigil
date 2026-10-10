@@ -7,7 +7,7 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 # Add the repo root to sys.path (this file is services/daemon/main.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class SOCDaemon:
     """Main daemon orchestrator for autonomous SOC operations."""
 
-    def __init__(self, config: Optional[DaemonConfig] = None):
+    def __init__(self, config: DaemonConfig | None = None):
         if config is None:
             from services.daemon.config import DaemonConfig
 
@@ -109,6 +109,7 @@ class SOCDaemon:
         from core.response.autonomous_response_service import AutonomousResponseService
         from core.storage.connection import get_db_manager
         from services.daemon.kafka_ingestor import KafkaIngestor
+        from services.daemon.maturity import PolicyMaturityScheduler
         from services.daemon.metrics import MetricsServer
         from services.daemon.orchestrator import Orchestrator
         from services.daemon.poller import DataPoller
@@ -157,6 +158,10 @@ class SOCDaemon:
             mtd_config=self.config.mtd,
         )
         self._scheduler = TaskScheduler(self.config.scheduler)
+        self._policy_maturity = PolicyMaturityScheduler(
+            interval_seconds=self.config.processing.jit_maturity_interval,
+            enabled=self.config.processing.jit_fast_path_enabled,
+        )
         self._orchestrator = Orchestrator(
             self.config.orchestrator,
             approvals=approvals,
@@ -259,6 +264,7 @@ class SOCDaemon:
             self._metrics_server.responder = self._responder
             self._metrics_server.scheduler = self._scheduler
             self._metrics_server.orchestrator = self._orchestrator
+            self._metrics_server.policy_maturity = self._policy_maturity
             self._metrics_server.cep = self._cep_tap
             # The CEP loop's parts — all None when CEP is disabled; their
             # stats merge into the /status "cep" section (spec AC 8).
@@ -313,6 +319,13 @@ class SOCDaemon:
             start("orchestrator", self._orchestrator, "Autonomous orchestrator")
             if not self.config.orchestrator.enabled:
                 logger.info("Autonomous orchestrator is disabled")
+
+        if self._policy_maturity:
+            start(
+                "policy-maturity",
+                self._policy_maturity,
+                "Policy maturity scheduler",
+            )
 
         if self._metrics_server:
             start("metrics", self._metrics_server, "Metrics server")

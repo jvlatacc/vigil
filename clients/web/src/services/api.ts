@@ -674,6 +674,10 @@ export const configApi = {
     local_ollama_recovery_enabled: boolean
     local_ollama_recovery_retry_limit: number
     local_ollama_recovery_restart_gateway: boolean
+    policy_compiler_min_runs?: number
+    policy_compiler_min_consistency?: number
+    policy_compiler_window_days?: number
+    policy_compiler_drift_limit?: number
   }) => api.post('/config/ai-operations', data),
 
   getDarktrace: () => api.get('/config/darktrace'),
@@ -1504,6 +1508,147 @@ export const twinApi = {
 export const bootstrapApi = {
   status: () => api.get<BootstrapStatus>('/auth/bootstrap'),
   create: (payload: BootstrapPayload) => api.post('/auth/bootstrap', payload),
+}
+
+// --- Compiled policies (docs/adr/0001) ---------------------------------------
+
+export type PolicyState = 'candidate' | 'shadow' | 'active' | 'suspended' | 'retired'
+
+export type PolicyTransitionAction = 'promote' | 'suspend' | 'rearm' | 'retire'
+
+export type PolicyExportFormat = 'rego' | 'snort' | 'suricata' | 'iptables'
+
+export interface PolicyMatchClause {
+  workflow_id: string
+  data_source?: string[]
+  techniques?: { any_of?: string[]; all_of?: string[] }
+  entity_context_types?: { any_of?: string[]; all_of?: string[] }
+}
+
+export interface PolicyDecisionSpec {
+  severity: string
+  confidence: number
+  recommended_action: string
+  category: string
+  reasoning: string
+  actions_human_only: boolean
+}
+
+export interface PolicyMaturity {
+  workflow_id: string
+  window_days: number
+  outcomes: Record<string, number>
+  consistency: number
+  analyst_overrides: number
+}
+
+export interface PolicyLifecycleStamps {
+  promoted_by: string | null
+  promoted_at: string | null
+  suspended_by: string | null
+  suspended_at: string | null
+  rearmed_by: string | null
+  rearmed_at: string | null
+  retired_by: string | null
+  retired_at: string | null
+}
+
+/** One (policy_id, version) row as `policy_summary` renders it. */
+export interface CompiledPolicySummary {
+  policy_id: string
+  version: number
+  state: PolicyState
+  content_hash: string
+  compiled_at: string | null
+  compiled_by: string | null
+  match: PolicyMatchClause
+  decision: PolicyDecisionSpec
+  maturity: PolicyMaturity
+  renders: Record<string, string>
+  lifecycle: PolicyLifecycleStamps
+}
+
+export interface PolicyDecisionRecord {
+  id: number
+  finding_id: string
+  policy_id: string
+  policy_version: number
+  content_hash: string
+  mode: string
+  outcome: string
+  decision: Record<string, unknown> | null
+  actual_decision: Record<string, unknown> | null
+  agreement_source: string | null
+  agrees: boolean | null
+  evaluation_us: number | null
+  evaluated_at: string | null
+}
+
+export interface PolicyAgreementCounts {
+  by_mode: { shadow: number; active: number }
+  llm: { agrees: number; disagrees: number }
+  analyst: { agrees: number; disagrees: number }
+  pending: number
+}
+
+export interface PolicyDecisionsPage {
+  policy_id: string
+  version: number | null
+  total: number
+  agreement: PolicyAgreementCounts
+  decisions: PolicyDecisionRecord[]
+}
+
+export interface PolicyTransitionResponse {
+  transition: {
+    action: PolicyTransitionAction
+    actor: string
+    from_state: PolicyState
+    to_state: PolicyState
+    content_hash: string
+  }
+  policy: CompiledPolicySummary
+}
+
+export interface PolicyExportDownload {
+  blob: Blob
+  filename: string
+  sha256: string | null
+}
+
+export const compiledPoliciesApi = {
+  list: (state?: PolicyState) =>
+    api.get<{ policies: CompiledPolicySummary[]; total: number }>('/compiled-policies', {
+      params: state ? { state } : undefined,
+    }),
+  get: (policyId: string) =>
+    api.get<{ policy_id: string; head: CompiledPolicySummary; versions: CompiledPolicySummary[] }>(
+      `/compiled-policies/${encodeURIComponent(policyId)}`
+    ),
+  decisions: (policyId: string, params?: { version?: number; limit?: number; offset?: number }) =>
+    api.get<PolicyDecisionsPage>(`/compiled-policies/${encodeURIComponent(policyId)}/decisions`, {
+      params,
+    }),
+  transition: (policyId: string, action: PolicyTransitionAction, body: { version: number; content_hash?: string }) =>
+    api.post<PolicyTransitionResponse>(`/compiled-policies/${encodeURIComponent(policyId)}/${action}`, body),
+  /** Download a rendered export; returns the blob plus the attachment's own name and digest. */
+  export: async (
+    policyId: string,
+    format: PolicyExportFormat,
+    version?: number
+  ): Promise<PolicyExportDownload> => {
+    const res = await api.get<Blob>(`/compiled-policies/${encodeURIComponent(policyId)}/export`, {
+      params: { format, ...(version !== undefined ? { version } : {}) },
+      responseType: 'blob',
+    })
+    const disposition = (res.headers['content-disposition'] as string | undefined) ?? ''
+    const match = /filename="?([^";]+)"?/.exec(disposition)
+    return {
+      blob: res.data,
+      filename: match?.[1] ?? `${policyId}.${format}.txt`,
+      sha256: (res.headers['x-vigil-render-sha256'] as string | undefined) ?? null,
+    }
+  },
 }
 
 export default api

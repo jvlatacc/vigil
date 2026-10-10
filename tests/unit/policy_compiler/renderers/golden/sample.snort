@@ -1,0 +1,8 @@
+# Vigil JIT compiled policy: pol_307d1ed96058623d v1 (content sha256:59465c16c8b96db4d880dde6e166eb53377bc57307801e76924a586fce805029)
+# Archetype: workflow wf_hunt_cred_stuffing over 30 days
+# Match: data_source in ['okta.system_log', 'splunk']; techniques any_of ['T1110.003', 'T1110.004']; entity-context types all_of ['src_ip', 'user_account']
+# Decision: severity=high confidence=0.93 recommended_action=investigate (actions human-only)
+# Rendered for Snort by the Vigil policy compiler — generated artifact, do not edit.
+# Fidelity note: Snort rules match packets, not findings — the archetype's predicate tree is not expressible here. Matching stays authoritative in the Vigil evaluator and the exported Rego module; this rule carries the policy's identity and decision for correlation.
+
+alert ip any any -> any any (msg:"VIGIL credential_stuffing pol_307d1ed96058623d v1"; metadata:vigil_policy_id pol_307d1ed96058623d, vigil_policy_version 1, vigil_content_hash 59465c16c8b96db4d880dde6e166eb53377bc57307801e76924a586fce805029; sid:2712784; rev:1;)

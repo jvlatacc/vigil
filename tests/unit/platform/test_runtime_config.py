@@ -187,11 +187,15 @@ class TestAIOperationsSettingsModel:
     def test_defaults_include_local_recovery_toggles(self):
         from services.api.routers.config import AI_OPERATIONS_DEFAULTS
 
-        assert set(AI_OPERATIONS_DEFAULTS) == {
+        # Inclusion, not exact equality: the shipped defaults also carry the
+        # JIT policy compiler tunables (see tests/unit/api/
+        # test_ai_operations_settings.py, which pins their values). This test
+        # only requires the recovery toggles.
+        assert {
             "local_ollama_recovery_enabled",
             "local_ollama_recovery_retry_limit",
             "local_ollama_recovery_restart_gateway",
-        }
+        } <= set(AI_OPERATIONS_DEFAULTS)
         assert AI_OPERATIONS_DEFAULTS["local_ollama_recovery_enabled"] is True
         assert AI_OPERATIONS_DEFAULTS["local_ollama_recovery_retry_limit"] == 1
         assert AI_OPERATIONS_DEFAULTS["local_ollama_recovery_restart_gateway"] is True

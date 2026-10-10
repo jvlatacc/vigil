@@ -51,6 +51,12 @@ INTENT_FIELDS: Tuple[IntentField, ...] = (
         LOWER_TIGHTER,
     ),
     IntentField(
+        "triage.jit_fast_path_enabled",
+        "processing.jit_fast_path_enabled",
+        "jit_fast_path_enabled",
+        LOWER_TIGHTER,
+    ),
+    IntentField(
         "enrich.auto_enrich",
         "processing.auto_enrich_enabled",
         "daemon_auto_enrich",
