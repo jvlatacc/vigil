@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from core.auth.auth_service import AuthService
 from core.auth.password_validator import PasswordPolicyError, validate_password_strength
+from core.auth.permissions import can_assign_role
 from core.auth.token_blacklist import revoke_all_for_user
 from core.routing import Auth, RouterMeta, UnitOfWorkSession
 from core.storage.models import Role, User
@@ -55,19 +56,6 @@ class ChangeUserRoleRequest(BaseModel):
     """Change user role request."""
 
     role_id: str
-
-
-def _can_assign_role(current_user: User, target_role: Role, session: Session) -> bool:
-    """Return True only if current_user holds every permission granted by target_role.
-
-    Prevents a user with users.write from assigning a role that grants
-    more privileges than they themselves have.
-    """
-    current_perms = AuthService.get_user_permissions(current_user.user_id, session)
-    for perm, granted in (target_role.permissions or {}).items():
-        if granted and not current_perms.get(perm, False):
-            return False
-    return True
 
 
 @router.get("/")
@@ -230,7 +218,7 @@ def create_user(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
         )
 
-    if not _can_assign_role(current_user, role, session):
+    if not can_assign_role(current_user, role, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot assign a role with more privileges than your own",
@@ -297,7 +285,7 @@ def _apply_user_update(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
             )
-        if not _can_assign_role(current_user, role, session):
+        if not can_assign_role(current_user, role, session):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Cannot assign a role with more privileges than your own",
@@ -436,7 +424,7 @@ def _apply_role_change(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid role ID"
         )
 
-    if not _can_assign_role(current_user, role, session):
+    if not can_assign_role(current_user, role, session):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot assign a role with more privileges than your own",

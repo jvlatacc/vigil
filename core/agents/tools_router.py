@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import nullcontext
 from typing import Any, ContextManager, Dict, List, Optional, Tuple
 
@@ -15,10 +16,12 @@ from core.agents.integration_tools import resolve_integration_call
 from core.agents.internal_auth import authorise
 from core.agents.mcp_tools import MCPFailure, execute_mcp_tool, split_tool_name
 from core.agents.tool_registry import MANIFEST, execute_backend_tool
+from core.audit import tool_calls
 from core.auth import tool_principal
+from core.auth.permissions import username_has_tool_permission
 from core.deps import provide_mcp_registry
 from core.integrations.mcp.registry import MCPRegistry
-from core.integrations.mcp.surface import acting_as
+from core.integrations.mcp.surface import VIGIL_SERVER, acting_as
 from core.llm.tool_schemas import CALL_INTEGRATION_TOOL
 from core.routing import Auth, RouterMeta
 
@@ -50,6 +53,9 @@ class InvokeRequest(BaseModel):
     # An API-signed token for the session's user (core/auth/tool_principal.py) and
     # ToolPrincipal in contracts/tool.ts. Absent means no person: tools record "agent".
     principal: Optional[str] = None
+    # The hunt or workflow run the call belongs to, when one is; it lands on the
+    # audit row so a run's calls can be pulled together in an investigation.
+    run_id: Optional[str] = None
 
 
 def _failure(kind: str, **detail: Any) -> Dict[str, Any]:
@@ -174,6 +180,26 @@ def _source_system(tool: str, registry: MCPRegistry) -> str:
     return SOURCE_SYSTEM if split is None else split[0]
 
 
+def _server_for(tool: str, args: Dict[str, Any], registry: MCPRegistry) -> str:
+    """The server a permission key is scoped to, mirroring _run's routing.
+
+    The same name the dispatch will execute is the name the permission and the
+    audit row are written against — otherwise the check and the call could
+    disagree about what was about to run. Unlike _source_system this fails
+    closed on an unreadable registry: no server name, no scoping, no call.
+    A call_integration_tool whose inner name is refused falls back to the
+    Vigil scope — the baseline key still applies, and the dispatch refuses it
+    anyway, so the fallback grants nothing.
+    """
+    if tool == CALL_INTEGRATION_TOOL:
+        try:
+            tool, args = resolve_integration_call(registry, args)
+        except MCPFailure:
+            return VIGIL_SERVER
+    split = split_tool_name(tool, registry.get_active_servers())
+    return VIGIL_SERVER if split is None else split[0]
+
+
 # Backend tools first, then the MCP servers. One ceiling governs both, so a tool
 # does not get a second timeout by virtue of living on the other side.
 #
@@ -197,50 +223,37 @@ async def _run(body: InvokeRequest, registry: MCPRegistry) -> Tuple[Any, bool, s
     return result, handled, _source_system(tool, registry)
 
 
-@router.post("/invoke")
-async def invoke(
-    body: InvokeRequest,
-    authorization: Optional[str] = Header(default=None),
-    registry: MCPRegistry = Depends(provide_mcp_registry),
-) -> Dict[str, Any]:
-    authorise(authorization, "tool invocation")
-    # A token that does not verify is refused, never read as "no person": that
-    # would record a person's work as an agent's.
-    bound: ContextManager[None] = nullcontext()
-    if body.principal is not None:
-        try:
-            bound = acting_as(tool_principal.verify(body.principal))
-        except tool_principal.InvalidPrincipal:
-            raise HTTPException(status_code=401, detail="bad or expired principal")
-
+# The call itself, with every failure mapped to the envelope it reports as. The
+# second element is whether the tool answered: the audit row records outcome ok
+# or error, and this is where that is decided.
+async def _dispatch(
+    body: InvokeRequest, registry: MCPRegistry, bound: ContextManager[None]
+) -> Tuple[Dict[str, Any], bool]:
     try:
         # The tool runs in this context (or a copy of it), so it sees the binding.
         with bound:
             result, handled, source = await _run(body, registry)
     except asyncio.TimeoutError:
-        return _failure("timeout", timeoutMs=body.bounds.timeout_ms)
+        return _failure("timeout", timeoutMs=body.bounds.timeout_ms), False
     # An MCP server that could not be reached is a gap in visibility, not a defect
     # in the call, and the hunt records the two differently.
     except MCPFailure as exc:
         if exc.kind == "timeout":
-            return _failure("timeout", timeoutMs=body.bounds.timeout_ms)
-        return _failure(exc.kind, detail=exc.detail)
+            return _failure("timeout", timeoutMs=body.bounds.timeout_ms), False
+        return _failure(exc.kind, detail=exc.detail), False
     except TypeError as exc:
         if _is_bad_arguments(exc):
-            return _failure("invalid_args", detail=str(exc))
+            return _failure("invalid_args", detail=str(exc)), False
         logger.exception("tool %s failed", body.tool)
-        return _failure("backend_error", detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("tool %s failed", body.tool)
-        return _failure("backend_error", detail=str(exc))
+        return _failure("backend_error", detail=str(exc)), False
 
     # refused is for a name nothing implements. A tool that ran and could not
     # answer is a backend_error: the contract keeps the two apart deliberately.
     if not handled:
-        return _failure("refused", detail=f"no such tool: {body.tool}")
+        return _failure("refused", detail=f"no such tool: {body.tool}"), False
     errored = _errored(result)
     if errored is not None:
-        return _failure("backend_error", detail=errored)
+        return _failure("backend_error", detail=errored), False
 
     rows = _rows(result)
     capped = len(rows) > body.bounds.max_rows
@@ -250,4 +263,68 @@ async def invoke(
         "rowCount": min(len(rows), body.bounds.max_rows),
         "capped": capped,
         "sourceSystem": source,
-    }
+    }, True
+
+
+@router.post("/invoke")
+async def invoke(
+    body: InvokeRequest,
+    authorization: Optional[str] = Header(default=None),
+    registry: MCPRegistry = Depends(provide_mcp_registry),
+) -> Dict[str, Any]:
+    authorise(authorization, "tool invocation")
+    # A token that does not verify is refused, never read as "no person": that
+    # would record a person's work as an agent's.
+    username: Optional[str] = None
+    bound: ContextManager[None] = nullcontext()
+    if body.principal is not None:
+        try:
+            username = tool_principal.verify(body.principal)
+            bound = acting_as(username)
+        except tool_principal.InvalidPrincipal:
+            raise HTTPException(status_code=401, detail="bad or expired principal")
+
+    # A person's standing decides whether the call runs at all. A call with no
+    # person behind it — a hunt — has no role to check and keeps the access it
+    # had; what changes is that it is now recorded below as an agent's, not
+    # invisible. The deny row is written first and fails the write if it cannot
+    # land: a refusal nobody can account for is not an enforcement decision.
+    server = _server_for(body.tool, body.args, registry)
+    if username is not None and not username_has_tool_permission(username, server):
+        tool_calls.record_tool_call(
+            actor_username=username,
+            surface=tool_calls.SURFACE_AGENT,
+            server_name=server,
+            tool_name=body.tool,
+            args=body.args,
+            decision=tool_calls.DECISION_DENY,
+            deny_reason="permission",
+            trace_id=tool_calls.current_trace_id(),
+            run_id=body.run_id,
+        )
+        raise HTTPException(status_code=403, detail="tool not permitted for this role")
+
+    started = time.perf_counter()
+    try:
+        response, ok = await _dispatch(body, registry, bound)
+    except Exception as exc:  # noqa: BLE001
+        # The agent layer reads the failure envelope (no session, shared secret);
+        # the exception-text ratchet allow-lists this handler for that reason.
+        logger.exception("tool %s failed", body.tool)
+        response, ok = _failure("backend_error", detail=str(exc)), False
+    # The allow row is written after the call answers, so it carries the real
+    # outcome and duration. Its write failing fails the request the same way:
+    # the caller does not read an unaudited success.
+    tool_calls.record_tool_call(
+        actor_username=username or tool_calls.ACTOR_AGENT,
+        surface=tool_calls.SURFACE_AGENT,
+        server_name=server,
+        tool_name=body.tool,
+        args=body.args,
+        decision=tool_calls.DECISION_ALLOW,
+        outcome="ok" if ok else "error",
+        duration_ms=int((time.perf_counter() - started) * 1000),
+        trace_id=tool_calls.current_trace_id(),
+        run_id=body.run_id,
+    )
+    return response

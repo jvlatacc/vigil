@@ -17,14 +17,18 @@ Three gates, in order, because each one's answer means something different:
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Optional
+import time
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from starlette.responses import JSONResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from core.audit import tool_calls
 from core.auth.mcp_credential_service import authenticate
-from core.integrations.mcp.surface import acting_as, is_enabled
+from core.auth.permissions import username_has_tool_permission
+from core.integrations.mcp.surface import VIGIL_SERVER, acting_as, is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +104,70 @@ def _bearer(scope: Scope) -> Optional[str]:
     return None
 
 
+class _ToolCall(NamedTuple):
+    """The tool a request would run, and the arguments it names."""
+
+    name: str
+    arguments: Dict[str, Any]
+
+
+async def _drain_request_body(receive: Receive, seen: List[Message]) -> bytes:
+    """Read the request body to its end, remembering every message.
+
+    The gate has to read the body to know whether a request is a tool call at
+    all -- but the server behind it reads the body too. The remembered
+    messages are handed back by ``_replay``, so the body is read once and
+    consumed twice rather than read and lost.
+    """
+    chunks: List[bytes] = []
+    while True:
+        message = await receive()
+        seen.append(message)
+        chunks.append(message.get("body", b""))
+        if not message.get("more_body", False):
+            return b"".join(chunks)
+
+
+def _replay(seen: List[Message], receive: Receive) -> Receive:
+    """The messages the gate already read first, then whatever comes next."""
+    queued = list(seen)
+
+    async def replay() -> Message:
+        if queued:
+            return queued.pop(0)
+        return await receive()
+
+    return replay
+
+
+def _tool_call_of(scope: Scope, body: bytes) -> Optional[_ToolCall]:
+    """The tool a request would run, when it is a tool call at all.
+
+    Of the protocol's methods only ``tools/call`` executes anything: setup,
+    discovery and pings neither ask for nor answer to a permission. A body
+    that does not parse is not for the gate to name -- the server behind it
+    answers that, as it did before this check existed.
+    """
+    if scope.get("method") != "POST" or not body:
+        return None
+    try:
+        message = json.loads(body)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or message.get("method") != "tools/call":
+        return None
+    params = message.get("params")
+    if not isinstance(params, dict):
+        return None
+    name = params.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    arguments = params.get("arguments")
+    return _ToolCall(
+        name=name, arguments=arguments if isinstance(arguments, dict) else {}
+    )
+
+
 class McpSurfaceGate:
     """Decides whether a request reaches the MCP server, and as whom.
 
@@ -148,8 +216,60 @@ class McpSurfaceGate:
             await self._unserved(scope, receive, send)
             return
 
+        received: List[Message] = []
+        request_body = await _drain_request_body(receive, received)
+        call = _tool_call_of(scope, request_body)
+
+        # The one method that executes anything, so the one method whose
+        # caller's standing is checked. The surface exposes Vigil's own tools
+        # only: every tool here answers to the server named "vigil", whose
+        # scope a role holds through the baseline grant or not at all.
+        if call is not None and not username_has_tool_permission(
+            user.username, VIGIL_SERVER
+        ):
+            tool_calls.record_tool_call(
+                actor_username=user.username,
+                surface=tool_calls.SURFACE_MCP_INBOUND,
+                server_name=VIGIL_SERVER,
+                tool_name=call.name,
+                args=call.arguments,
+                decision=tool_calls.DECISION_DENY,
+                deny_reason="permission",
+                trace_id=tool_calls.current_trace_id(),
+            )
+            await JSONResponse(
+                {"detail": "tool not permitted for this role"}, status_code=403
+            )(scope, _replay(received, receive), send)
+            return
+
+        started = time.perf_counter()
+        status_code: List[int] = []
+
+        async def _with_status(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                status_code.append(message["status"])
+            await send(message)
+
         with acting_as(user.username):
-            await self.app(_owned_by(scope, user), receive, send)
+            await self.app(
+                _owned_by(scope, user), _replay(received, receive), _with_status
+            )
+
+        # Written once the response is away, so the row carries what the call
+        # answered. A write that fails raises and is logged -- never swallowed:
+        # an unaudited tool call is the one thing this surface must not produce.
+        if call is not None:
+            tool_calls.record_tool_call(
+                actor_username=user.username,
+                surface=tool_calls.SURFACE_MCP_INBOUND,
+                server_name=VIGIL_SERVER,
+                tool_name=call.name,
+                args=call.arguments,
+                decision=tool_calls.DECISION_ALLOW,
+                outcome="ok" if status_code and status_code[0] < 400 else "error",
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                trace_id=tool_calls.current_trace_id(),
+            )
 
 
 def _owned_by(scope: Scope, user) -> Scope:

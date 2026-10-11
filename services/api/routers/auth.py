@@ -7,9 +7,10 @@ Handles login, logout, token refresh, password management, and MFA.
 import asyncio
 import logging
 from datetime import datetime
-from typing import Annotated, List, Optional
+from typing import Annotated, AsyncIterator, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -26,6 +27,23 @@ from core.auth.auth_service import (
     AuthService,
     password_matches_any,
 )
+from core.auth.federation.config import (
+    OidcConfig,
+    load_oidc_config,
+    resolve_client_secret,
+)
+from core.auth.federation.errors import (
+    IdTokenRejected,
+    OidcUnavailableError,
+    TokenExchangeError,
+)
+from core.auth.federation.linking import (
+    UnlinkableIdentityError,
+    link_federated_user,
+)
+from core.auth.federation.oidc import OidcProvider
+from core.auth.federation.state_store import OidcStateStore, RedisStateStore
+from core.auth.group_mapping import UNMAPPED_ROLE_ID
 from core.auth.password_reset import (
     generate_reset_token,
     verify_reset_token,
@@ -58,11 +76,12 @@ ROUTER_META = RouterMeta(
     tags=["authentication"],
     auth=Auth.ROUTER_MANAGED,
     reason=(
-        "A deliberate mix. login / refresh / password-reset / bootstrap "
-        "cannot require auth (chicken-and-egg) and are listed in "
-        "PUBLIC_API_PATHS; the inner /me, /change-password and /mfa routes "
-        "declare get_current_active_user inline. A router-level auth "
-        "dependency here would break login."
+        "A deliberate mix. login / refresh / password-reset / bootstrap and "
+        "the OIDC federation redirect + callback cannot require auth "
+        "(chicken-and-egg) and are listed in PUBLIC_API_PATHS; the inner "
+        "/me, /change-password and /mfa routes declare "
+        "get_current_active_user inline. A router-level auth dependency "
+        "here would break login."
     ),
 )
 
@@ -350,6 +369,221 @@ def login(
         refresh_token=refresh_token,
         user=_user_payload(user, session),
     )
+
+
+# --- Federated sign-in (OIDC broker fronting the directory) -------------
+#
+# Two routes and none of the local machinery: the redirect out to the IdP,
+# and the callback that verifies what came back and mints the same session
+# JWT a local login mints. Both are public (they run before any session
+# exists) and both answer 404 unless federation is configured and enabled
+# — disabled by default, like every other front door this codebase owns.
+
+
+def get_oidc_config() -> OidcConfig:
+    """The federation settings, env floor + SystemConfig override."""
+    return load_oidc_config()
+
+
+async def get_oidc_provider(
+    cfg: OidcConfig = Depends(get_oidc_config),
+) -> AsyncIterator[OidcProvider]:
+    """A provider wired to the configured broker; its HTTP client closes after."""
+    provider = OidcProvider(
+        issuer_url=cfg.issuer_url,
+        client_id=cfg.client_id,
+        scopes=cfg.scopes,
+        groups_claim=cfg.groups_claim,
+        client_secret=resolve_client_secret(),
+    )
+    try:
+        yield provider
+    finally:
+        await provider.aclose()
+
+
+def get_oidc_state_store() -> OidcStateStore:
+    """One-time sign-in state; Redis-backed, fail-closed."""
+    return RedisStateStore()
+
+
+def _request_redirect_uri(request: Request) -> str:
+    """The callback address as this request saw the deployment.
+
+    ``root_path`` carries the context path when the app is mounted under
+    one. Behind a proxy that rewrites the host, the operator pins
+    ``oidc_redirect_uri`` instead — PKCE keeps a poisoned host from
+    completing anything, but the IdP's own redirect-uri registration is
+    the first gate and it should not be fought.
+    """
+    root = request.scope.get("root_path") or ""
+    return f"{str(request.base_url).rstrip('/')}{root}/api/auth/oidc/callback"
+
+
+def _post_login_target(request: Request, cfg: OidcConfig, unmapped: bool) -> str:
+    """Where the browser lands after the callback.
+
+    The unmapped marker is the API half of the visible state: a session
+    that authenticated but maps to no role carries it so the console can
+    label the sign-in (the UI half ships with the console work).
+    """
+    root = request.scope.get("root_path") or ""
+    target = cfg.post_login_redirect or f"{root}/"
+    if unmapped:
+        separator = "&" if "?" in target else "?"
+        target = f"{target}{separator}oidc_state=unmapped"
+    return target
+
+
+@router.get("/oidc/login")
+@limiter.limit("10/minute")
+async def oidc_login(
+    request: Request,
+    provider: OidcProvider = Depends(get_oidc_provider),
+    store: OidcStateStore = Depends(get_oidc_state_store),
+    cfg: OidcConfig = Depends(get_oidc_config),
+):
+    """
+    Start a federated sign-in: 302 to the broker's authorize endpoint.
+
+    Mints the attempt's state, nonce and PKCE verifier, holds them for
+    one use in Redis, and sends the browser to the IdP. The callback this
+    pairs with is ``/api/auth/oidc/callback``.
+
+    Returns:
+        A 302 to the IdP, or 404 when federation is off, or 502 when the
+        IdP's discovery is unreachable.
+    """
+    if not cfg.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OIDC sign-in is not enabled",
+        )
+    try:
+        pending, authorize_url = await provider.begin(
+            cfg.redirect_uri or _request_redirect_uri(request)
+        )
+        await store.put(pending)
+    except OidcUnavailableError as exc:
+        logger.error("Federated sign-in could not start: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Identity provider unavailable",
+        )
+    return RedirectResponse(authorize_url, status_code=302)
+
+
+@router.get("/oidc/callback")
+@limiter.limit("10/minute")
+async def oidc_callback(
+    request: Request,
+    session: UnitOfWorkSession,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    provider: OidcProvider = Depends(get_oidc_provider),
+    store: OidcStateStore = Depends(get_oidc_state_store),
+    cfg: OidcConfig = Depends(get_oidc_config),
+):
+    """
+    Finish a federated sign-in: verify the IdP's answer, mint the session.
+
+    The code is exchanged with the stored PKCE verifier, the id_token is
+    verified (signature via cached JWKS, then issuer, audience, expiry,
+    nonce), the identity is JIT-linked to a ``users`` row, and the role
+    comes from the directory groups via the group mappings. Every failure
+    is fail-closed: no session, no cookies, no partial state.
+
+    Returns:
+        A 302 to the console with the session cookies set — or 400/401/
+        502/503 without any of them, saying only that the sign-in failed.
+    """
+    if not cfg.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OIDC sign-in is not enabled",
+        )
+    if not code or not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing code or state — restart the sign-in",
+        )
+    try:
+        pending = await store.pop(state)
+    except OidcUnavailableError as exc:
+        # Revocation fails closed on Redis down; so does this. An attempt
+        # whose state cannot be checked is an attempt that cannot proceed.
+        logger.error("Federated sign-in state unavailable: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sign-in state unavailable — try again",
+        )
+    if pending is None:
+        # Unknown, expired, or already consumed — all one answer.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unknown or expired sign-in attempt — start again",
+        )
+
+    try:
+        tokens = await provider.exchange(code, pending)
+        claims = await provider.verify_id_token(
+            str(tokens["id_token"]), nonce=pending.nonce
+        )
+    except OidcUnavailableError as exc:
+        logger.error("Federated sign-in could not verify: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Identity provider unavailable",
+        )
+    except (TokenExchangeError, IdTokenRejected) as exc:
+        # The specific reason is logged here and never returned: to the
+        # browser it is one generic refusal, whether the token was badly
+        # signed, aimed elsewhere, stale, or replayed.
+        logger.warning("Federated sign-in rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Federated sign-in rejected",
+        )
+
+    identity = provider.identity_from(claims)
+    if not identity.username:
+        logger.warning("Federated sign-in rejected: token names no username")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Federated sign-in rejected",
+        )
+
+    try:
+        user = link_federated_user(identity, session)
+    except UnlinkableIdentityError as exc:
+        logger.warning("Federated sign-in rejected: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Federated sign-in rejected",
+        )
+
+    # The same session a local login mints — same claims, same cookies,
+    # same revocation and fingerprint checks downstream.
+    _ua = request.headers.get("user-agent")
+    access_token = AuthService.generate_jwt_token(user, "access", user_agent=_ua)
+    refresh_token = AuthService.generate_jwt_token(user, "refresh", user_agent=_ua)
+    access_payload = AuthService.verify_jwt_token(access_token) or {}
+    refresh_payload = AuthService.verify_jwt_token(refresh_token) or {}
+
+    redirect = RedirectResponse(
+        _post_login_target(request, cfg, unmapped=(user.role_id == UNMAPPED_ROLE_ID)),
+        status_code=302,
+    )
+    set_auth_cookies(
+        redirect,
+        access_token,
+        refresh_token,
+        access_exp=access_payload.get("exp"),
+        refresh_exp=refresh_payload.get("exp"),
+    )
+
+    logger.info("User logged in via %s: %s", identity.provider, user.username)
+    return redirect
 
 
 async def _revoke_token(raw: str, owner: User, kind: str) -> None:

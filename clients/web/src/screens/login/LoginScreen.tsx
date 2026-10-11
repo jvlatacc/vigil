@@ -4,7 +4,7 @@ import '../../../../../docs/design/console/tokens/tokens.css'
 import '../../styles.css'
 import '../../shell/shell.css'
 import { useAuth } from '../../contexts/AuthContext'
-import { bootstrapApi } from '../../services/api'
+import { bootstrapApi, oidcSignInAvailability, startOidcSignIn, type OidcAvailability } from '../../services/api'
 import { Icon } from '../../shared/icons'
 import { VigilLogo } from '../../shared/VigilLogo'
 import { useColorScheme } from '../../contexts/ColorSchemeContext'
@@ -36,6 +36,11 @@ export default function LoginScreen() {
   const [error, setError] = useState('')
   const mfaInputRef = useRef<HTMLInputElement>(null)
 
+  // 'checking' while the probe runs, then whether the backend offers
+  // federated sign-in at all. 'unknown' (backend unreachable) renders the
+  // same thing as 'off': fail closed to the local form.
+  const [oidc, setOidc] = useState<OidcAvailability | 'checking'>('checking')
+
   // null until the bootstrap check resolves; true means the instance has no
   // account yet, so show first-account creation instead of sign-in.
   const [needsBootstrap, setNeedsBootstrap] = useState<boolean | null>(null)
@@ -52,6 +57,9 @@ export default function LoginScreen() {
       .status()
       .then((res) => setNeedsBootstrap(res.data.required))
       .catch(() => setNeedsBootstrap(false))
+
+    // The probe resolves 'unknown' on a dead backend; no catch needed.
+    oidcSignInAvailability().then(setOidc)
   }, [])
 
   const handleBootstrap = async (e: React.FormEvent) => {
@@ -242,6 +250,23 @@ export default function LoginScreen() {
             <form onSubmit={handleSubmit} autoComplete="on" noValidate>
               {!showMfa ? (
                 <>
+                  {oidc === 'on' && !needsBootstrap && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn-signin oidc"
+                        onClick={startOidcSignIn}
+                        disabled={loading}
+                      >
+                        <Icon name="shield" />
+                        Sign in with FreeIPA
+                      </button>
+                      <div className="auth-or" role="separator" aria-label="Or use a local account">
+                        <span>or sign in with a local account</span>
+                      </div>
+                    </>
+                  )}
+
                   <div className="field">
                     <label htmlFor="auth-user">Username or email</label>
                     <div className="ctrl">

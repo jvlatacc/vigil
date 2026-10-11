@@ -1,0 +1,48 @@
+{
+  "realm": "vigil",
+  "displayName": "Vigil SOC",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "clients": [
+    {
+      "clientId": "vigil-console",
+      "name": "Vigil console",
+      "description": "Vigil SOC console sign-in via Authorization Code + PKCE. The redirect URI is the backend's /api/auth/oidc/callback as the deployment publishes it; adjust for real hostnames and TLS (docs/broker-setup.md).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "redirectUris": [
+        "http://localhost:6987/api/auth/oidc/callback",
+        "http://127.0.0.1:6987/api/auth/oidc/callback"
+      ],
+      "webOrigins": [
+        "http://localhost:6987",
+        "http://127.0.0.1:6987"
+      ],
+      "protocolMappers": [
+        {
+          "name": "vigil-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-model",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        }
+      ]
+    }
+  ]
+}

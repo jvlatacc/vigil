@@ -1098,6 +1098,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oidc Callback
+         * @description Finish a federated sign-in: verify the IdP's answer, mint the session.
+         *
+         *     The code is exchanged with the stored PKCE verifier, the id_token is
+         *     verified (signature via cached JWKS, then issuer, audience, expiry,
+         *     nonce), the identity is JIT-linked to a ``users`` row, and the role
+         *     comes from the directory groups via the group mappings. Every failure
+         *     is fail-closed: no session, no cookies, no partial state.
+         *
+         *     Returns:
+         *         A 302 to the console with the session cookies set — or 400/401/
+         *         502/503 without any of them, saying only that the sign-in failed.
+         */
+        get: operations["get_api_auth_oidc_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/oidc/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oidc Login
+         * @description Start a federated sign-in: 302 to the broker's authorize endpoint.
+         *
+         *     Mints the attempt's state, nonce and PKCE verifier, holds them for
+         *     one use in Redis, and sends the browser to the IdP. The callback this
+         *     pairs with is ``/api/auth/oidc/callback``.
+         *
+         *     Returns:
+         *         A 302 to the IdP, or 404 when federation is off, or 502 when the
+         *         IdP's discovery is unreachable.
+         */
+        get: operations["get_api_auth_oidc_login"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/password-reset/confirm": {
         parameters: {
             query?: never;
@@ -6000,6 +6058,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/role-group-mappings/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mappings
+         * @description List group→role mappings, highest priority first.
+         */
+        get: operations["get_api_role-group-mappings"];
+        put?: never;
+        /**
+         * Create Mapping
+         * @description Map one directory group onto one role.
+         */
+        post: operations["post_api_role-group-mappings"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/role-group-mappings/{mapping_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Mapping
+         * @description Update a mapping's group, role, or priority.
+         */
+        put: operations["put_api_role-group-mappings_mapping_id"];
+        post?: never;
+        /**
+         * Delete Mapping
+         * @description Delete a mapping. Removes access; grants nothing.
+         */
+        delete: operations["delete_api_role-group-mappings_mapping_id"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/services": {
         parameters: {
             query?: never;
@@ -10364,6 +10470,21 @@ export interface components {
              */
             workflow_id?: string | null;
         };
+        /**
+         * CreateMappingRequest
+         * @description Create-mapping request.
+         */
+        CreateMappingRequest: {
+            /** Idp Group */
+            idp_group: string;
+            /**
+             * Priority
+             * @default 100
+             */
+            priority: number;
+            /** Role Id */
+            role_id: string;
+        };
         /** CreateProtectedAssetRequest */
         CreateProtectedAssetRequest: {
             /**
@@ -11315,6 +11436,8 @@ export interface components {
             bounds: components["schemas"]["Bounds"];
             /** Principal */
             principal?: string | null;
+            /** Run Id */
+            run_id?: string | null;
             /** Tool */
             tool: string;
         };
@@ -13148,6 +13271,18 @@ export interface components {
             case_id?: string | null;
             /** Title */
             title?: string | null;
+        };
+        /**
+         * UpdateMappingRequest
+         * @description Update-mapping request.
+         */
+        UpdateMappingRequest: {
+            /** Idp Group */
+            idp_group?: string | null;
+            /** Priority */
+            priority?: number | null;
+            /** Role Id */
+            role_id?: string | null;
         };
         /**
          * UpdateUserRequest
@@ -15562,6 +15697,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_auth_oidc_callback: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_api_auth_oidc_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -24009,6 +24196,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProtectedAssetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "get_api_role-group-mappings": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "post_api_role-group-mappings": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "put_api_role-group-mappings_mapping_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                mapping_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateMappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "delete_api_role-group-mappings_mapping_id": {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                mapping_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

@@ -214,6 +214,22 @@ class Settings(BaseSettings):
     password_reset_ttl_seconds: int = 3600
     revocation_fail_open: bool = False
 
+    # OIDC federation — the upstream IdP front door (core/auth/federation).
+    # Empty issuer or client id means off: the /api/auth/oidc/* routes
+    # answer 404, local login is untouched. The SystemConfig row
+    # `auth.oidc` can override these at runtime; the client secret lives
+    # only in the secrets manager (OIDC_CLIENT_SECRET), never here.
+    oidc_issuer_url: str = ""
+    oidc_client_id: str = ""
+    oidc_scopes: str = "openid profile email"
+    # Dot path into the id_token for directory groups — `groups` for a
+    # plain claim, `resource_access.vigil.roles` for a Keycloak client.
+    oidc_groups_claim: str = "groups"
+    # Pin both when Vigil sits behind a proxy that rewrites the host;
+    # empty means derive from the request (and the context path).
+    oidc_redirect_uri: str = ""
+    oidc_post_login_redirect: str = ""
+
     # LLM / gateway
     # Host-run default: `bifrost` resolves only inside the compose network, and
     # compose, Helm and start.sh all inject the right hostname explicitly.

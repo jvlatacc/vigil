@@ -561,6 +561,10 @@ class AuthService:
                 "settings.write": True,
                 "ai_chat.use": True,
                 "ai_decisions.approve": True,
+                # Kept in step with the role-seed vocabulary: DEV_MODE grants
+                # all, and per-server `tools.server.<name>` overrides fall
+                # back to this baseline when the key is absent.
+                "tools.execute": True,
             }
 
         with unit_of_work(session) as session:

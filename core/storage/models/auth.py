@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -11,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -132,6 +134,40 @@ class Role(Base):
 
     # Indexes
     __table_args__ = (Index("idx_role_name", "name"),)
+
+
+class RoleGroupMapping(Base):
+    """Maps one upstream directory group onto one Vigil role.
+
+    Federated logins resolve the signing-in user's directory groups through
+    these rows: the highest-priority match assigns the role (see
+    ``core.auth.group_mapping``). Rows are written only through the mapping
+    admin router, which applies the same privilege-escalation guard as user
+    role assignment — a row here grants its role's permissions to every
+    directory member at their next login.
+    """
+
+    __tablename__ = "role_group_mappings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+
+    role_id: Mapped[str] = mapped_column(
+        String(50), ForeignKey("roles.role_id", ondelete="CASCADE"), nullable=False
+    )
+    idp_group: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=text("now()"),
+    )
+
+    # Indexes
+    __table_args__ = (
+        UniqueConstraint("idp_group", "role_id"),
+        Index("idx_role_group_mappings_group", "idp_group"),
+    )
 
 
 class McpCredential(Base):
