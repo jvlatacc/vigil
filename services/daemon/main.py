@@ -59,6 +59,15 @@ class SOCDaemon:
         self._orchestrator = None
         self._metrics_server = None
         self._mcp_client = None
+        # CepTap — present only when CEP is enabled (see _init_components)
+        self._cep_tap = None
+        # Correlation state and its snapshot loop — same condition.
+        self._cep_graph = None
+        self._cep_snapshots = None
+        # The engine loop (tap queue -> engine -> bridge) — same condition.
+        self._cep_pipeline = None
+        self._cep_engine = None
+        self._cep_bridge = None
 
         logger.info("SOC Daemon initialized")
 
@@ -91,6 +100,7 @@ class SOCDaemon:
         logger.info("Initializing daemon components...")
 
         # Import here to avoid circular imports
+        from core.cep.config import CepConfig
         from core.integrations.mcp.client import (
             build_mcp_client,
             set_process_mcp_client,
@@ -155,6 +165,86 @@ class SOCDaemon:
         if self.config.metrics.enabled:
             self._metrics_server = MetricsServer(self.config.metrics)
 
+        # CEP tap (In-Memory Streaming CEP spec): when enabled, the processor's
+        # input queue is swapped for a tee'd subclass. Producers keep the exact
+        # asyncio.Queue contract they had (same bound, same blocking put, acks
+        # untouched), while every finding is mirrored into the engine's own
+        # bounded queue without blocking: on overflow the mirror drops the
+        # newest event and counts it, so the spine can never stall behind
+        # correlation.
+        cep_config = CepConfig.from_env()
+        if cep_config.enabled:
+            from core.cep.bridge import CepResponseBridge
+            from core.cep.engine import CepEngine
+            from core.cep.graph import EntityGraph
+            from core.cep.pipeline import CepPipeline, EngineSnapshotState
+            from core.cep.rules import load_rules
+            from core.cep.snapshot import PostgresSnapshotStore, SnapshotManager
+            from core.cep.tap import CepTap, FindingTeeQueue
+
+            self._cep_tap = CepTap(queue_max=cep_config.queue_max)
+            self._processor.input_queue = FindingTeeQueue(
+                tap=self._cep_tap,
+                maxsize=self._processor.input_queue.maxsize,
+            )
+
+            # The engine's correlation state and its restart recovery
+            # (spec ACs 3 and 6). The engine itself lands in a sibling PR;
+            # its hooks plug into SnapshotManager as they arrive.
+            self._cep_graph = EntityGraph(
+                max_nodes=cep_config.graph_max_nodes,
+                max_edges=cep_config.graph_max_edges,
+            )
+
+            # The pattern engine over the shipped rule pack (a malformed
+            # pack fails the boot — the strict loader's contract), and its
+            # bridge over the same ApprovalService the responder holds:
+            # matches propose, the gate decides, nothing here executes.
+            cep_rules = load_rules(cep_config.rules_path)
+            cep_engine = CepEngine(cep_rules)
+            self._cep_engine = cep_engine
+            cep_state = EngineSnapshotState(cep_engine)
+            self._cep_snapshots = SnapshotManager(
+                graph=self._cep_graph,
+                store=PostgresSnapshotStore(),
+                interval_s=cep_config.snapshot_interval_s,
+                machines=cep_state.machines_section(),
+                seen_ids=cep_state.seen_ids_section(),
+            )
+            gap_s = await asyncio.to_thread(self._cep_snapshots.restore)
+            if gap_s is None:
+                logger.info("CEP state: fresh start")
+            else:
+                # The dedup-fallback honesty convention: state the bound,
+                # never promise zero loss.
+                logger.info(
+                    "CEP state: restored with gap — the snapshot predates "
+                    "this boot by %.0fs, and findings observed in that "
+                    "window are absent from correlation state. Loss is "
+                    "bounded by CEP_SNAPSHOT_INTERVAL_S (default %ds), "
+                    "never zero.",
+                    gap_s,
+                    cep_config.snapshot_interval_s,
+                )
+            logger.info("CEP tap installed (queue_max=%d)", cep_config.queue_max)
+
+            # The drain loop, as its own component task: tap queue ->
+            # normalize -> graph -> engine -> bridge. It never touches the
+            # spine's acks; its faults are its own.
+            self._cep_bridge = CepResponseBridge(approvals)
+            self._cep_pipeline = CepPipeline(
+                engine=cep_engine,
+                rules=cep_rules,
+                graph=self._cep_graph,
+                bridge=self._cep_bridge,
+                tap_queue=self._cep_tap.queue,
+            )
+            logger.info(
+                "CEP engine armed (%d rule(s)); matches propose through "
+                "ApprovalService",
+                len(cep_rules),
+            )
+
         # Connect components via queues
         self._poller.set_output_queue(self._processor.input_queue)
         self._kafka_ingestor.set_output_queue(self._processor.input_queue)
@@ -169,6 +259,14 @@ class SOCDaemon:
             self._metrics_server.responder = self._responder
             self._metrics_server.scheduler = self._scheduler
             self._metrics_server.orchestrator = self._orchestrator
+            self._metrics_server.cep = self._cep_tap
+            # The CEP loop's parts — all None when CEP is disabled; their
+            # stats merge into the /status "cep" section (spec AC 8).
+            self._metrics_server.cep_engine = self._cep_engine
+            self._metrics_server.cep_graph = self._cep_graph
+            self._metrics_server.cep_snapshots = self._cep_snapshots
+            self._metrics_server.cep_pipeline = self._cep_pipeline
+            self._metrics_server.cep_bridge = self._cep_bridge
 
         logger.info("All components initialized")
 
@@ -223,6 +321,11 @@ class SOCDaemon:
                 self._metrics_server.health_port,
                 self._metrics_server.metrics_port,
             )
+
+        if self._cep_snapshots:
+            start("cep-snapshot", self._cep_snapshots, "CEP snapshot loop")
+        if self._cep_pipeline:
+            start("cep-engine", self._cep_pipeline, "CEP engine loop")
 
         logger.info("SOC Daemon fully operational")
 
